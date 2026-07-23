@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import Status Management System — Landed Cost</title>
+<style>
+  :root{
+    --ink:#0F1B2D; --ink-2:#1D2C44; --slate:#5A6B84; --slate-2:#8695AB;
+    --line:#D9DFE8; --line-2:#EDF0F5; --paper:#F5F7FA; --card:#FFFFFF;
+    --brass:#B8873B; --brass-soft:#F5EBD8;
+    --ok:#1F7A5A; --ok-soft:#E4F1EC;
+    --warn:#B4531A; --warn-soft:#FBEDE2;
+    --bad:#A32F2F; --bad-soft:#FAE9E9;
+    --r:4px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;line-height:1.45}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+  header.topbar{background:var(--ink);color:#fff;display:flex;align-items:center;gap:20px;
+    padding:0 20px;height:52px;position:sticky;top:0;z-index:30}
+  .brand{font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:12px}
+  .brand span{color:var(--brass)}
+  .topbar nav{display:flex;gap:2px;margin-left:16px}
+  .topbar nav a{color:#B9C4D4;text-decoration:none;font-size:13px;padding:6px 12px;border-radius:var(--r)}
+  .topbar nav a.active{background:var(--ink-2);color:#fff}
+  .topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:#B9C4D4}
+  .rolepick{background:var(--ink-2);color:#fff;border:1px solid #2E4160;border-radius:var(--r);
+    padding:5px 8px;font-size:12px;font-family:inherit}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 20px 90px}
+  .pagehead{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+  .pagehead h1{font-size:21px;margin:0;font-weight:600;letter-spacing:-.01em}
+  .refno{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r);
+    background:#fff;color:var(--slate)}
+  .refno b{color:var(--ink)}
+  .draftflag{margin-left:auto;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--warn);border:1px solid #E8CDB6;background:var(--warn-soft);padding:4px 10px;border-radius:var(--r)}
+  .statusflag{margin-left:auto;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:#2C5D8F;border:1px solid #CBDDEE;background:#E7F0F8;padding:4px 10px;border-radius:var(--r)}
+
+  .stepper{display:flex;overflow-x:auto;border:1px solid var(--line);background:#fff;
+    border-radius:var(--r);margin-bottom:20px}
+  .step{flex:1 0 auto;min-width:120px;padding:10px 14px;border-right:1px solid var(--line);
+    text-align:left;background:none;font:inherit;cursor:pointer;color:var(--slate);text-decoration:none}
+  .step:last-child{border-right:0}
+  .step .n{font-size:10px;letter-spacing:.1em;display:block;margin-bottom:2px}
+  .step .t{font-size:12.5px;font-weight:500;white-space:nowrap}
+  .step[aria-current="step"]{background:var(--ink);color:#fff}
+  .step[aria-current="step"] .n{color:var(--brass)}
+  .step[data-done="1"]{color:var(--ink-2)}
+  .step[data-done="1"] .n{color:var(--ok)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);margin-bottom:18px}
+  .card > h2{margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-size:12px;
+    text-transform:uppercase;letter-spacing:.09em;color:var(--slate);font-weight:600;
+    display:flex;align-items:center;gap:10px}
+  .card > h2 .note{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400;
+    font-size:11.5px;color:var(--slate-2)}
+
+  input{font:inherit;font-size:13.5px;padding:7px 9px;border:1px solid var(--line);
+    border-radius:var(--r);background:#fff;color:var(--ink);width:100%}
+  input:focus{outline:2px solid var(--brass);outline-offset:-1px;border-color:var(--brass)}
+  input[readonly],input:disabled{background:#F1F4F8;color:var(--slate)}
+  [hidden]{display:none !important}
+
+  /* ---------- reference strip ---------- */
+  .ref{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--line-2)}
+  .rf{padding:10px 14px;border-right:1px solid var(--line-2)}
+  .rf:last-child{border-right:0;background:#F7F9FB}
+  .rf .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate-2);display:block}
+  .rf .v{font-size:14.5px;font-weight:600;margin-top:2px;display:block;letter-spacing:-.01em}
+  .rf .m{font-size:10.5px;color:var(--slate-2);margin-top:2px;display:block}
+  .rf.none .v{color:var(--slate-2);font-weight:500}
+
+  /* ---------- cost table ---------- */
+  .lcwrap{overflow-x:auto}
+  table.lc{width:100%;border-collapse:collapse;min-width:1020px}
+  table.lc th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate);
+    text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+  table.lc th.num,table.lc td.num{text-align:right}
+  table.lc td{padding:7px 12px;border-bottom:1px solid var(--line-2);vertical-align:middle;font-size:13px}
+  table.lc tbody tr:hover{background:#FAFBFD}
+  table.lc input{text-align:right;max-width:135px;margin-left:auto}
+  table.lc .nm{font-weight:500}
+  table.lc .sub{display:block;font-size:11px;color:var(--slate);margin-top:1px}
+  table.lc tfoot td{padding:11px 12px;border-top:1.5px solid var(--ink);font-weight:600;background:#FBFCFD}
+  .idx{color:var(--slate-2);font-size:12px;width:26px}
+  .unit{font-size:11.5px;color:var(--slate)}
+
+  .var{font-weight:600;white-space:nowrap}
+  .var.up{color:var(--bad)}
+  .var.down{color:var(--ok)}
+  .var.flat{color:var(--slate)}
+  .pct{font-size:11px;display:block;font-weight:400;color:var(--slate-2)}
+
+  /* ---------- outcome ---------- */
+  .out{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line)}
+  .ot{padding:10px 14px 12px;border-right:1px solid var(--line-2)}
+  .ot:last-child{border-right:0}
+  .ot .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate-2);display:block}
+  .ot .v{font-size:15px;font-weight:600;margin-top:2px;display:block;letter-spacing:-.01em}
+  .ot .m{font-size:11px;color:var(--slate);margin-top:2px;display:block;line-height:1.3}
+  .ot.key{background:var(--brass-soft);border-left:3px solid var(--brass)}
+  .ot.key .k{color:#8A6526}
+  .ot.key .v{font-size:19px}
+  .ot.key.good{background:var(--ok-soft);border-left-color:var(--ok)}
+  .ot.key.good .k{color:var(--ok)}
+  .ot.key.bad{background:var(--bad-soft);border-left-color:var(--bad)}
+  .ot.key.bad .k{color:var(--bad)}
+
+  .signoff{display:flex;gap:14px;align-items:center;padding:11px 16px;
+    border-top:1px solid var(--line-2);font-size:12px;color:var(--slate);flex-wrap:wrap}
+  .signoff b{color:var(--ink-2);font-weight:600}
+
+  .pending-banner{margin:14px 16px 0;padding:10px 13px;border-left:3px solid var(--warn);
+    background:var(--warn-soft);border-radius:0 var(--r) var(--r) 0;font-size:12.5px;color:var(--warn)}
+  .callout{margin:16px;padding:11px 13px;border-left:3px solid var(--brass);
+    background:var(--brass-soft);border-radius:0 var(--r) var(--r) 0;font-size:12.5px;color:#7A5B22}
+
+  .btn{font:inherit;font-size:13px;padding:8px 16px;border-radius:var(--r);cursor:pointer;
+    border:1px solid transparent}
+  .btn-primary{background:var(--ink);color:#fff}
+  .btn-primary:hover{background:var(--ink-2)}
+  .btn-ghost{background:#fff;border-color:var(--line);color:var(--ink-2)}
+  .btn-ghost:hover{border-color:var(--slate)}
+  .btn-sm{font-size:12px;padding:6px 12px}
+  .actions{display:flex;gap:10px;align-items:center;margin-top:6px}
+  .actions .spacer{flex:1}
+  .saved{font-size:12px;color:var(--ok);opacity:0;transition:opacity .25s}
+  .saved.show{opacity:1}
+
+  @media(max-width:900px){
+    .ref{grid-template-columns:repeat(2,1fr)}
+    .rf{border-bottom:1px solid var(--line-2)}
+    .out{grid-template-columns:repeat(2,1fr)}
+    .ot{border-bottom:1px solid var(--line-2)}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Imports<span>·</span>ISMS</div>
+  <nav>
+    <a href="#">Dashboard</a>
+    <a href="consignment_list.html" class="active">Consignments</a>
+    <a href="#">Reports</a>
+    <a href="../masters/masters.html">Masters</a>
+  </nav>
+  <div class="right">
+    <span>Viewing as</span>
+    <select class="rolepick" id="role">
+      <option value="admin">Admin</option>
+      <option value="manager" selected>Manager</option>
+      <option value="entry">Entry Operator</option>
+      <option value="viewer">Viewer</option>
+    </select>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="pagehead">
+    <h1 id="pageH1">Landed cost</h1>
+    <span class="refno">System ID <b class="mono" id="sysId">QC-2026-0148</b></span>
+    <span class="draftflag" id="draftFlag">Draft — not submitted</span>
+  </div>
+
+  <div class="stepper" role="tablist">
+    <a class="step" data-done="1" href="wizard_step1.html"><span class="n">01 ✓</span><span class="t">Consignment</span></a>
+    <a class="step" data-done="1" href="wizard_step2_finance.html"><span class="n">02 ✓</span><span class="t">Finance</span></a>
+    <a class="step" data-done="1" href="wizard_step3_shipping.html"><span class="n">03 ✓</span><span class="t">Shipping</span></a>
+    <a class="step" data-done="1" href="wizard_step4_payments.html"><span class="n">04 ✓</span><span class="t">Payments</span></a>
+    <a class="step" data-done="1" href="wizard_step5_status_remarks.html"><span class="n">05 ✓</span><span class="t">Status &amp; remarks</span></a>
+    <a class="step" data-done="1" href="wizard_step6_clearance.html"><span class="n">06 ✓</span><span class="t">Clearance</span></a>
+    <button class="step" aria-current="step"><span class="n">07</span><span class="t">Landed cost</span></button>
+  </div>
+
+  <form id="lcForm">
+
+  <!-- ============ REFERENCE ============ -->
+  <section class="card">
+    <h2>What the system already knows <span class="note">Reference only — not added to your figures</span></h2>
+    <div class="ref">
+      <div class="rf">
+        <span class="k">Goods value</span>
+        <span class="v mono" id="rGoods">—</span>
+        <span class="m" id="rGoodsNote">Step 2, at the booked rate</span>
+      </div>
+      <div class="rf">
+        <span class="k">Bank charges</span>
+        <span class="v mono" id="rBank">—</span>
+        <span class="m">Swift, negotiation, commission</span>
+      </div>
+      <div class="rf">
+        <span class="k">Demurrage paid</span>
+        <span class="v mono" id="rDem">—</span>
+        <span class="m" id="rDemNote">From clearance</span>
+      </div>
+      <div class="rf none">
+        <span class="k">Duty, freight, agent fees</span>
+        <span class="v">Not tracked</span>
+        <span class="m">Held outside this system</span>
+      </div>
+      <div class="rf">
+        <span class="k">Known costs so far</span>
+        <span class="v mono" id="rKnown">—</span>
+        <span class="m">A floor, not a total</span>
+      </div>
+    </div>
+    <div class="callout">
+      Duty, freight, port handling and agent fees are not captured here, so these figures
+      are a partial picture — useful for sanity-checking the numbers you enter below,
+      never a substitute for them. Anything you type is taken as authoritative.
+    </div>
+  </section>
+
+  <!-- ============ ENTRY ============ -->
+  <section class="card">
+    <h2>Estimated and actual landed cost <span class="note">Entered per item, in PKR</span></h2>
+
+    <div class="lcwrap">
+      <table class="lc">
+        <thead>
+          <tr>
+            <th class="idx"></th>
+            <th style="min-width:200px">Item</th>
+            <th class="num" style="min-width:90px">Quantity</th>
+            <th class="num" style="min-width:140px">ELC (PKR)</th>
+            <th class="num" style="min-width:140px">ALC (PKR)</th>
+            <th class="num" style="min-width:130px">Variance</th>
+            <th class="num" style="min-width:130px">ALC per unit</th>
+          </tr>
+        </thead>
+        <tbody id="lcRows"></tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3">Consignment total</td>
+            <td class="num mono" id="fElc">—</td>
+            <td class="num mono" id="fAlc">—</td>
+            <td class="num" id="fVar">—</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="out">
+      <div class="ot">
+        <span class="k">Estimated landed cost</span>
+        <span class="v mono" id="oElc">—</span>
+        <span class="m" id="oElcNote">Sum of item estimates</span>
+      </div>
+      <div class="ot">
+        <span class="k">Actual landed cost</span>
+        <span class="v mono" id="oAlc">—</span>
+        <span class="m" id="oAlcNote">Sum of item actuals</span>
+      </div>
+      <div class="ot">
+        <span class="k">Against known costs</span>
+        <span class="v mono" id="oGap">—</span>
+        <span class="m" id="oGapNote">ALC less what the system tracks</span>
+      </div>
+      <div class="ot key" id="oVarTile">
+        <span class="k">Variance</span>
+        <span class="v mono" id="oVar">—</span>
+        <span class="m" id="oVarNote">Actual less estimated</span>
+      </div>
+    </div>
+
+    <div class="signoff">
+      <span>ELC entered by <b id="byElc">—</b></span>
+      <span>·</span>
+      <span>ALC entered by <b id="byAlc">—</b></span>
+      <span style="margin-left:auto">Recorded automatically against your user on save</span>
+    </div>
+
+    <div class="pending-banner" id="pendNote" hidden></div>
+  </section>
+
+  <div class="actions">
+    <button type="button" class="btn btn-ghost" id="back">← Back to Clearance</button>
+    <button type="button" class="btn btn-ghost" id="saveDraft">Save draft</button>
+    <span class="saved" id="savedMsg">Draft saved</span>
+    <span class="spacer"></span>
+    <button type="submit" class="btn btn-primary">Submit consignment</button>
+  </div>
+
+  </form>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- edit mode: ?id= on the URL loads an existing consignment instead of
+     a blank draft. In Django this is /consignments/new/ vs
+     /consignments/<pk>/edit/7/ — the query string is a prototype stand-in only. ---- */
+  var NEW_ID = "QC-2026-0148";
+  var editId = new URLSearchParams(window.location.search).get("id");
+  function withId(file){
+    return file + (editId ? "?id=" + encodeURIComponent(editId) : "");
+  }
+  var EDIT_MOCK = {
+    "QC-2026-0147": {
+      status: "In Transit",
+      dem_pkr: 0,   /* clearance hasn't happened yet — nothing incurred so far */
+      items: [
+        {name:"Ball bearing 6205-2RS", code:"BRG-6205", spec:"Deep groove, C3 clearance, steel cage",
+         qty:240, uom:"Pcs", elc:1486000},
+        {name:"PLC S7-1500 CPU", code:"PLC-1515", spec:"CPU 1515-2 PN",
+         qty:4, uom:"Pcs", elc:4320000}
+      ]
+    }
+  };
+  var mock = editId && EDIT_MOCK[editId];
+
+  /* ---- carried from earlier steps, for reference only ---- */
+  var CURRENCY  = "USD";
+  var FX        = 281.40;                 /* Step 2 booked rate */
+  var GOODS_PKR = 18450.00 * FX;          /* Step 2 foreign total x rate */
+  var BANK_PKR  = 145.00  * FX;           /* Step 4 bank charges, converted */
+  var DEM_PKR   = mock ? mock.dem_pkr : 68000;   /* Step 6 demurrage, already PKR */
+  var KNOWN     = GOODS_PKR + BANK_PKR + DEM_PKR;
+
+  var ITEMS_NEW = [
+    {name:"Ball bearing 6205-2RS", code:"BRG-6205", spec:"Deep groove, C3 clearance, steel cage",
+     qty:240, uom:"Pcs"},
+    {name:"Oil seal TC 35x52x7", code:"SEL-3552", spec:"NBR, double lip, spring loaded",
+     qty:120, uom:"Pcs"},
+    {name:"PLC S7-1500 CPU", code:"PLC-1515", spec:"CPU 1515-2 PN",
+     qty:4, uom:"Pcs"}
+  ];
+  var ITEMS = mock ? mock.items : ITEMS_NEW;
+
+  var m0 = function(n){ return n.toLocaleString("en-US",{maximumFractionDigits:0}); };
+  var m2 = function(n){ return n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  function esc(s){ return String(s).replace(/[&<>"]/g,function(m){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]; }); }
+
+  document.getElementById("rGoods").textContent = m0(GOODS_PKR);
+  document.getElementById("rGoodsNote").textContent =
+    CURRENCY + " 18,450.00 at " + FX.toFixed(2);
+  document.getElementById("rBank").textContent  = m0(BANK_PKR);
+  document.getElementById("rDem").textContent   = m0(DEM_PKR);
+  document.getElementById("rKnown").textContent = m0(KNOWN);
+
+  /* ---- build entry rows ---- */
+  var body = document.getElementById("lcRows");
+  body.innerHTML = ITEMS.map(function(it, i){
+    return '<tr data-i="'+i+'">'+
+      '<td class="idx mono">'+(i+1)+'</td>'+
+      '<td><span class="nm">'+esc(it.name)+'</span>'+
+        '<span class="sub mono">'+esc(it.code)+(it.spec ? " · "+esc(it.spec) : "")+'</span></td>'+
+      '<td class="num mono">'+m0(it.qty)+'<span class="sub">'+esc(it.uom)+'</span></td>'+
+      '<td class="num"><input type="number" class="mono elc" step="0.01" min="0" '+
+        (it.elc != null ? 'value="'+it.elc+'" ' : '')+'placeholder="Add later"></td>'+
+      '<td class="num"><input type="number" class="mono alc" step="0.01" min="0" placeholder="Add later"></td>'+
+      '<td class="num" data-var>—</td>'+
+      '<td class="num mono unit" data-unit>—</td>'+
+    '</tr>';
+  }).join("");
+
+  function varCell(elc, alc){
+    if(isNaN(elc) || isNaN(alc)) return '<span class="var flat">—</span>';
+    var d = alc - elc;
+    var pct = elc > 0 ? (d / elc * 100) : null;
+    var cls = Math.abs(d) < 0.005 ? "flat" : d > 0 ? "up" : "down";
+    var sign = d > 0 ? "+" : d < 0 ? "-" : "";
+    return '<span class="var '+cls+'">'+sign+m0(Math.abs(d))+
+           (pct === null ? "" : '<span class="pct">'+sign+Math.abs(pct).toFixed(1)+'%</span>')+'</span>';
+  }
+
+  function recalc(){
+    var tElc = 0, tAlc = 0, nElc = 0, nAlc = 0;
+
+    Array.prototype.forEach.call(body.querySelectorAll("tr"), function(tr){
+      var it   = ITEMS[+tr.dataset.i];
+      var elc  = parseFloat(tr.querySelector(".elc").value);
+      var alc  = parseFloat(tr.querySelector(".alc").value);
+
+      tr.querySelector("[data-var]").innerHTML = varCell(elc, alc);
+
+      var unit = tr.querySelector("[data-unit]");
+      if(!isNaN(alc) && it.qty > 0){
+        unit.textContent = m2(alc / it.qty);
+        unit.title = "Per " + it.uom + " — this is the figure supplier comparison uses";
+      }else{
+        unit.textContent = "—";
+      }
+
+      if(!isNaN(elc)){ tElc += elc; nElc++; }
+      if(!isNaN(alc)){ tAlc += alc; nAlc++; }
+    });
+
+    var allElc = nElc === ITEMS.length, allAlc = nAlc === ITEMS.length;
+
+    document.getElementById("fElc").textContent = nElc ? m0(tElc) : "—";
+    document.getElementById("fAlc").textContent = nAlc ? m0(tAlc) : "—";
+    document.getElementById("fVar").innerHTML   = (nElc && nAlc) ? varCell(tElc, tAlc) : "—";
+
+    document.getElementById("oElc").textContent = nElc ? "PKR " + m0(tElc) : "—";
+    document.getElementById("oAlc").textContent = nAlc ? "PKR " + m0(tAlc) : "—";
+    document.getElementById("oElcNote").textContent = allElc
+      ? "All " + ITEMS.length + " items estimated"
+      : nElc ? "Provisional — " + (ITEMS.length - nElc) + " of " + ITEMS.length + " not estimated"
+             : "Sum of item estimates";
+    document.getElementById("oAlcNote").textContent = allAlc
+      ? "All " + ITEMS.length + " items costed"
+      : nAlc ? "Provisional — " + (ITEMS.length - nAlc) + " of " + ITEMS.length + " not costed"
+             : "Sum of item actuals";
+
+    /* sanity check against what the system does track */
+    var gapEl = document.getElementById("oGap");
+    var gapNote = document.getElementById("oGapNote");
+    if(nAlc){
+      var gap = tAlc - KNOWN;
+      gapEl.textContent = (gap < 0 ? "-" : "+") + m0(Math.abs(gap));
+      gapNote.textContent = gap < 0
+        ? "ALC is below tracked costs — worth checking"
+        : "Duty, freight, agent fees and margin";
+      gapEl.style.color = gap < 0 ? "var(--bad)" : "";
+    }else{
+      gapEl.textContent = "—";
+      gapNote.textContent = "ALC less what the system tracks";
+      gapEl.style.color = "";
+    }
+
+    /* headline variance */
+    var tile = document.getElementById("oVarTile");
+    tile.classList.remove("good","bad");
+    if(nElc && nAlc){
+      var d = tAlc - tElc;
+      var pct = tElc > 0 ? (d / tElc * 100) : 0;
+      document.getElementById("oVar").textContent =
+        (d > 0 ? "+" : d < 0 ? "-" : "") + "PKR " + m0(Math.abs(d));
+      document.getElementById("oVarNote").textContent =
+        (d > 0 ? "Over" : d < 0 ? "Under" : "On") + " estimate by " +
+        Math.abs(pct).toFixed(1) + "%" +
+        (allElc && allAlc ? "" : " (provisional)");
+      if(Math.abs(pct) < 2) tile.classList.add("good");
+      else if(d > 0) tile.classList.add("bad");
+      else tile.classList.add("good");
+    }else{
+      document.getElementById("oVar").textContent = "—";
+      document.getElementById("oVarNote").textContent = "Enter both to compare";
+    }
+
+    document.getElementById("byElc").textContent = nElc ? "Current user" : "—";
+    document.getElementById("byAlc").textContent = nAlc ? "Current user" : "—";
+
+    /* pending, informational only */
+    var missing = [];
+    if(!allElc) missing.push((ITEMS.length - nElc) + " item" + (ITEMS.length-nElc===1?"":"s") + " without an ELC");
+    if(!allAlc) missing.push((ITEMS.length - nAlc) + " item" + (ITEMS.length-nAlc===1?"":"s") + " without an ALC");
+    var pend = document.getElementById("pendNote");
+    if(missing.length){
+      pend.hidden = false;
+      pend.textContent = "Pending: " + missing.join("; ") +
+        ". ALC is normally finalised well after arrival, so this does not block submission — " +
+        "but items without an ALC are excluded from supplier comparison reports.";
+    }else{
+      pend.hidden = true;
+    }
+  }
+
+  body.addEventListener("input", recalc);
+
+  var msg = document.getElementById("savedMsg");
+  document.getElementById("saveDraft").onclick = function(){
+    msg.classList.add("show");
+    setTimeout(function(){ msg.classList.remove("show"); }, 1800);
+  };
+  document.getElementById("back").onclick = function(){
+    window.location.href = withId("wizard_step6_clearance.html");
+  };
+
+  document.getElementById("role").addEventListener("change", function(e){
+    var ro = e.target.value === "viewer";
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#lcForm input, #lcForm button"),
+      function(el){ el.disabled = ro; }
+    );
+  });
+
+  document.getElementById("lcForm").addEventListener("submit", function(e){
+    e.preventDefault();
+    alert("Consignment submitted — Django stores ELC and ALC per item with the user and timestamp on each.");
+  });
+
+  /* ---- apply edit mode: pagehead and stepper links (Submit stays a terminal action) ---- */
+  document.getElementById("sysId").textContent = editId || NEW_ID;
+  if(editId){
+    Array.prototype.forEach.call(document.querySelectorAll(".stepper a.step"), function(a){
+      a.href = withId(a.getAttribute("href"));
+    });
+  }
+  if(mock){
+    document.getElementById("pageH1").textContent = "Edit " + editId;
+    var flag = document.getElementById("draftFlag");
+    flag.textContent = mock.status;
+    flag.classList.remove("draftflag");
+    flag.classList.add("statusflag");
+  }
+
+  recalc();
+})();
+</script>
+</body>
+</html>

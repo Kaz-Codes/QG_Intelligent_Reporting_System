@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QC-2026-0147 — Import Status Management System</title>
+<style>
+  :root{
+    --ink:#0F1B2D; --ink-2:#1D2C44; --slate:#5A6B84; --slate-2:#8695AB;
+    --line:#D9DFE8; --line-2:#EDF0F5; --paper:#F5F7FA; --card:#FFFFFF;
+    --brass:#B8873B; --brass-soft:#F5EBD8;
+    --ok:#1F7A5A; --ok-soft:#E4F1EC;
+    --warn:#B4531A; --warn-soft:#FBEDE2;
+    --bad:#A32F2F; --bad-soft:#FAE9E9;
+    --info:#2C5D8F; --info-soft:#E7F0F8;
+    --r:4px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;line-height:1.45}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+  a{color:inherit}
+
+  header.topbar{background:var(--ink);color:#fff;display:flex;align-items:center;gap:20px;
+    padding:0 20px;height:52px;position:sticky;top:0;z-index:40}
+  .brand{font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:12px}
+  .brand span{color:var(--brass)}
+  .topbar nav{display:flex;gap:2px;margin-left:16px}
+  .topbar nav a{color:#B9C4D4;text-decoration:none;font-size:13px;padding:6px 12px;border-radius:var(--r)}
+  .topbar nav a.active{background:var(--ink-2);color:#fff}
+  .topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:#B9C4D4}
+  .rolepick{background:var(--ink-2);color:#fff;border:1px solid #2E4160;border-radius:var(--r);
+    padding:5px 8px;font-size:12px;font-family:inherit}
+
+  .wrap{max-width:1240px;margin:0 auto;padding:18px 20px 80px}
+
+  .crumb{font-size:12px;color:var(--slate);margin-bottom:10px}
+  .crumb a{text-decoration:none}
+  .crumb a:hover{text-decoration:underline}
+
+  .pagehead{display:flex;align-items:flex-start;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+  .pagehead h1{font-size:22px;margin:0;font-weight:600;letter-spacing:-.01em;
+    font-family:ui-monospace,Menlo,Consolas,monospace}
+  .pagehead .sub{font-size:12.5px;color:var(--slate);display:block;margin-top:3px;
+    font-family:inherit;font-weight:400}
+  .pagehead .acts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+
+  .pill{display:inline-block;font-size:11.5px;padding:3px 10px;border-radius:11px;
+    border:1px solid transparent;font-weight:500;white-space:nowrap}
+  .p-sea{background:var(--brass-soft);color:#8A6526;border-color:#EBDCC0}
+  .p-draft{background:var(--warn-soft);color:var(--warn);border-color:#E8CDB6}
+
+  /* ---- key figures ---- */
+  .keys{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--line);
+    background:#fff;border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+  .ky{padding:10px 14px;border-right:1px solid var(--line-2)}
+  .ky:last-child{border-right:0}
+  .ky .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate-2);display:block}
+  .ky .v{font-size:15px;font-weight:600;margin-top:2px;display:block;letter-spacing:-.01em}
+  .ky .m{font-size:10.5px;color:var(--slate);margin-top:2px;display:block}
+  .ky.warn{background:var(--warn-soft)}
+  .ky.warn .k{color:var(--warn)}
+
+  .banner{padding:10px 13px;border-left:3px solid var(--warn);background:var(--warn-soft);
+    border-radius:0 var(--r) var(--r) 0;font-size:12.5px;color:var(--warn);margin-bottom:14px}
+  .banner b{font-weight:600}
+
+  /* ---- section nav ---- */
+  .secnav{display:flex;gap:2px;background:#fff;border:1px solid var(--line);border-radius:var(--r);
+    padding:4px;margin-bottom:16px;overflow-x:auto;position:sticky;top:52px;z-index:20}
+  .secnav a{flex:1 0 auto;text-align:center;text-decoration:none;font-size:12.5px;
+    padding:7px 12px;border-radius:3px;color:var(--slate);white-space:nowrap}
+  .secnav a:hover{background:var(--paper);color:var(--ink)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+    margin-bottom:16px;scroll-margin-top:112px}
+  .card > h2{margin:0;padding:11px 16px;border-bottom:1px solid var(--line);font-size:12px;
+    text-transform:uppercase;letter-spacing:.09em;color:var(--slate);font-weight:600;
+    display:flex;align-items:center;gap:10px}
+  .card > h2 .edit{margin-left:auto;font-size:11.5px;text-transform:none;letter-spacing:0;
+    font-weight:400;color:var(--info);text-decoration:none}
+  .card > h2 .edit:hover{text-decoration:underline}
+  .card .body{padding:14px 16px}
+
+  /* ---- read-only field grid ---- */
+  .fields{display:grid;grid-template-columns:repeat(4,1fr);gap:13px 18px}
+  .fd{min-width:0}
+  .fd .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--slate-2);display:block}
+  .fd .v{font-size:13.5px;margin-top:2px;display:block;word-break:break-word}
+  .fd .v.none{color:var(--slate-2);font-style:italic}
+  .fd.w2{grid-column:span 2}
+
+  /* ---- tables ---- */
+  .tw{overflow-x:auto}
+  table.t{width:100%;border-collapse:collapse}
+  table.t th{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate);
+    text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+  table.t th.num,table.t td.num{text-align:right}
+  table.t td{padding:8px 12px;border-bottom:1px solid var(--line-2);font-size:13px;vertical-align:top}
+  table.t tbody tr:last-child td{border-bottom:0}
+  table.t tbody tr:hover{background:#FAFBFD}
+  table.t tfoot td{padding:9px 12px;border-top:1.5px solid var(--ink);font-weight:600;background:#FBFCFD}
+  .idx{color:var(--slate-2);font-size:12px;width:26px}
+  .sub{display:block;font-size:11px;color:var(--slate);margin-top:1px}
+
+  .tag{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:3px;
+    border:1px solid var(--line);color:var(--slate);background:#FAFBFD;white-space:nowrap}
+  .tag.eta{border-color:#E8CDB6;background:var(--warn-soft);color:var(--warn)}
+  .tag.st{border-color:#CBDDEE;background:var(--info-soft);color:var(--info)}
+  .tag.gap{border-color:#E8CDB6;background:var(--warn-soft);color:var(--warn);cursor:help}
+  .tag.late{border-color:#EBC4C4;background:var(--bad-soft);color:var(--bad)}
+  .tag.good{border-color:#C9E3D8;background:var(--ok-soft);color:var(--ok)}
+
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px}
+  .dot.Paid{background:var(--ok)}
+  .dot.Unpaid{background:var(--bad)}
+
+  /* ---- stage rail ---- */
+  .rail{padding:12px 16px;border-bottom:1px solid var(--line-2);overflow-x:auto}
+  .rail ol{list-style:none;display:flex;margin:0;padding:0;min-width:900px}
+  .rail li{flex:1;padding:0 4px}
+  .rail .mark{height:4px;background:var(--line-2);border-radius:2px;margin-bottom:6px}
+  .rail li.done .mark{background:var(--ok)}
+  .rail li.now .mark{background:var(--brass)}
+  .rail .lbl{font-size:10.5px;color:var(--slate-2);line-height:1.25;display:block}
+  .rail li.done .lbl{color:var(--slate)}
+  .rail li.now .lbl{color:var(--ink);font-weight:600}
+  .rail .age{font-size:10px;color:var(--slate-2);display:block;margin-top:2px}
+
+  /* ---- timeline ---- */
+  .hist{list-style:none;margin:0;padding:0}
+  .hist li{padding:9px 16px;border-bottom:1px solid var(--line-2);display:flex;gap:12px;
+    align-items:flex-start;font-size:13px}
+  .hist li:last-child{border-bottom:0}
+  .hist .when{min-width:92px;color:var(--slate);font-size:12px;flex-shrink:0}
+  .hist .what{flex:1}
+  .hist .who{color:var(--slate-2);font-size:11.5px;display:block;margin-top:2px}
+  .hist .dur{font-size:11px;padding:1px 7px;border-radius:3px;border:1px solid var(--line);
+    color:var(--slate);background:#FAFBFD;white-space:nowrap;flex-shrink:0}
+  .hist .dur.slow{border-color:#E8CDB6;background:var(--warn-soft);color:var(--warn)}
+  .arrowto{color:var(--slate-2);margin:0 5px}
+
+  .sysbox{background:#F7F9FB;border:1px solid var(--line);border-radius:var(--r);
+    padding:10px 12px;font-size:12.5px;line-height:1.55;color:var(--ink-2)}
+  .userbox{padding:10px 12px;font-size:13px;line-height:1.55;border:1px solid var(--line);
+    border-radius:var(--r);background:#fff}
+  .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--slate-2);
+    display:block;margin-bottom:5px}
+
+  .empty{padding:20px 16px;color:var(--slate-2);font-size:12.5px;font-style:italic}
+
+  .btn{font:inherit;font-size:13px;padding:7px 14px;border-radius:var(--r);cursor:pointer;
+    border:1px solid transparent;text-decoration:none;display:inline-block}
+  .btn-primary{background:var(--ink);color:#fff}
+  .btn-primary:hover{background:var(--ink-2)}
+  .btn-ghost{background:#fff;border-color:var(--line);color:var(--ink-2)}
+  .btn-ghost:hover{border-color:var(--slate)}
+  .btn:disabled,.btn.off{opacity:.45;pointer-events:none}
+
+  @media(max-width:1000px){
+    .keys{grid-template-columns:repeat(3,1fr)}
+    .ky{border-bottom:1px solid var(--line-2)}
+    .fields{grid-template-columns:repeat(2,1fr)}
+    .fd.w2{grid-column:span 2}
+  }
+  @media(max-width:640px){
+    .keys{grid-template-columns:repeat(2,1fr)}
+    .fields{grid-template-columns:1fr}
+    .fd.w2{grid-column:span 1}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Imports<span>·</span>ISMS</div>
+  <nav>
+    <a href="#">Dashboard</a>
+    <a href="consignment_list.html" class="active">Consignments</a>
+    <a href="#">Reports</a>
+    <a href="../masters/masters.html">Masters</a>
+  </nav>
+  <div class="right">
+    <span>Viewing as</span>
+    <select class="rolepick" id="role">
+      <option value="admin">Admin</option>
+      <option value="manager" selected>Manager</option>
+      <option value="entry">Entry Operator</option>
+      <option value="viewer">Viewer</option>
+    </select>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="crumb"><a href="consignment_list.html">Consignments</a> › QC-2026-0147</div>
+
+  <div class="pagehead">
+    <h1>QC-2026-0147
+      <span class="sub">Wuxi Kaiyuan Machinery Co., Ltd · Qadcast · Store + Engineering</span>
+    </h1>
+    <span class="pill p-sea">In Transit</span>
+    <div class="acts">
+      <a class="btn btn-ghost" href="#" id="btnPdf">Export PDF</a>
+      <a class="btn btn-primary" href="wizard_step1.html?id=QC-2026-0147" id="btnEdit">Edit consignment</a>
+    </div>
+  </div>
+
+  <div class="keys">
+    <div class="ky">
+      <span class="k">Value</span>
+      <span class="v mono">USD 18,450</span>
+      <span class="m mono">PKR 5,191,830</span>
+    </div>
+    <div class="ky">
+      <span class="k">ETD</span>
+      <span class="v mono">28 Jun 26</span>
+      <span class="m">Shanghai</span>
+    </div>
+    <div class="ky warn">
+      <span class="k">ETA</span>
+      <span class="v mono">24 Jul 26</span>
+      <span class="m">Revised twice · +12 days</span>
+    </div>
+    <div class="ky">
+      <span class="k">Payment</span>
+      <span class="v">LC · partial</span>
+      <span class="m mono">USD 9,225 outstanding</span>
+    </div>
+    <div class="ky">
+      <span class="k">Free days</span>
+      <span class="v mono">7 days</span>
+      <span class="m">Not yet arrived</span>
+    </div>
+    <div class="ky warn">
+      <span class="k">Information</span>
+      <span class="v">3 pending</span>
+      <span class="m">See below</span>
+    </div>
+  </div>
+
+  <div class="banner">
+    <b>Pending information:</b> H.S. code on 1 item, gate out date, and landed cost figures.
+    Recorded as a draft — nothing here blocks the consignment progressing.
+  </div>
+
+  <nav class="secnav">
+    <a href="#s-consignment">Consignment</a>
+    <a href="#s-finance">Finance</a>
+    <a href="#s-shipping">Shipping</a>
+    <a href="#s-payments">Payments</a>
+    <a href="#s-status">Status</a>
+    <a href="#s-clearance">Clearance</a>
+    <a href="#s-cost">Landed cost</a>
+  </nav>
+
+  <!-- ============ 1. CONSIGNMENT ============ -->
+  <section class="card" id="s-consignment">
+    <h2>Consignment details <a class="edit" href="wizard_step1.html?id=QC-2026-0147">Edit</a></h2>
+    <div class="body">
+      <div class="fields">
+        <div class="fd"><span class="k">Branch</span><span class="v">Qadcast</span></div>
+        <div class="fd w2"><span class="k">Supplier</span><span class="v">Wuxi Kaiyuan Machinery Co., Ltd</span></div>
+        <div class="fd"><span class="k">Country of origin</span><span class="v">China</span></div>
+        <div class="fd"><span class="k">Currency</span><span class="v mono">USD</span></div>
+        <div class="fd"><span class="k">Consignment type</span><span class="v">Regular import</span></div>
+        <div class="fd"><span class="k">PO date</span><span class="v mono">12 May 26</span></div>
+        <div class="fd"><span class="k">Created by</span><span class="v">A. Rehman · 18 May 26</span></div>
+      </div>
+    </div>
+
+    <div class="tw">
+      <table class="t">
+        <thead>
+          <tr>
+            <th class="idx"></th>
+            <th style="min-width:200px">Item</th>
+            <th style="min-width:150px">Requisition</th>
+            <th class="num">Quantity</th>
+            <th>H.S. code</th>
+            <th>Batch</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="idx mono">1</td>
+            <td>Ball bearing 6205-2RS
+              <span class="sub mono">BRG-6205 · Deep groove, C3 clearance, steel cage</span></td>
+            <td>Store<span class="sub mono">STR-2026-0912</span></td>
+            <td class="num mono">240<span class="sub">Pcs</span></td>
+            <td class="mono">8482.10.00</td>
+            <td class="mono">B-4471</td>
+          </tr>
+          <tr>
+            <td class="idx mono">2</td>
+            <td>PLC S7-1500 CPU
+              <span class="sub mono">PLC-1515 · CPU 1515-2 PN</span></td>
+            <td>Engineering<span class="sub mono">ENG-2026-0455 · Job 118 · MO 4471</span></td>
+            <td class="num mono">4<span class="sub">Pcs</span></td>
+            <td><span class="tag gap" title="Not yet entered">Missing</span></td>
+            <td class="mono">B-4472</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 2. FINANCE ============ -->
+  <section class="card" id="s-finance">
+    <h2>Finance <a class="edit" href="wizard_step2_finance.html?id=QC-2026-0147">Edit</a></h2>
+    <div class="body">
+      <div class="fields">
+        <div class="fd"><span class="k">Instrument</span><span class="v">LC — Letter of Credit</span></div>
+        <div class="fd"><span class="k">LC number</span><span class="v mono">LC-4471-2026</span></div>
+        <div class="fd"><span class="k">Retirement date</span><span class="v mono">02 Aug 26</span></div>
+        <div class="fd"><span class="k">Works</span><span class="v">Qadcast</span></div>
+        <div class="fd"><span class="k">Exchange rate</span><span class="v mono">281.40</span></div>
+        <div class="fd"><span class="k">Rate booked on</span><span class="v mono">25 Jun 26</span></div>
+        <div class="fd w2"><span class="k">Rate source</span><span class="v">Bank — LC opening rate</span></div>
+      </div>
+    </div>
+
+    <div class="tw">
+      <table class="t">
+        <thead>
+          <tr>
+            <th class="idx"></th>
+            <th style="min-width:200px">Item</th>
+            <th class="num">Quantity</th>
+            <th class="num">Unit price (USD)</th>
+            <th class="num">Line total (USD)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="idx mono">1</td>
+            <td>Ball bearing 6205-2RS</td>
+            <td class="num mono">240</td>
+            <td class="num mono">18.7500</td>
+            <td class="num mono">4,500.00</td>
+          </tr>
+          <tr>
+            <td class="idx mono">2</td>
+            <td>PLC S7-1500 CPU</td>
+            <td class="num mono">4</td>
+            <td class="num mono">3,487.5000</td>
+            <td class="num mono">13,950.00</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4">Total foreign value</td>
+            <td class="num mono">18,450.00</td>
+          </tr>
+          <tr>
+            <td colspan="4">Total in PKR at 281.40</td>
+            <td class="num mono">5,191,830</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 3. SHIPPING ============ -->
+  <section class="card" id="s-shipping">
+    <h2>Shipping <a class="edit" href="wizard_step3_shipping.html?id=QC-2026-0147">Edit</a></h2>
+    <div class="body">
+      <div class="fields">
+        <div class="fd"><span class="k">Mode of shipment</span><span class="v">By Sea</span></div>
+        <div class="fd"><span class="k">Port of loading</span><span class="v">Shanghai</span></div>
+        <div class="fd"><span class="k">Port of delivery</span><span class="v">Karachi (KICT)</span></div>
+        <div class="fd"><span class="k">Cargo readiness</span><span class="v mono">21 Jun 26</span></div>
+        <div class="fd"><span class="k">ETD</span><span class="v mono">28 Jun 26</span></div>
+        <div class="fd"><span class="k">ETA</span><span class="v mono">24 Jul 26 <span class="tag eta">revised ×2</span></span></div>
+        <div class="fd"><span class="k">Transit time</span><span class="v mono">26 days</span></div>
+        <div class="fd"><span class="k">ETA works</span><span class="v mono">05 Aug 26</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. PAYMENTS ============ -->
+  <section class="card" id="s-payments">
+    <h2>Payments <a class="edit" href="wizard_step4_payments.html?id=QC-2026-0147">Edit</a></h2>
+    <div class="tw">
+      <table class="t">
+        <thead>
+          <tr>
+            <th class="idx"></th>
+            <th>Retirement date</th>
+            <th class="num">Value (USD)</th>
+            <th class="num">Rate</th>
+            <th class="num">Equivalent (PKR)</th>
+            <th class="num">Bank charges (USD)</th>
+            <th>Status</th>
+            <th>Reference</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="idx mono">1</td>
+            <td class="mono">18 Jun 26</td>
+            <td class="num mono">9,225.00</td>
+            <td class="num mono">279.80</td>
+            <td class="num mono">2,581,155</td>
+            <td class="num mono">145.00</td>
+            <td><span class="dot Paid"></span>Paid</td>
+            <td class="mono">TT-88412</td>
+          </tr>
+          <tr>
+            <td class="idx mono">2</td>
+            <td class="mono">02 Aug 26</td>
+            <td class="num mono">9,225.00</td>
+            <td class="num mono" style="opacity:.6">281.40</td>
+            <td class="num mono" style="opacity:.6">2,595,915</td>
+            <td class="num mono">—</td>
+            <td><span class="dot Unpaid"></span>Unpaid</td>
+            <td class="mono">—</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="2">Paid to date</td>
+            <td class="num mono">9,225.00</td>
+            <td colspan="2" class="num mono">2,581,155</td>
+            <td class="num mono">145.00</td>
+            <td colspan="2">50.0% of value</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div class="body" style="border-top:1px solid var(--line-2)">
+      <div class="fields">
+        <div class="fd"><span class="k">Outstanding balance</span><span class="v mono">USD 9,225.00</span></div>
+        <div class="fd"><span class="k">Bank charges total</span><span class="v mono">USD 145.00</span></div>
+        <div class="fd w2"><span class="k">Next due</span><span class="v">Retirement on 02 Aug 26 · 11 days away</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5. STATUS & REMARKS ============ -->
+  <section class="card" id="s-status">
+    <h2>Status &amp; remarks <a class="edit" href="wizard_step5_status_remarks.html?id=QC-2026-0147">Edit</a></h2>
+
+    <div class="rail">
+      <ol>
+        <li class="done"><span class="mark"></span><span class="lbl">TT/LC in Process</span><span class="age">15 days</span></li>
+        <li class="done"><span class="mark"></span><span class="lbl">Under Production</span><span class="age">19 days</span></li>
+        <li class="done"><span class="mark"></span><span class="lbl">Ready Awaiting Sailing</span><span class="age">7 days</span></li>
+        <li class="now"><span class="mark"></span><span class="lbl">In Transit</span><span class="age">24 days</span></li>
+        <li><span class="mark"></span><span class="lbl">Arrived at Port</span><span class="age">—</span></li>
+        <li><span class="mark"></span><span class="lbl">Under Custom Clearance</span><span class="age">—</span></li>
+        <li><span class="mark"></span><span class="lbl">Under Examination</span><span class="age">—</span></li>
+        <li><span class="mark"></span><span class="lbl">Under Assessment</span><span class="age">—</span></li>
+        <li><span class="mark"></span><span class="lbl">Arrived at QFL</span><span class="age">—</span></li>
+        <li><span class="mark"></span><span class="lbl">On Road</span><span class="age">—</span></li>
+        <li><span class="mark"></span><span class="lbl">Arrived at Works</span><span class="age">—</span></li>
+      </ol>
+    </div>
+
+    <ul class="hist">
+      <li>
+        <span class="when mono">20 Jul 26</span>
+        <span class="what"><span class="tag eta">ETA revised</span>
+          <span class="mono">19 Jul 26</span><span class="arrowto">→</span><span class="mono">24 Jul 26</span>
+          <span class="who">Transhipment at Port Klang added five days. — M. Tariq (Manager)</span></span>
+      </li>
+      <li>
+        <span class="when mono">14 Jul 26</span>
+        <span class="what"><span class="tag eta">ETA revised</span>
+          <span class="mono">12 Jul 26</span><span class="arrowto">→</span><span class="mono">19 Jul 26</span>
+          <span class="who">Supplier confirmed delayed loading; vessel booking pushed a week. — M. Tariq (Manager)</span></span>
+      </li>
+      <li>
+        <span class="when mono">28 Jun 26</span>
+        <span class="what"><span class="tag st">status</span> Ready Awaiting Sailing<span class="arrowto">→</span><b>In Transit</b>
+          <span class="who">Vessel sailed from Shanghai — M. Tariq (Manager)</span></span>
+        <span class="dur slow">24 days</span>
+      </li>
+      <li>
+        <span class="when mono">21 Jun 26</span>
+        <span class="what"><span class="tag st">status</span> Under Production<span class="arrowto">→</span><b>Ready Awaiting Sailing</b>
+          <span class="who">Supplier confirmed cargo ready — M. Tariq (Manager)</span></span>
+        <span class="dur">7 days</span>
+      </li>
+      <li>
+        <span class="when mono">02 Jun 26</span>
+        <span class="what"><span class="tag st">status</span> TT/LC in Process<span class="arrowto">→</span><b>Under Production</b>
+          <span class="who">A. Rehman (Entry)</span></span>
+        <span class="dur slow">19 days</span>
+      </li>
+      <li>
+        <span class="when mono">18 May 26</span>
+        <span class="what"><span class="tag st">status</span> Created as <b>TT/LC in Process</b>
+          <span class="who">LC application submitted — A. Rehman (Entry)</span></span>
+        <span class="dur slow">15 days</span>
+      </li>
+    </ul>
+
+    <div class="body" style="border-top:1px solid var(--line-2)">
+      <div style="margin-bottom:12px">
+        <span class="lbl">System remarks</span>
+        <div class="sysbox mono">1st ETA 12 Jul 26, 2nd ETA 19 Jul 26, 3rd ETA 24 Jul 26 (current). Currently In Transit since 28 Jun 26 (24 days). Longest stage so far: In Transit, 24 days.</div>
+      </div>
+      <div>
+        <span class="lbl">User remarks</span>
+        <div class="userbox">Supplier has committed to courier the original documents by 26 Jul. PLC units need dry storage on arrival — flag to stores before gate out.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6. CLEARANCE ============ -->
+  <section class="card" id="s-clearance">
+    <h2>Custom clearance <a class="edit" href="wizard_step6_clearance.html?id=QC-2026-0147">Edit</a></h2>
+    <div class="body">
+      <div class="fields">
+        <div class="fd w2"><span class="k">Clearing agent</span><span class="v">Prime Cargo Services</span></div>
+        <div class="fd"><span class="k">GD number</span><span class="v none">Not yet filed</span></div>
+        <div class="fd"><span class="k">GD filing date</span><span class="v none">—</span></div>
+        <div class="fd"><span class="k">Arrived at port</span><span class="v none">Not yet arrived</span></div>
+        <div class="fd"><span class="k">Free days allowed</span><span class="v mono">7 days</span></div>
+        <div class="fd"><span class="k">Gate out</span><span class="v none">—</span></div>
+        <div class="fd"><span class="k">Clearance time</span><span class="v none">Pending gate out</span></div>
+      </div>
+    </div>
+    <div class="empty">Clearance is normally completed after the consignment lands. Nothing here is overdue.</div>
+  </section>
+
+  <!-- ============ 7. LANDED COST ============ -->
+  <section class="card" id="s-cost">
+    <h2>Landed cost <a class="edit" href="wizard_step7_landed_cost.html?id=QC-2026-0147">Edit</a></h2>
+    <div class="tw">
+      <table class="t">
+        <thead>
+          <tr>
+            <th class="idx"></th>
+            <th style="min-width:200px">Item</th>
+            <th class="num">Quantity</th>
+            <th class="num">ELC (PKR)</th>
+            <th class="num">ALC (PKR)</th>
+            <th class="num">Variance</th>
+            <th class="num">ALC per unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="idx mono">1</td>
+            <td>Ball bearing 6205-2RS</td>
+            <td class="num mono">240</td>
+            <td class="num mono">1,486,000</td>
+            <td class="num"><span class="tag gap" title="Not yet entered">Pending</span></td>
+            <td class="num">—</td>
+            <td class="num">—</td>
+          </tr>
+          <tr>
+            <td class="idx mono">2</td>
+            <td>PLC S7-1500 CPU</td>
+            <td class="num mono">4</td>
+            <td class="num mono">4,320,000</td>
+            <td class="num"><span class="tag gap" title="Not yet entered">Pending</span></td>
+            <td class="num">—</td>
+            <td class="num">—</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3">Consignment total</td>
+            <td class="num mono">5,806,000</td>
+            <td class="num">—</td>
+            <td class="num">—</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div class="empty">
+      Actual landed cost is entered manually once accounts finalise duty, freight and agent fees.
+      Until then this consignment is excluded from supplier comparison reports.
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* Role gating. Server-side is the real boundary — this only hides affordances. */
+  document.getElementById("role").addEventListener("change", function(e){
+    var canEdit = ["admin","manager"].indexOf(e.target.value) > -1;
+    document.getElementById("btnEdit").classList.toggle("off", !canEdit);
+    Array.prototype.forEach.call(document.querySelectorAll(".card > h2 .edit"), function(a){
+      a.style.display = canEdit ? "" : "none";
+    });
+  });
+
+  document.getElementById("btnPdf").addEventListener("click", function(e){
+    e.preventDefault();
+    window.print();
+  });
+
+  /* highlight the section currently in view */
+  var links = Array.prototype.slice.call(document.querySelectorAll(".secnav a"));
+  var secs  = links.map(function(a){ return document.querySelector(a.getAttribute("href")); });
+  function mark(){
+    var y = window.scrollY + 140, active = 0;
+    secs.forEach(function(s, i){ if(s && s.offsetTop <= y) active = i; });
+    links.forEach(function(a, i){
+      a.style.background = i === active ? "var(--paper)" : "";
+      a.style.color = i === active ? "var(--ink)" : "";
+      a.style.fontWeight = i === active ? "600" : "";
+    });
+  }
+  window.addEventListener("scroll", mark, {passive:true});
+  mark();
+})();
+</script>
+</body>
+</html>

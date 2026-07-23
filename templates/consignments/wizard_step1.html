@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import Status Management System — New Consignment</title>
+<style>
+  :root{
+    --ink:#0F1B2D; --ink-2:#1D2C44; --slate:#5A6B84; --slate-2:#8695AB;
+    --line:#D9DFE8; --line-2:#EDF0F5; --paper:#F5F7FA; --card:#FFFFFF;
+    --brass:#B8873B; --brass-soft:#F5EBD8;
+    --ok:#1F7A5A; --warn:#B4531A; --warn-soft:#FBEDE2;
+    --r:4px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;line-height:1.45}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+  header.topbar{background:var(--ink);color:#fff;display:flex;align-items:center;gap:20px;
+    padding:0 20px;height:52px;position:sticky;top:0;z-index:30}
+  .brand{font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:12px}
+  .brand span{color:var(--brass)}
+  .topbar nav{display:flex;gap:2px;margin-left:16px}
+  .topbar nav a{color:#B9C4D4;text-decoration:none;font-size:13px;padding:6px 12px;border-radius:var(--r)}
+  .topbar nav a.active{background:var(--ink-2);color:#fff}
+  .topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:#B9C4D4}
+  .rolepick{background:var(--ink-2);color:#fff;border:1px solid #2E4160;border-radius:var(--r);
+    padding:5px 8px;font-size:12px;font-family:inherit}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 20px 90px}
+  .pagehead{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+  .pagehead h1{font-size:21px;margin:0;font-weight:600;letter-spacing:-.01em}
+  .refno{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r);
+    background:#fff;color:var(--slate)}
+  .refno b{color:var(--ink)}
+  .draftflag{margin-left:auto;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--warn);border:1px solid #E8CDB6;background:var(--warn-soft);padding:4px 10px;border-radius:var(--r)}
+  .statusflag{margin-left:auto;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:#2C5D8F;border:1px solid #CBDDEE;background:#E7F0F8;padding:4px 10px;border-radius:var(--r)}
+
+  .stepper{display:flex;overflow-x:auto;border:1px solid var(--line);background:#fff;
+    border-radius:var(--r);margin-bottom:20px}
+  .step{flex:1 0 auto;min-width:112px;padding:10px 14px;border-right:1px solid var(--line);
+    text-align:left;background:none;font:inherit;cursor:pointer;color:var(--slate);text-decoration:none}
+  .step:last-child{border-right:0}
+  .step .n{font-size:10px;letter-spacing:.1em;display:block;margin-bottom:2px}
+  .step .t{font-size:12.5px;font-weight:500;white-space:nowrap}
+  .step[aria-current="step"]{background:var(--ink);color:#fff}
+  .step[aria-current="step"] .n{color:var(--brass)}
+  .step:disabled{opacity:.45;cursor:not-allowed}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);margin-bottom:18px}
+  .card > h2{margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-size:12px;
+    text-transform:uppercase;letter-spacing:.09em;color:var(--slate);font-weight:600;
+    display:flex;align-items:center;gap:10px}
+  .card > h2 .note{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400;
+    font-size:11.5px;color:var(--slate-2)}
+  .card .body{padding:16px}
+
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .f.w2{grid-column:span 2}
+  label{font-size:12px;font-weight:500;color:var(--ink-2)}
+  label .req{color:var(--brass);margin-left:2px}
+  .hint{font-size:11px;color:var(--slate)}
+  input,select,textarea{font:inherit;font-size:13.5px;padding:7px 9px;border:1px solid var(--line);
+    border-radius:var(--r);background:#fff;color:var(--ink);width:100%}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--brass);outline-offset:-1px;border-color:var(--brass)}
+  input[readonly],input:disabled,select:disabled{background:#F1F4F8;color:var(--slate)}
+  [hidden]{display:none !important}
+
+  /* ---------- item panels ---------- */
+  .item{border:1px solid var(--line);border-radius:var(--r);margin:0 16px 14px;background:#FDFDFE}
+  .item:first-child{margin-top:16px}
+  .item > .ihead{display:flex;align-items:center;gap:10px;padding:8px 12px;
+    border-bottom:1px solid var(--line-2);background:#F7F9FB;border-radius:var(--r) var(--r) 0 0}
+  .item .inum{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--slate);
+    text-transform:uppercase}
+  .item .iname{font-size:13px;font-weight:500;color:var(--ink);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .item .ihead .sp{flex:1}
+  .pending{font-size:10.5px;padding:2px 7px;border-radius:3px;border:1px solid #E8CDB6;
+    background:var(--warn-soft);color:var(--warn);white-space:nowrap;cursor:help}
+  .complete{font-size:10.5px;padding:2px 7px;border-radius:3px;border:1px solid #C9E3D8;
+    background:#E4F1EC;color:var(--ok);white-space:nowrap}
+  .rm{border:1px solid var(--line);background:#fff;color:var(--slate);border-radius:var(--r);
+    width:26px;height:26px;cursor:pointer;font-size:15px;line-height:1;font-family:inherit}
+  .rm:hover:not(:disabled){border-color:#D98B8B;color:#B03A3A}
+  .rm:disabled{opacity:.35;cursor:not-allowed}
+  .item .ibody{padding:14px 12px}
+  .band{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--slate-2);
+    font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .band::after{content:"";flex:1;height:1px;background:var(--line-2)}
+  .band.second{margin-top:16px}
+
+  .reqbox{grid-column:span 4;border-left:3px solid var(--brass);background:var(--brass-soft);
+    padding:12px;border-radius:0 var(--r) var(--r) 0}
+  .reqbox .grid{grid-template-columns:repeat(3,1fr)}
+  .reqbox .lead{font-size:11px;color:#8A6526;margin-bottom:10px}
+
+  /* ---------- item master typeahead ---------- */
+  .ac-wrap{position:relative}
+  .ac-list{position:absolute;top:100%;left:0;right:0;z-index:30;background:#fff;
+    border:1px solid var(--line);border-radius:var(--r);margin-top:3px;max-height:230px;
+    overflow-y:auto;box-shadow:0 6px 18px rgba(15,27,45,.14)}
+  .ac-item{padding:8px 10px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line-2)}
+  .ac-item:last-child{border-bottom:0}
+  .ac-item:hover{background:var(--paper)}
+  .ac-item .nm{font-weight:500;display:block}
+  .ac-item .sub{font-size:11px;color:var(--slate);display:block;margin-top:1px}
+  .ac-add{padding:9px 10px;font-size:12.5px;color:var(--brass);cursor:pointer;font-weight:500}
+  .ac-add:hover{background:var(--brass-soft)}
+
+  .itemadd{grid-column:span 4;border-left:3px solid var(--brass);background:var(--brass-soft);
+    padding:12px;border-radius:0 var(--r) var(--r) 0;margin-top:2px}
+  .itemadd .lead{font-size:11px;color:#8A6526;margin-bottom:10px}
+  .itemadd .lead b{font-weight:700}
+  .itemadd .grid{grid-template-columns:repeat(4,1fr)}
+  .itemadd .acts{display:flex;gap:8px;margin-top:12px}
+
+  .addrow{padding:12px 16px;border-top:1px solid var(--line);background:#FBFCFD;
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .addrow .hint{margin-left:auto}
+
+  .btn{font:inherit;font-size:13px;padding:8px 16px;border-radius:var(--r);cursor:pointer;
+    border:1px solid transparent}
+  .btn-primary{background:var(--ink);color:#fff}
+  .btn-primary:hover{background:var(--ink-2)}
+  .btn-ghost{background:#fff;border-color:var(--line);color:var(--ink-2)}
+  .btn-ghost:hover{border-color:var(--slate)}
+  .btn-sm{font-size:12px;padding:6px 12px}
+  .actions{display:flex;gap:10px;align-items:center;margin-top:6px}
+  .actions .spacer{flex:1}
+  .saved{font-size:12px;color:var(--ok);opacity:0;transition:opacity .25s}
+  .saved.show{opacity:1}
+
+  .summary{font-size:12.5px;color:var(--slate);padding:10px 16px;border-top:1px solid var(--line-2)}
+  .summary b{color:var(--ink);font-weight:600}
+
+  @media(max-width:820px){
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .reqbox{grid-column:span 2}
+    .reqbox .grid{grid-template-columns:1fr}
+    .item{margin:0 10px 12px}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Imports<span>·</span>ISMS</div>
+  <nav>
+    <a href="#">Dashboard</a>
+    <a href="consignment_list.html" class="active">Consignments</a>
+    <a href="#">Reports</a>
+    <a href="../masters/masters.html">Masters</a>
+  </nav>
+  <div class="right">
+    <span>Viewing as</span>
+    <select class="rolepick" id="role">
+      <option value="admin">Admin</option>
+      <option value="manager">Manager</option>
+      <option value="entry" selected>Entry Operator</option>
+      <option value="viewer">Viewer</option>
+    </select>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="pagehead">
+    <h1 id="pageH1">New consignment</h1>
+    <span class="refno">System ID <b class="mono" id="sysId">QC-2026-0148</b></span>
+    <span class="draftflag" id="draftFlag">Draft — not submitted</span>
+  </div>
+
+  <div class="stepper" role="tablist">
+    <button class="step" aria-current="step"><span class="n">01</span><span class="t">Consignment</span></button>
+    <button class="step" disabled><span class="n">02</span><span class="t">Finance</span></button>
+    <button class="step" disabled><span class="n">03</span><span class="t">Shipping</span></button>
+    <button class="step" disabled><span class="n">04</span><span class="t">Payments</span></button>
+    <button class="step" disabled><span class="n">05</span><span class="t">Status &amp; remarks</span></button>
+    <button class="step" disabled><span class="n">06</span><span class="t">Clearance</span></button>
+    <button class="step" disabled><span class="n">07</span><span class="t">Landed cost</span></button>
+  </div>
+
+  <form id="wiz">
+
+  <!-- ================= HEADER ================= -->
+  <section class="card">
+    <h2>Consignment details <span class="note">Applies to the whole shipment</span></h2>
+    <div class="body">
+      <div class="grid">
+
+        <div class="f">
+          <label for="branch">Branch <span class="req">*</span></label>
+          <select id="branch" name="branch" required>
+            <option value="">Select…</option>
+            <option>Qadcast</option>
+            <option>Qadri Brothers Unit 2</option>
+            <option>Qadri Engineering</option>
+            <option>Qadbros Engineering</option>
+          </select>
+        </div>
+
+        <div class="f">
+          <label for="supplier">Supplier <span class="req">*</span></label>
+          <input id="supplier" name="supplier" list="suppliers" placeholder="Start typing…" required autocomplete="off">
+          <datalist id="suppliers">
+            <option>Wuxi Kaiyuan Machinery Co., Ltd</option>
+            <option>Zhejiang Hengtai Industrial</option>
+            <option>SKF Sverige AB</option>
+            <option>Trelleborg Sealing Solutions</option>
+            <option>Siemens AG</option>
+          </datalist>
+          <span class="hint">From supplier master</span>
+        </div>
+
+        <div class="f">
+          <label for="origin">Country of origin <span class="req">*</span></label>
+          <select id="origin" name="origin" required>
+            <option value="">Select…</option>
+            <option>China</option><option>Germany</option><option>Italy</option>
+            <option>Japan</option><option>Korea, Republic of</option><option>Sweden</option>
+            <option>Türkiye</option><option>United States</option>
+          </select>
+        </div>
+
+        <div class="f">
+          <label for="currency">Currency <span class="req">*</span></label>
+          <select id="currency" name="currency" required>
+            <option value="">Select…</option>
+            <option value="USD">USD — US Dollar</option>
+            <option value="EUR">EUR — Euro</option>
+            <option value="CNY">CNY — Chinese Yuan</option>
+            <option value="JPY">JPY — Japanese Yen</option>
+            <option value="GBP">GBP — Pound Sterling</option>
+            <option value="AED">AED — UAE Dirham</option>
+          </select>
+        </div>
+
+        <div class="f">
+          <label for="ctype">Consignment type</label>
+          <select id="ctype" name="consignment_type">
+            <option value="">Add later</option>
+            <option value="efs">EFS</option>
+            <option value="regular">Regular import</option>
+          </select>
+          <span class="hint">Can be filled at a later stage</span>
+        </div>
+
+        <div class="f">
+          <label for="podate">PO date</label>
+          <input type="date" id="podate" name="po_date">
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ITEMS ================= -->
+  <section class="card">
+    <h2>Items <span class="note">Requisition details belong to each item, not the consignment</span></h2>
+    <div id="items"></div>
+    <div class="addrow">
+      <button type="button" class="btn btn-ghost btn-sm" id="addItem">+ Add item</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="dupItem">Duplicate last item</button>
+      <span class="hint" id="lineCount">1 item</span>
+    </div>
+    <div class="summary" id="summary"></div>
+  </section>
+
+  <div class="actions">
+    <button type="button" class="btn btn-ghost" id="saveDraft">Save draft</button>
+    <span class="saved" id="savedMsg">Draft saved</span>
+    <span class="spacer"></span>
+    <button type="submit" class="btn btn-primary">Continue to Finance →</button>
+  </div>
+
+  </form>
+</div>
+
+<datalist id="categoryList"></datalist>
+
+<!-- ---------- item panel template ---------- -->
+<template id="itemTpl">
+  <div class="item">
+    <div class="ihead">
+      <span class="inum">Item 1</span>
+      <span class="iname">Not named yet</span>
+      <span class="sp"></span>
+      <span class="pending" hidden></span>
+      <span class="complete" hidden>Complete</span>
+      <button type="button" class="rm" title="Remove this item">×</button>
+    </div>
+    <div class="ibody">
+
+      <p class="band">Item</p>
+      <div class="grid">
+        <div class="f w2 ac-wrap" data-itemname-wrap>
+          <label>Item name <span class="req">*</span></label>
+          <input name="item_name" placeholder="Search item master…" autocomplete="off" required>
+          <div class="ac-list" data-ac-list hidden></div>
+        </div>
+        <div class="f">
+          <label>Item code <span class="req">*</span></label>
+          <input name="item_code" autocomplete="off" required>
+          <span class="hint">Fetched from the item master as a default — always editable</span>
+        </div>
+        <div class="f">
+          <label>H.S. code</label>
+          <select name="hs_pick" hidden></select>
+          <input name="hs_code" class="mono" placeholder="0000.00.00" autocomplete="off">
+          <span class="hint">Optional now</span>
+        </div>
+
+        <div class="f w2">
+          <label>Specification</label>
+          <input name="specification" placeholder="Optional" autocomplete="off">
+        </div>
+        <div class="f">
+          <label>Quantity <span class="req">*</span></label>
+          <input name="quantity" type="number" min="0" step="any" required>
+        </div>
+        <div class="f">
+          <label>Unit of measure <span class="req">*</span></label>
+          <select name="uom" required>
+            <option value="">Select…</option>
+            <optgroup label="Count">
+              <option>Pcs</option><option>Set</option><option>Pair</option><option>Roll</option>
+              <option>Box</option><option>Carton</option><option>Drum</option><option>Pallet</option>
+            </optgroup>
+            <optgroup label="Weight">
+              <option>Kg</option><option>Gram</option><option>Ton (MT)</option><option>Lb</option>
+            </optgroup>
+            <optgroup label="Length">
+              <option>Metre</option><option>Centimetre</option><option>Foot</option><option>Inch</option>
+            </optgroup>
+            <optgroup label="Area / Volume">
+              <option>Sq. Metre</option><option>Cu. Metre</option><option>Litre</option><option>Millilitre</option>
+            </optgroup>
+          </select>
+          <span class="hint">Defaults from the item master — changeable per consignment</span>
+        </div>
+
+        <div class="f">
+          <label>Batch number</label>
+          <input name="batch_no" placeholder="Add later" autocomplete="off">
+        </div>
+
+        <!-- shown when the typed item name matches nothing in the item master -->
+        <div class="itemadd" data-itemadd hidden>
+          <div class="lead">Add <b data-newname></b> to the item master</div>
+          <div class="grid">
+            <div class="f">
+              <label>Item code <span class="req">*</span></label>
+              <input name="new_code" autocomplete="off">
+            </div>
+            <div class="f">
+              <label>Default UoM <span class="req">*</span></label>
+              <select name="new_uom">
+                <option value="">Select…</option>
+                <option>Pcs</option><option>Set</option><option>Pair</option><option>Roll</option>
+                <option>Box</option><option>Kg</option><option>Ton (MT)</option>
+                <option>Metre</option><option>Litre</option><option>Sq. Metre</option>
+              </select>
+            </div>
+            <div class="f w2">
+              <label>Specification</label>
+              <input name="new_spec" placeholder="Optional" autocomplete="off">
+            </div>
+            <div class="f w2">
+              <label>Category</label>
+              <input name="new_category" list="categoryList" placeholder="e.g. Bearings" autocomplete="off">
+              <span class="hint">Pick an existing one or type a new category</span>
+            </div>
+          </div>
+          <div class="acts">
+            <button type="button" class="btn btn-ghost btn-sm" data-itemadd-cancel>Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm" data-itemadd-save>Add to item master</button>
+          </div>
+          <span class="hint" style="display:block;margin-top:8px">Saved with <b>verified: false</b> — it appears in the Masters review queue until a Manager confirms it</span>
+        </div>
+      </div>
+
+      <p class="band second">Requisition</p>
+      <div class="grid">
+        <div class="f">
+          <label>Requisition type <span class="req">*</span></label>
+          <select name="requisition_type" required>
+            <option value="">Select…</option>
+            <option value="store">Store</option>
+            <option value="engineering">Engineering</option>
+            <option value="others">Others</option>
+          </select>
+        </div>
+
+        <div class="reqbox" data-reqbox hidden>
+          <div class="lead" data-lead></div>
+          <div class="grid">
+            <div class="f" data-w="ref" hidden>
+              <label>Reference number</label>
+              <input name="reference_no" placeholder="e.g. STR-2026-0912" autocomplete="off">
+            </div>
+            <div class="f" data-w="job" hidden>
+              <label>Job number</label>
+              <input name="job_no" autocomplete="off">
+            </div>
+            <div class="f" data-w="mo" hidden>
+              <label>MO number</label>
+              <input name="mo_no" autocomplete="off">
+            </div>
+            <div class="f" data-w="other" hidden style="grid-column:1/-1">
+              <label>What is this item for?</label>
+              <input name="others_description" placeholder="Describe the purpose" autocomplete="off">
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</template>
+
+<script>
+(function(){
+  "use strict";
+
+  var box   = document.getElementById("items");
+  var tpl   = document.getElementById("itemTpl");
+  var count = document.getElementById("lineCount");
+  var summary = document.getElementById("summary");
+
+  /* ---- edit mode: ?id= on the URL loads an existing consignment instead of
+     a blank draft. In Django this is the difference between /consignments/new/
+     and /consignments/<pk>/edit/1/ — here it's a query string over the same
+     static file, purely as a prototype stand-in. ---- */
+  var NEW_ID = "QC-2026-0148";
+  var editId = new URLSearchParams(window.location.search).get("id");
+
+  var MOCK = {
+    "QC-2026-0147": {
+      status: "In Transit",
+      branch: "Qadcast",
+      supplier: "Wuxi Kaiyuan Machinery Co., Ltd",
+      origin: "China",
+      currency: "USD",
+      consignment_type: "regular",
+      po_date: "2026-05-12",
+      items: [
+        {name:"Ball bearing 6205-2RS", code:"BRG-6205", spec:"Deep groove, C3 clearance, steel cage",
+         hs_code:"8482.10.00", batch_no:"B-4471", quantity:240, uom:"Pcs",
+         requisition_type:"store", reference_no:"STR-2026-0912"},
+        {name:"PLC S7-1500 CPU", code:"PLC-1515", spec:"CPU 1515-2 PN",
+         hs_code:"", batch_no:"B-4472", quantity:4, uom:"Pcs",
+         requisition_type:"engineering", reference_no:"ENG-2026-0455", job_no:"118", mo_no:"4471"}
+      ]
+    }
+  };
+
+  function withId(file){
+    return file + (editId ? "?id=" + encodeURIComponent(editId) : "");
+  }
+
+  /* which requisition fields apply to which type, and what each is called */
+  var RULES = {
+    store:       {show:["ref"],            lead:"Store item — reference number can be added later"},
+    engineering: {show:["ref","job","mo"], lead:"Engineering item — reference, job and MO numbers can be added later"},
+    others:      {show:["other"],          lead:"Describe what this item is for"}
+  };
+  var FIELD_LABEL = {ref:"Reference no.", job:"Job no.", mo:"MO no.", other:"Description"};
+
+  /* stand-in for the Item master (masters.html's "item" tab). Shared across every
+     item panel on this page, so an item added from one panel is immediately
+     searchable from the others. */
+  var ITEM_MASTER = [
+    {id:1, code:"BRG-6205", name:"Ball bearing 6205-2RS", spec:"Deep groove, C3 clearance, steel cage",
+     uom:"Pcs", hs:["8482.10.00"], category:"Bearings", active:true, verified:true, used:11},
+    {id:2, code:"SEL-3552", name:"Oil seal TC 35x52x7", spec:"NBR, double lip, spring loaded",
+     uom:"Pcs", hs:["4016.93.00","4016.99.00"], category:"Seals & gaskets", active:true, verified:true, used:7},
+    {id:3, code:"PLC-1515", name:"PLC S7-1500 CPU", spec:"CPU 1515-2 PN",
+     uom:"Pcs", hs:["8537.10.00"], category:"Electrical & control", active:true, verified:true, used:4},
+    {id:4, code:"VBT-SPB2000", name:"V-belt SPB 2000", spec:"Wrapped, narrow section",
+     uom:"Pcs", hs:["4010.32.00"], category:"Power transmission", active:true, verified:true, used:6},
+    {id:5, code:"HYD-VLV4WRE", name:"Proportional valve 4WRE", spec:"NG10, 24V DC",
+     uom:"Pcs", hs:["8481.20.00","8481.80.00"], category:"Hydraulics", active:true, verified:true, used:3},
+    {id:6, code:"STL-RB80", name:"Alloy steel round bar 80mm", spec:"EN19, hardened & tempered",
+     uom:"Kg", hs:["7228.30.00"], category:"Raw material", active:true, verified:true, used:2},
+    {id:7, code:"GSK-CU14", name:"Copper washer 14mm", spec:"",
+     uom:"Pcs", hs:[], category:"Seals & gaskets", active:true, verified:false, used:1}
+  ];
+
+  function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g,function(m){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]; }); }
+
+  function refreshCategoryList(){
+    var seen = ITEM_MASTER.map(function(r){ return r.category; })
+      .filter(function(c,i,a){ return c && a.indexOf(c) === i; }).sort();
+    document.getElementById("categoryList").innerHTML =
+      seen.map(function(c){ return "<option>"+esc(c)+"</option>"; }).join("");
+  }
+
+  refreshCategoryList();
+
+  function q(root, sel){ return root.querySelector(sel); }
+  function qa(root, sel){ return Array.prototype.slice.call(root.querySelectorAll(sel)); }
+
+  /* ---- H.S. code: a picker when the item has known codes, free text
+     otherwise — same show/hide pattern as the requisition fields above. ---- */
+  function updateHsField(item, hsList, chosenValue){
+    var pick = q(item,"[name=hs_pick]");
+    var free = q(item,"[name=hs_code]");
+    if(hsList && hsList.length){
+      pick.innerHTML = hsList.map(function(c){
+        return '<option'+(c===chosenValue?' selected':'')+'>'+esc(c)+'</option>';
+      }).join("") + '<option value="__new">+ Enter a new code</option>';
+      pick.hidden = false;
+      if(chosenValue && hsList.indexOf(chosenValue) > -1){
+        free.hidden = true; free.value = chosenValue;
+      }else{
+        pick.value = "__new";
+        free.hidden = false; free.value = chosenValue || "";
+      }
+    }else{
+      pick.hidden = true; pick.innerHTML = "";
+      free.hidden = false;
+      if(chosenValue != null) free.value = chosenValue;
+    }
+  }
+
+  /* ---- fill an item panel from a picked item-master record ---- */
+  function applyMasterItem(item, rec){
+    q(item,"[name=item_name]").value = rec.name;
+    q(item,"[name=item_code]").value = rec.code;
+    q(item,"[name=specification]").value = rec.spec || "";
+    if(rec.uom) q(item,"[name=uom]").value = rec.uom;
+    updateHsField(item, rec.hs, rec.hs && rec.hs[0]);
+    refresh();
+  }
+
+  /* ---- generic typeahead: matches by name, offers "+ Add" when nothing matches ---- */
+  function setupTypeahead(input, list, getMaster, onPick, onAddNew){
+    function render(){
+      var qv = input.value.trim();
+      var ql = qv.toLowerCase();
+      var matches = ql ? getMaster().filter(function(r){
+        return r.active !== false && r.name.toLowerCase().indexOf(ql) > -1;
+      }).slice(0,8) : [];
+      var exact = ql && getMaster().some(function(r){ return r.name.toLowerCase() === ql; });
+      var html = matches.map(function(r,i){
+        return '<div class="ac-item" data-i="'+i+'">'+
+          '<span class="nm">'+esc(r.name)+'</span>'+
+          '<span class="sub mono">'+esc(r.code)+(r.spec?' · '+esc(r.spec):'')+'</span></div>';
+      }).join("");
+      if(qv && !exact){
+        html += '<div class="ac-add" data-add="1">+ Add "'+esc(qv)+'" to item master</div>';
+      }
+      list.innerHTML = html;
+      list.hidden = !html;
+      list._matches = matches;
+    }
+    input.addEventListener("input", render);
+    input.addEventListener("focus", render);
+    input.addEventListener("blur", function(){ setTimeout(function(){ list.hidden = true; }, 150); });
+    list.addEventListener("mousedown", function(e){
+      e.preventDefault();
+      var addEl = e.target.closest(".ac-add");
+      if(addEl){ onAddNew(input.value.trim()); list.hidden = true; return; }
+      var itemEl = e.target.closest(".ac-item");
+      if(itemEl){ onPick(list._matches[+itemEl.dataset.i]); list.hidden = true; }
+    });
+  }
+
+  /* ---- per-item completeness, driven by the same rules ---- */
+  function assess(item){
+    var missing = [];
+    var name = q(item,"[name=item_name]").value.trim();
+    if(!name) missing.push("Item name");
+    if(!q(item,"[name=item_code]").value.trim()) missing.push("Item code");
+    if(!q(item,"[name=quantity]").value) missing.push("Quantity");
+    if(!q(item,"[name=uom]").value) missing.push("Unit of measure");
+    if(!q(item,"[name=hs_code]").value.trim()) missing.push("H.S. code");
+    if(!q(item,"[name=batch_no]").value.trim()) missing.push("Batch no.");
+
+    var rt = q(item,"[name=requisition_type]").value;
+    if(!rt){ missing.push("Requisition type"); }
+    else {
+      RULES[rt].show.forEach(function(k){
+        var wrap = q(item,'[data-w="'+k+'"]');
+        var input = wrap.querySelector("input");
+        if(!input.value.trim()) missing.push(FIELD_LABEL[k]);
+      });
+    }
+
+    var pend = q(item,".pending"), done = q(item,".complete");
+    if(missing.length){
+      pend.hidden = false; done.hidden = true;
+      pend.textContent = missing.length + " pending";
+      pend.title = "Still to add: " + missing.join(", ");
+    }else{
+      pend.hidden = true; done.hidden = false;
+    }
+    return missing.length;
+  }
+
+  function refresh(){
+    var items = qa(box, ".item");
+    var pending = 0, named = 0;
+    items.forEach(function(item, i){
+      q(item,".inum").textContent = "Item " + (i+1);
+      var nm = q(item,"[name=item_name]").value.trim();
+      q(item,".iname").textContent = nm || "Not named yet";
+      if(nm) named++;
+      q(item,".rm").disabled = items.length === 1;
+      pending += assess(item) ? 1 : 0;
+    });
+    count.textContent = items.length + (items.length===1 ? " item" : " items");
+
+    /* mixed-requisition summary — this is what the list view will show */
+    var types = qa(box,"[name=requisition_type]").map(function(s){ return s.value; })
+                  .filter(Boolean)
+                  .filter(function(v,i,a){ return a.indexOf(v)===i; })
+                  .map(function(v){ return v.charAt(0).toUpperCase()+v.slice(1); });
+    summary.innerHTML =
+      "<b>" + items.length + "</b> item" + (items.length===1?"":"s") +
+      (types.length ? " &nbsp;·&nbsp; Requisition: <b>" + types.join(" + ") + "</b>" : "") +
+      (pending ? " &nbsp;·&nbsp; <b>" + pending + "</b> item" + (pending===1?"":"s") +
+                 " with information still pending" : " &nbsp;·&nbsp; all items complete");
+  }
+
+  function wire(item){
+    /* requisition type drives which numbers appear */
+    var rtSel = q(item,"[name=requisition_type]");
+    var rbox  = q(item,"[data-reqbox]");
+    var lead  = q(item,"[data-lead]");
+    rtSel.addEventListener("change", function(){
+      var r = RULES[rtSel.value];
+      ["ref","job","mo","other"].forEach(function(k){
+        var w = q(item,'[data-w="'+k+'"]');
+        var on = !!r && r.show.indexOf(k) > -1;
+        w.hidden = !on;
+        if(!on) w.querySelector("input").value = "";
+      });
+      rbox.hidden = !r;
+      if(r) lead.textContent = r.lead;
+      refresh();
+    });
+
+    /* item name: typeahead against the item master, with inline "+ Add" */
+    var nameEl  = q(item,"[name=item_name]");
+    var acList  = q(item,"[data-ac-list]");
+    var addBox  = q(item,"[data-itemadd]");
+    setupTypeahead(nameEl, acList, function(){ return ITEM_MASTER; },
+      function(rec){ applyMasterItem(item, rec); },
+      function(typedName){
+        addBox.hidden = false;
+        addBox.dataset.pendingName = typedName;
+        q(addBox,"[data-newname]").textContent = '"' + typedName + '"';
+        q(addBox,"[name=new_code]").value = "";
+        q(addBox,"[name=new_uom]").value = "";
+        q(addBox,"[name=new_spec]").value = "";
+        q(addBox,"[name=new_category]").value = "";
+        q(addBox,"[name=new_code]").focus();
+      });
+
+    q(addBox,"[data-itemadd-cancel]").addEventListener("click", function(){ addBox.hidden = true; });
+    q(addBox,"[data-itemadd-save]").addEventListener("click", function(){
+      var code = q(addBox,"[name=new_code]").value.trim();
+      var uom  = q(addBox,"[name=new_uom]").value;
+      if(!code || !uom){
+        alert("Item code and default UoM are needed to add this to the item master.");
+        return;
+      }
+      var rec = {
+        id: ITEM_MASTER.reduce(function(m,r){ return Math.max(m,r.id); }, 0) + 1,
+        code: code,
+        name: addBox.dataset.pendingName,
+        spec: q(addBox,"[name=new_spec]").value.trim(),
+        uom: uom,
+        hs: [],
+        category: q(addBox,"[name=new_category]").value.trim(),
+        active: true, verified: false, used: 0
+      };
+      ITEM_MASTER.push(rec);
+      refreshCategoryList();
+      applyMasterItem(item, rec);
+      addBox.hidden = true;
+    });
+
+    /* H.S. code: switch between the picker and free text when the user
+       chooses "+ Enter a new code" */
+    q(item,"[name=hs_pick]").addEventListener("change", function(){
+      var pick = q(item,"[name=hs_pick]"), free = q(item,"[name=hs_code]");
+      if(pick.value === "__new"){ free.hidden=false; free.value=""; free.focus(); }
+      else { free.hidden = true; free.value = pick.value; }
+    });
+
+    q(item,".rm").addEventListener("click", function(){
+      if(qa(box,".item").length === 1) return;
+      item.remove(); refresh();
+    });
+
+    item.addEventListener("input", refresh);
+    item.addEventListener("change", refresh);
+  }
+
+  function addItem(copyFrom){
+    var item = tpl.content.firstElementChild.cloneNode(true);
+    box.appendChild(item);
+    wire(item);
+    if(copyFrom){
+      /* carry over the fields that repeat across items on one PO */
+      ["requisition_type","reference_no","job_no","mo_no","others_description","uom"].forEach(function(n){
+        var src = q(copyFrom,'[name="'+n+'"]'), dst = q(item,'[name="'+n+'"]');
+        if(src && dst) dst.value = src.value;
+      });
+      q(item,"[name=requisition_type]").dispatchEvent(new Event("change"));
+      ["reference_no","job_no","mo_no","others_description"].forEach(function(n){
+        var src = q(copyFrom,'[name="'+n+'"]'), dst = q(item,'[name="'+n+'"]');
+        if(src && dst) dst.value = src.value;
+      });
+    }
+    refresh();
+    return item;
+  }
+
+  document.getElementById("addItem").onclick = function(){
+    addItem(null).querySelector("[name=item_name]").focus();
+  };
+  document.getElementById("dupItem").onclick = function(){
+    var items = qa(box,".item");
+    addItem(items[items.length-1]).querySelector("[name=item_name]").focus();
+  };
+
+  var msg = document.getElementById("savedMsg");
+  document.getElementById("saveDraft").onclick = function(){
+    msg.classList.add("show");
+    setTimeout(function(){ msg.classList.remove("show"); }, 1800);
+  };
+
+  /* role gating (server-side enforcement is what actually matters) */
+  document.getElementById("role").addEventListener("change", function(e){
+    var ro = e.target.value === "viewer";
+    qa(document.getElementById("wiz"), "input,select,textarea,button").forEach(function(el){
+      el.disabled = ro;
+    });
+    document.getElementById("addItem").disabled = ro;
+    document.getElementById("dupItem").disabled = ro;
+    if(!ro) refresh();
+  });
+
+  document.getElementById("wiz").addEventListener("submit", function(e){
+    e.preventDefault();
+    window.location.href = withId("wizard_step2_finance.html");
+  });
+
+  /* ---- apply edit mode, or fall back to the blank-draft behavior ---- */
+  var mock = editId && MOCK[editId];
+  document.getElementById("sysId").textContent = editId || NEW_ID;
+  if(mock){
+    document.getElementById("pageH1").textContent = "Edit " + editId;
+    var flag = document.getElementById("draftFlag");
+    flag.textContent = mock.status;
+    flag.classList.remove("draftflag");
+    flag.classList.add("statusflag");
+
+    document.getElementById("branch").value = mock.branch;
+    document.getElementById("supplier").value = mock.supplier;
+    document.getElementById("origin").value = mock.origin;
+    document.getElementById("currency").value = mock.currency;
+    document.getElementById("ctype").value = mock.consignment_type;
+    document.getElementById("podate").value = mock.po_date;
+
+    mock.items.forEach(function(it){
+      var item = addItem(null);
+      q(item,"[name=item_name]").value = it.name;
+      q(item,"[name=item_code]").value = it.code;
+      q(item,"[name=specification]").value = it.spec;
+      var master = ITEM_MASTER.filter(function(m){ return m.name === it.name; })[0];
+      updateHsField(item, master ? master.hs : [], it.hs_code || null);
+      q(item,"[name=batch_no]").value = it.batch_no;
+      q(item,"[name=quantity]").value = it.quantity;
+      q(item,"[name=uom]").value = it.uom;
+      var rt = q(item,"[name=requisition_type]");
+      rt.value = it.requisition_type;
+      rt.dispatchEvent(new Event("change"));
+      if(it.reference_no) q(item,"[name=reference_no]").value = it.reference_no;
+      if(it.job_no) q(item,"[name=job_no]").value = it.job_no;
+      if(it.mo_no) q(item,"[name=mo_no]").value = it.mo_no;
+    });
+    refresh();
+  }else{
+    addItem(null);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import Status Management System — Finance</title>
+<style>
+  :root{
+    --ink:#0F1B2D; --ink-2:#1D2C44; --slate:#5A6B84; --slate-2:#8695AB;
+    --line:#D9DFE8; --line-2:#EDF0F5; --paper:#F5F7FA; --card:#FFFFFF;
+    --brass:#B8873B; --brass-soft:#F5EBD8;
+    --ok:#1F7A5A; --warn:#B4531A; --warn-soft:#FBEDE2;
+    --r:4px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;line-height:1.45}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+  header.topbar{background:var(--ink);color:#fff;display:flex;align-items:center;gap:20px;
+    padding:0 20px;height:52px;position:sticky;top:0;z-index:30}
+  .brand{font-weight:600;letter-spacing:.06em;text-transform:uppercase;font-size:12px}
+  .brand span{color:var(--brass)}
+  .topbar nav{display:flex;gap:2px;margin-left:16px}
+  .topbar nav a{color:#B9C4D4;text-decoration:none;font-size:13px;padding:6px 12px;border-radius:var(--r)}
+  .topbar nav a.active{background:var(--ink-2);color:#fff}
+  .topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:#B9C4D4}
+  .rolepick{background:var(--ink-2);color:#fff;border:1px solid #2E4160;border-radius:var(--r);
+    padding:5px 8px;font-size:12px;font-family:inherit}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 20px 90px}
+  .pagehead{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+  .pagehead h1{font-size:21px;margin:0;font-weight:600;letter-spacing:-.01em}
+  .refno{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r);
+    background:#fff;color:var(--slate)}
+  .refno b{color:var(--ink)}
+  .draftflag{margin-left:auto;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--warn);border:1px solid #E8CDB6;background:var(--warn-soft);padding:4px 10px;border-radius:var(--r)}
+  .statusflag{margin-left:auto;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:#2C5D8F;border:1px solid #CBDDEE;background:#E7F0F8;padding:4px 10px;border-radius:var(--r)}
+
+  .stepper{display:flex;overflow-x:auto;border:1px solid var(--line);background:#fff;
+    border-radius:var(--r);margin-bottom:20px}
+  .step{flex:1 0 auto;min-width:112px;padding:10px 14px;border-right:1px solid var(--line);
+    text-align:left;background:none;font:inherit;cursor:pointer;color:var(--slate);text-decoration:none}
+  .step:last-child{border-right:0}
+  .step .n{font-size:10px;letter-spacing:.1em;display:block;margin-bottom:2px}
+  .step .t{font-size:12.5px;font-weight:500;white-space:nowrap}
+  .step[aria-current="step"]{background:var(--ink);color:#fff}
+  .step[aria-current="step"] .n{color:var(--brass)}
+  .step[data-done="1"]{color:var(--ink-2)}
+  .step[data-done="1"] .n{color:var(--ok)}
+  .step:disabled{opacity:.45;cursor:not-allowed}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);margin-bottom:18px}
+  .card > h2{margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-size:12px;
+    text-transform:uppercase;letter-spacing:.09em;color:var(--slate);font-weight:600;
+    display:flex;align-items:center;gap:10px}
+  .card > h2 .note{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400;
+    font-size:11.5px;color:var(--slate-2)}
+  .card .body{padding:16px}
+
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .f.w2{grid-column:span 2}
+  label{font-size:12px;font-weight:500;color:var(--ink-2)}
+  label .req{color:var(--brass);margin-left:2px}
+  .hint{font-size:11px;color:var(--slate)}
+  input,select{font:inherit;font-size:13.5px;padding:7px 9px;border:1px solid var(--line);
+    border-radius:var(--r);background:#fff;color:var(--ink);width:100%}
+  input:focus,select:focus{outline:2px solid var(--brass);outline-offset:-1px;border-color:var(--brass)}
+  input[readonly],input:disabled,select:disabled{background:#F1F4F8;color:var(--slate)}
+  [hidden]{display:none !important}
+
+  /* ---------- carried-over context strip ---------- */
+  .carried{display:flex;gap:0;border:1px solid var(--line);background:#fff;border-radius:var(--r);
+    margin-bottom:18px;overflow-x:auto}
+  .carried div{flex:1 0 auto;min-width:130px;padding:9px 13px;border-right:1px solid var(--line-2)}
+  .carried div:last-child{border-right:0}
+  .carried .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate-2);display:block}
+  .carried .v{font-size:13px;font-weight:500;margin-top:2px;display:block}
+
+  /* ---------- pricing table ---------- */
+  .price{width:100%;border-collapse:collapse}
+  .price th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate);
+    text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+  .price th.num,.price td.num{text-align:right}
+  .price td{padding:8px 12px;border-bottom:1px solid var(--line-2);vertical-align:middle;font-size:13px}
+  .price tbody tr:hover{background:#FAFBFD}
+  .price .nm{font-weight:500}
+  .price .sub{display:block;font-size:11px;color:var(--slate);margin-top:1px}
+  .price input{text-align:right;max-width:150px;margin-left:auto}
+  .price .line{font-weight:600;font-size:13.5px}
+  .price tfoot td{padding:11px 12px;border-top:1.5px solid var(--ink);font-weight:600;background:#FBFCFD}
+  .idx{color:var(--slate-2);font-size:12px;width:26px}
+  .warnrow{box-shadow:inset 3px 0 0 var(--slate-2)}
+
+  /* ---------- totals panel ---------- */
+  .totals{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--line)}
+  .tot{padding:14px 16px;border-right:1px solid var(--line-2)}
+  .tot:last-child{border-right:0}
+  .tot .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--slate);display:block}
+  .tot .v{font-size:22px;font-weight:600;letter-spacing:-.01em;margin-top:3px;display:block}
+  .tot .m{font-size:11.5px;color:var(--slate);margin-top:3px;display:block}
+  .tot.local{background:var(--brass-soft);border-left:3px solid var(--brass)}
+  .tot.local .k{color:#8A6526}
+
+  .pending-banner{margin:0 16px 14px;padding:10px 13px;border-left:3px solid var(--warn);
+    background:var(--warn-soft);border-radius:0 var(--r) var(--r) 0;font-size:12.5px;color:var(--warn)}
+
+  .callout{margin:0 16px 16px;padding:11px 13px;border-left:3px solid var(--brass);
+    background:var(--brass-soft);border-radius:0 var(--r) var(--r) 0;font-size:12.5px;color:#7A5B22}
+
+  .btn{font:inherit;font-size:13px;padding:8px 16px;border-radius:var(--r);cursor:pointer;
+    border:1px solid transparent}
+  .btn-primary{background:var(--ink);color:#fff}
+  .btn-primary:hover{background:var(--ink-2)}
+  .btn-ghost{background:#fff;border-color:var(--line);color:var(--ink-2)}
+  .btn-ghost:hover{border-color:var(--slate)}
+  .actions{display:flex;gap:10px;align-items:center;margin-top:6px}
+  .actions .spacer{flex:1}
+  .saved{font-size:12px;color:var(--ok);opacity:0;transition:opacity .25s}
+  .saved.show{opacity:1}
+
+  @media(max-width:820px){
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .totals{grid-template-columns:1fr}
+    .tot{border-right:0;border-bottom:1px solid var(--line-2)}
+    .pricewrap{overflow-x:auto}
+    .price{min-width:640px}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Imports<span>·</span>ISMS</div>
+  <nav>
+    <a href="#">Dashboard</a>
+    <a href="consignment_list.html" class="active">Consignments</a>
+    <a href="#">Reports</a>
+    <a href="../masters/masters.html">Masters</a>
+  </nav>
+  <div class="right">
+    <span>Viewing as</span>
+    <select class="rolepick" id="role">
+      <option value="admin">Admin</option>
+      <option value="manager" selected>Manager</option>
+      <option value="entry">Entry Operator</option>
+      <option value="viewer">Viewer</option>
+    </select>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="pagehead">
+    <h1 id="pageH1">Finance</h1>
+    <span class="refno">System ID <b class="mono" id="sysId">QC-2026-0148</b></span>
+    <span class="draftflag" id="draftFlag">Draft — not submitted</span>
+  </div>
+
+  <div class="stepper" role="tablist">
+    <a class="step" data-done="1" href="wizard_step1.html"><span class="n">01 ✓</span><span class="t">Consignment</span></a>
+    <button class="step" aria-current="step"><span class="n">02</span><span class="t">Finance</span></button>
+    <button class="step" disabled><span class="n">03</span><span class="t">Shipping</span></button>
+    <button class="step" disabled><span class="n">04</span><span class="t">Payments</span></button>
+    <button class="step" disabled><span class="n">05</span><span class="t">Status &amp; remarks</span></button>
+    <button class="step" disabled><span class="n">06</span><span class="t">Clearance</span></button>
+    <button class="step" disabled><span class="n">07</span><span class="t">Landed cost</span></button>
+  </div>
+
+  <!-- carried from step 1, read-only -->
+  <div class="carried">
+    <div><span class="k">Branch</span><span class="v">Qadcast</span></div>
+    <div><span class="k">Supplier</span><span class="v">Wuxi Kaiyuan Machinery Co., Ltd</span></div>
+    <div><span class="k">Origin</span><span class="v">China</span></div>
+    <div><span class="k">Currency</span><span class="v mono" id="curLabel">USD</span></div>
+    <div><span class="k">Requisition</span><span class="v">Store + Engineering</span></div>
+    <div><span class="k">Items</span><span class="v" id="itemsCount">3</span></div>
+  </div>
+
+  <form id="fin">
+
+  <!-- ================= INSTRUMENT ================= -->
+  <section class="card">
+    <h2>Payment instrument <span class="note">Applies to the whole consignment</span></h2>
+    <div class="body">
+      <div class="grid">
+
+        <div class="f">
+          <label for="ptype">Type <span class="req">*</span></label>
+          <select id="ptype" name="payment_type" required>
+            <option value="">Select…</option>
+            <option value="LC">LC — Letter of Credit</option>
+            <option value="Adv">Adv — Advance Payment</option>
+            <option value="DP">DP — Documents against Payment</option>
+            <option value="CAD">CAD — Cash against Documents</option>
+          </select>
+        </div>
+
+        <div class="f">
+          <label for="pnum" id="pnumLabel">Instrument number <span class="req">*</span></label>
+          <input id="pnum" name="instrument_no" class="mono" placeholder="Select a type first" disabled autocomplete="off">
+          <span class="hint" id="pnumHint">Label changes with the instrument type</span>
+        </div>
+
+        <div class="f">
+          <label for="pdate" id="pdateLabel">Opening date</label>
+          <input type="date" id="pdate" name="instrument_date">
+          <span class="hint" id="pdateHint">Retirement date is used for LC</span>
+        </div>
+
+        <div class="f">
+          <label for="works">Works <span class="req">*</span></label>
+          <select id="works" name="works" required>
+            <option value="">Select…</option>
+            <option>Qadcast</option>
+            <option>Qadri Brothers Unit 2</option>
+            <option>Qadri Engineering</option>
+            <option>Qadbros Engineering</option>
+          </select>
+          <span class="hint">Factory whose name the import is made under</span>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PRICING ================= -->
+  <section class="card">
+    <h2>Item pricing <span class="note">Quantities carried from Step 1 and locked here</span></h2>
+    <div class="pricewrap">
+      <table class="price">
+        <thead>
+          <tr>
+            <th class="idx"></th>
+            <th>Item</th>
+            <th>Requisition</th>
+            <th class="num">Quantity</th>
+            <th class="num">Unit price (<span class="curTag">USD</span>) <span class="req">*</span></th>
+            <th class="num">Line total (<span class="curTag">USD</span>)</th>
+          </tr>
+        </thead>
+        <tbody id="priceRows"></tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3"></td>
+            <td class="num" id="qtyTotal"></td>
+            <td class="num">Total</td>
+            <td class="num mono" id="foreignTotal">—</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div class="callout">
+      Unit price is captured per item because line values drive the landed-cost and
+      duty allocation later. The consignment total is the sum of the lines — it is never keyed in directly.
+    </div>
+  </section>
+
+  <!-- ================= CONVERSION ================= -->
+  <section class="card">
+    <h2>Conversion to PKR</h2>
+    <div class="body">
+      <div class="grid">
+        <div class="f">
+          <label for="fx">Exchange rate</label>
+          <input id="fx" name="exchange_rate" type="number" step="0.0001" min="0"
+                 class="mono" placeholder="Add later" autocomplete="off">
+          <span class="hint">PKR per 1 <span class="curTag">USD</span></span>
+        </div>
+        <div class="f">
+          <label for="fxdate">Rate booked on</label>
+          <input type="date" id="fxdate" name="rate_date">
+          <span class="hint">The date this rate was taken, not today</span>
+        </div>
+        <div class="f w2">
+          <label for="fxsrc">Rate source</label>
+          <select id="fxsrc" name="rate_source">
+            <option value="">Select…</option>
+            <option>Bank — LC opening rate</option>
+            <option>Bank — TT rate</option>
+            <option>SBP interbank</option>
+            <option>Contract / agreed rate</option>
+          </select>
+          <span class="hint">Makes reconciliation possible six months from now</span>
+        </div>
+      </div>
+    </div>
+    <div class="pending-banner" id="pendNote" hidden></div>
+    <div class="totals">
+      <div class="tot">
+        <span class="k">Total foreign value</span>
+        <span class="v mono" id="tFor">—</span>
+        <span class="m" id="tForNote">Sum of all item lines</span>
+      </div>
+      <div class="tot local">
+        <span class="k">Total value in PKR</span>
+        <span class="v mono" id="tLoc">—</span>
+        <span class="m" id="tLocNote">Enter a rate to calculate</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="actions">
+    <button type="button" class="btn btn-ghost" id="back">← Back to Consignment</button>
+    <button type="button" class="btn btn-ghost" id="saveDraft">Save draft</button>
+    <span class="saved" id="savedMsg">Draft saved</span>
+    <span class="spacer"></span>
+    <button type="submit" class="btn btn-primary">Continue to Shipping →</button>
+  </div>
+
+  </form>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- edit mode: ?id= on the URL loads an existing consignment instead of
+     a blank draft. In Django this is /consignments/new/ vs
+     /consignments/<pk>/edit/2/ — the query string is a prototype stand-in only. ---- */
+  var NEW_ID = "QC-2026-0148";
+  var editId = new URLSearchParams(window.location.search).get("id");
+  function withId(file){
+    return file + (editId ? "?id=" + encodeURIComponent(editId) : "");
+  }
+
+  var EDIT_MOCK = {
+    "QC-2026-0147": {
+      status: "In Transit",
+      items: [
+        {name:"Ball bearing 6205-2RS", code:"BRG-6205", spec:"Deep groove, C3 clearance, steel cage",
+         qty:240, uom:"Pcs", req:"Store", ref:"STR-2026-0912", price:18.7500},
+        {name:"PLC S7-1500 CPU", code:"PLC-1515", spec:"CPU 1515-2 PN",
+         qty:4, uom:"Pcs", req:"Engineering", ref:"ENG-2026-0455 · Job 118 · MO 4471", price:3487.5000}
+      ],
+      ptype:"LC", pnum:"LC-4471-2026", pdate:"2026-08-02", works:"Qadcast",
+      fx:281.40, fxdate:"2026-06-25", fxsrc:"Bank — LC opening rate"
+    }
+  };
+  var mock = editId && EDIT_MOCK[editId];
+
+  /* Items come from Step 1. Quantity and UoM are locked here — this screen prices
+     what was declared, it does not change what was declared. */
+  var CURRENCY = "USD";
+  var ITEMS_NEW = [
+    {name:"Ball bearing 6205-2RS", code:"BRG-6205", spec:"Deep groove, C3 clearance, steel cage",
+     qty:240, uom:"Pcs", req:"Store", ref:"STR-2026-0912"},
+    {name:"Oil seal TC 35x52x7", code:"SEL-3552", spec:"NBR, double lip, spring loaded",
+     qty:120, uom:"Pcs", req:"Store", ref:"STR-2026-0912"},
+    {name:"PLC S7-1500 CPU", code:"PLC-1515", spec:"CPU 1515-2 PN",
+     qty:4, uom:"Pcs", req:"Engineering", ref:"ENG-2026-0455 · Job 118 · MO 4471"}
+  ];
+  var ITEMS = mock ? mock.items : ITEMS_NEW;
+  document.getElementById("itemsCount").textContent = ITEMS.length;
+
+  /* instrument-driven labels — one place, not scattered through the template */
+  var INSTRUMENT = {
+    LC:  {num:"LC number",            numHint:"As issued by the opening bank",
+          date:"Retirement date",     dateHint:"Date the LC is retired"},
+    Adv: {num:"Advance payment reference", numHint:"TT or voucher reference",
+          date:"Opening date",        dateHint:"Date the advance was initiated"},
+    DP:  {num:"DP document number",   numHint:"Bank collection reference",
+          date:"Opening date",        dateHint:"Date documents were lodged"},
+    CAD: {num:"CAD document number",  numHint:"Bank collection reference",
+          date:"Opening date",        dateHint:"Date documents were lodged"}
+  };
+
+  var money0 = function(n){ return n.toLocaleString("en-US", {maximumFractionDigits:0}); };
+  var money2 = function(n){ return n.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2}); };
+  function esc(s){ return String(s).replace(/[&<>"]/g,function(m){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]; }); }
+
+  /* ---- build the pricing rows ---- */
+  var body = document.getElementById("priceRows");
+  body.innerHTML = ITEMS.map(function(it, i){
+    return '<tr data-i="'+i+'">'+
+      '<td class="idx mono">'+(i+1)+'</td>'+
+      '<td><span class="nm">'+esc(it.name)+'</span>'+
+        '<span class="sub mono">'+esc(it.code)+(it.spec? ' · '+esc(it.spec):'')+'</span></td>'+
+      '<td>'+esc(it.req)+'<span class="sub mono">'+esc(it.ref)+'</span></td>'+
+      '<td class="num mono">'+money0(it.qty)+'<span class="sub">'+esc(it.uom)+'</span></td>'+
+      '<td class="num"><input type="number" step="0.0001" min="0" class="mono unit" '+
+        (it.price != null ? 'value="'+it.price+'" ' : '')+
+        'placeholder="Add later" autocomplete="off"></td>'+
+      '<td class="num mono line" data-line>—</td>'+
+    '</tr>';
+  }).join("");
+
+  document.getElementById("qtyTotal").textContent =
+    money0(ITEMS.reduce(function(s,i){ return s + i.qty; }, 0)) + " units";
+
+  /* ---- live recalculation ---- */
+  function recalc(){
+    var total = 0, priced = 0;
+    Array.prototype.forEach.call(body.querySelectorAll("tr"), function(tr){
+      var it = ITEMS[+tr.dataset.i];
+      var input = tr.querySelector(".unit");
+      var v = parseFloat(input.value);
+      var cell = tr.querySelector("[data-line]");
+      if(isNaN(v) || input.value === ""){
+        cell.textContent = "—";
+        tr.classList.add("warnrow");
+      }else{
+        var line = it.qty * v;
+        total += line; priced++;
+        cell.textContent = money2(line);
+        tr.classList.remove("warnrow");
+      }
+    });
+
+    var all = priced === ITEMS.length;
+    var partial = priced > 0 && !all;
+    document.getElementById("foreignTotal").textContent =
+      priced ? money2(total) + (partial ? " *" : "") : "—";
+    document.getElementById("tFor").textContent = priced ? CURRENCY + " " + money2(total) : "—";
+    document.getElementById("tForNote").textContent = !priced
+      ? "No items priced yet"
+      : all ? "Sum of all " + ITEMS.length + " item lines"
+            : "Provisional — " + (ITEMS.length - priced) + " of " + ITEMS.length +
+              " item" + (ITEMS.length-priced===1?"":"s") + " still unpriced";
+
+    var fx = parseFloat(document.getElementById("fx").value);
+    var loc = document.getElementById("tLoc"), note = document.getElementById("tLocNote");
+    if(priced && !isNaN(fx) && fx > 0){
+      loc.textContent = "PKR " + money0(total * fx) + (partial ? " *" : "");
+      var dt = document.getElementById("fxdate").value;
+      note.textContent = (partial ? "Provisional. " : "") +
+                         "At " + fx.toFixed(4) + " PKR per " + CURRENCY +
+                         (dt ? ", booked " + dt : ", rate date not set");
+    }else{
+      loc.textContent = "—";
+      note.textContent = !priced ? "Price at least one item" : "Enter a rate to calculate";
+    }
+
+    /* pending-information badge, mirroring the per-item badges on Step 1 */
+    var pend = document.getElementById("pendNote");
+    var missing = [];
+    if(!all) missing.push((ITEMS.length - priced) + " unpriced item" + (ITEMS.length-priced===1?"":"s"));
+    if(isNaN(fx) || !(fx > 0)) missing.push("exchange rate");
+    if(!document.getElementById("fxdate").value) missing.push("rate date");
+    if(missing.length){
+      pend.hidden = false;
+      pend.textContent = "Saved as draft, still pending: " + missing.join(", ") +
+                         ". These must be complete before the consignment can be submitted.";
+    }else{
+      pend.hidden = true;
+    }
+  }
+
+  body.addEventListener("input", recalc);
+  document.getElementById("fx").addEventListener("input", recalc);
+  document.getElementById("fxdate").addEventListener("change", recalc);
+
+  /* ---- instrument type drives the labels ---- */
+  var ptype = document.getElementById("ptype");
+  ptype.addEventListener("change", function(){
+    var cfg = INSTRUMENT[ptype.value];
+    var num = document.getElementById("pnum");
+    if(!cfg){
+      document.getElementById("pnumLabel").innerHTML = 'Instrument number <span class="req">*</span>';
+      num.disabled = true; num.value = ""; num.placeholder = "Select a type first";
+      document.getElementById("pnumHint").textContent = "Label changes with the instrument type";
+      document.getElementById("pdateLabel").textContent = "Opening date";
+      document.getElementById("pdateHint").textContent = "Retirement date is used for LC";
+      return;
+    }
+    num.disabled = false; num.placeholder = "";
+    document.getElementById("pnumLabel").innerHTML = cfg.num + ' <span class="req">*</span>';
+    document.getElementById("pnumHint").textContent = cfg.numHint;
+    document.getElementById("pdateLabel").textContent = cfg.date;
+    document.getElementById("pdateHint").textContent = cfg.dateHint;
+  });
+
+  /* ---- misc ---- */
+  var msg = document.getElementById("savedMsg");
+  document.getElementById("saveDraft").onclick = function(){
+    msg.classList.add("show");
+    setTimeout(function(){ msg.classList.remove("show"); }, 1800);
+  };
+  document.getElementById("back").onclick = function(){
+    window.location.href = withId("wizard_step1.html");
+  };
+
+  document.getElementById("role").addEventListener("change", function(e){
+    var ro = e.target.value === "viewer";
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#fin input, #fin select, #fin button"),
+      function(el){ el.disabled = ro; }
+    );
+    if(!ro) ptype.dispatchEvent(new Event("change"));
+  });
+
+  document.getElementById("fin").addEventListener("submit", function(e){
+    e.preventDefault();
+    window.location.href = withId("wizard_step3_shipping.html");
+  });
+
+  /* ---- apply edit mode: pagehead, stepper links, and instrument/FX fields ---- */
+  document.getElementById("sysId").textContent = editId || NEW_ID;
+  if(editId){
+    Array.prototype.forEach.call(document.querySelectorAll(".stepper a.step"), function(a){
+      a.href = withId(a.getAttribute("href"));
+    });
+  }
+  if(mock){
+    document.getElementById("pageH1").textContent = "Edit " + editId;
+    var flag = document.getElementById("draftFlag");
+    flag.textContent = mock.status;
+    flag.classList.remove("draftflag");
+    flag.classList.add("statusflag");
+
+    ptype.value = mock.ptype;
+    ptype.dispatchEvent(new Event("change"));
+    document.getElementById("pnum").value = mock.pnum;
+    document.getElementById("pdate").value = mock.pdate;
+    document.getElementById("works").value = mock.works;
+    document.getElementById("fx").value = mock.fx;
+    document.getElementById("fxdate").value = mock.fxdate;
+    document.getElementById("fxsrc").value = mock.fxsrc;
+  }
+
+  recalc();
+})();
+</script>
+</body>
+</html>
