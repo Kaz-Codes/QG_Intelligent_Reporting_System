@@ -58,8 +58,6 @@ async def login(credentials: LoginSchema, response: Response):
         token = create_token(
             {
                 "id": user.id, 
-                "username": user.username,
-                "role_id":user.role_id
             }
         )
 

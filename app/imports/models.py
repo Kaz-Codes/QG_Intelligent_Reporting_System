@@ -8,7 +8,9 @@ from app.models_mixins import TimestampMixin
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import (
+    Mapped, mapped_column, relationship, declarative_mixin,
+)
 
 # These names are only used inside quoted "Mapped[...]" annotations, which
 # SQLAlchemy resolves from its own class registry at mapper-configuration time.
@@ -18,9 +20,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 if TYPE_CHECKING:
     from app.masters.models import Branch, Supplier, Port, ClearingAgent, Works, Item
     from app.accounts.models import User
-
-from datetime import datetime
-from sqlalchemy import DateTime, func
 
 #-----------------------------------------------------
 # THE MAIN TABLES
@@ -54,409 +53,409 @@ from sqlalchemy import DateTime, func
 class Consignment(Base, TimestampMixin):
     __tablename__ = "consignments"
 
-    id : Mapped[int] = mapped_column(primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    #--- who and where ---
-    branch_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("branches.id", ondelete = "SET NULL"),
-        nullable = True
+    branch_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("branches.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    supplier_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("suppliers.id", ondelete = "SET NULL"),
-        nullable = True
+    supplier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    works_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("works.id", ondelete = "SET NULL"),
-        nullable = True
+    works_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("works.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    clearing_agent_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("clearing_agents.id", ondelete = "SET NULL"),
-        nullable = True
+    clearing_agent_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("clearing_agents.id", ondelete="SET NULL"),
+        nullable=True
     )
 
     # Both start as copies of the supplier's values and can be changed here
-    origin : Mapped[Optional[str]] = mapped_column(
+    origin: Mapped[Optional[str]] = mapped_column(
         String(255),
-        nullable = True
+        nullable=True
     )
 
-    currency : Mapped[Optional[str]] = mapped_column(
+    currency: Mapped[Optional[str]] = mapped_column(
         String(10),
-        nullable = True
+        nullable=True
     )
 
-    consignment_type : Mapped[Optional[str]] = mapped_column(
+    consignment_type: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
-    #--- shipping ---
-    loading_port_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("ports.id", ondelete = "SET NULL"),
-        nullable = True
-    )
-
-    delivery_port_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("ports.id", ondelete = "SET NULL"),
-        nullable = True
-    )
-
-    po_date : Mapped[Optional[date]] = mapped_column(
+    po_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    mode_of_shipment : Mapped[Optional[str]] = mapped_column(
+    mode_of_shipment: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
-    cargo_readiness_date : Mapped[Optional[date]] = mapped_column(
+    cargo_readiness_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    etd : Mapped[Optional[date]] = mapped_column(
+    etd: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    eta : Mapped[Optional[date]] = mapped_column(
+    eta: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    eta_works : Mapped[Optional[date]] = mapped_column(
+    eta_works: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
     #--- finance ---
-    payment_instrument : Mapped[Optional[str]] = mapped_column(
+    payment_instrument: Mapped[Optional[str]] = mapped_column(
         String(20),
-        nullable = True
+        nullable=True
     )
 
-    instrument_number : Mapped[Optional[str]] = mapped_column(
+    instrument_number: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    opening_or_retirement_date : Mapped[Optional[date]] = mapped_column(
+    opening_or_retirement_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    exchange_rate : Mapped[Optional[Decimal]] = mapped_column(
+    exchange_rate: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(12, 6),
-        nullable = True
+        nullable=True
     )
 
-    rate_booked_on : Mapped[Optional[date]] = mapped_column(
+    rate_booked_on: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    rate_source : Mapped[Optional[str]] = mapped_column(
+    rate_source: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
     #--- status ---
-    current_status : Mapped[str] = mapped_column(
+    current_status: Mapped[str] = mapped_column(
         String(50),
-        default = "TT/LC in process",
-        nullable = False,
-        index = True
+        default="TT/LC in process",
+        nullable=False,
+        index=True
+    )
+
+    effective_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        index=True
+    )
+    
+    remarks: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True
     )
 
     #--- custom clearance ---
-    gd_number : Mapped[Optional[str]] = mapped_column(
+    gd_number: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    gd_filing_date : Mapped[Optional[date]] = mapped_column(
+    gd_filing_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    free_days_allowed : Mapped[Optional[int]] = mapped_column(
+    free_days_allowed: Mapped[Optional[int]] = mapped_column(
         Integer,
-        nullable = True
+        nullable=True
     )
 
-    gate_out_date : Mapped[Optional[date]] = mapped_column(
+    gate_out_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    demurrage_or_detention_paid : Mapped[Optional[Decimal]] = mapped_column(
+    demurrage_or_detention_paid: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
-        nullable = True
+        nullable=True
     )
 
-    #--- who made it ---
-    created_by_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete = "SET NULL"),
-        nullable = True
+    #--- shipping ---
+    loading_port_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("ports.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    delivery_port_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("ports.id", ondelete="SET NULL"),
+        nullable=True
     )
 
     # Deleting only sets this flag. The row stays, so an admin or
     # manager can put it back, and so the item lines, payments and
     # history that hang off it are not destroyed along with it.
-    is_deleted : Mapped[bool] = mapped_column(
+    is_deleted: Mapped[bool] = mapped_column(
         Boolean,
-        default = False,
-        nullable = False,
-        index = True
+        default=False,
+        nullable=False,
+        index=True
     )
 
-    deleted_at : Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone = True),
-        nullable = True
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
     )
 
-    deleted_by_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete = "SET NULL"),
-        nullable = True
+    deleted_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    #--- links to the master tables ---
-    branch : Mapped[Optional["Branch"]] = relationship(
-        back_populates = "consignments"
-    )
-
-    supplier : Mapped[Optional["Supplier"]] = relationship(
-        back_populates = "consignments"
-    )
-
-    works : Mapped[Optional["Works"]] = relationship(
-        back_populates = "consignments"
-    )
-
-    clearing_agent : Mapped[Optional["ClearingAgent"]] = relationship(
-        back_populates = "consignments"
-    )
-
-    # Two columns point at the same table, so each says which it means
-    loading_port : Mapped[Optional["Port"]] = relationship(
-        foreign_keys = [loading_port_id],
-        back_populates = "consignments_loading"
-    )
-
-    delivery_port : Mapped[Optional["Port"]] = relationship(
-        foreign_keys = [delivery_port_id],
-        back_populates = "consignments_delivery"
+    # A creator is always required. RESTRICT stops a user row being
+    # deleted while it still owns consignments; SET NULL here would
+    # violate the NOT NULL constraint and make the delete fail anyway.
+    created_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False
     )
 
     #--- links to the user who touched it ---
-    created_by : Mapped[Optional["User"]] = relationship(
-        foreign_keys = [created_by_id]
+    created_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[created_by_id]
     )
 
-    deleted_by : Mapped[Optional["User"]] = relationship(
-        foreign_keys = [deleted_by_id]
+    deleted_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[deleted_by_id]
+    )
+
+    eta_revisions: Mapped[list["EtaRevisionHistory"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
+    )
+
+    status_updates: Mapped[list["StatusUpdateHistory"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
+    )
+
+    change_history: Mapped[list["ConsignmentChangeHistory"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
+    )
+
+    clearing_agent: Mapped[Optional["ClearingAgent"]] = relationship(
+        back_populates="consignments"
+    )
+
+    # Two columns point at the same table, so each says which it means
+    loading_port: Mapped[Optional["Port"]] = relationship(
+        foreign_keys=[loading_port_id],
+        back_populates="consignments_loading"
+    )
+
+    delivery_port: Mapped[Optional["Port"]] = relationship(
+        foreign_keys=[delivery_port_id],
+        back_populates="consignments_delivery"
     )
 
     #--- everything that hangs off a consignment ---
     # delete-orphan means these go when the consignment really goes.
     # Day to day they never do, because deleting only sets a flag.
-    items : Mapped[list["ConsignmentItem"]] = relationship(
-        back_populates = "consignment",
-        cascade = "all, delete-orphan"
+    items: Mapped[list["ConsignmentItem"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
     )
 
-    payments : Mapped[list["Payment"]] = relationship(
-        back_populates = "consignment",
-        cascade = "all, delete-orphan"
+    payments: Mapped[list["Payment"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
     )
 
-    eta_revisions : Mapped[list["EtaRevisionHistory"]] = relationship(
-        back_populates = "consignment",
-        cascade = "all, delete-orphan"
-    )
+    branch: Mapped[Optional["Branch"]] = relationship(
+    back_populates="consignments"
+)
 
-    status_updates : Mapped[list["StatusUpdateHistory"]] = relationship(
-        back_populates = "consignment",
-        cascade = "all, delete-orphan"
+    supplier: Mapped[Optional["Supplier"]] = relationship(
+        back_populates="consignments"
     )
-
-    change_history : Mapped[list["ConsignmentChangeHistory"]] = relationship(
-        back_populates = "consignment",
-        cascade = "all, delete-orphan"
+    
+    works: Mapped[Optional["Works"]] = relationship(
+        back_populates="consignments"
     )
 
 #--------------------------------
 # CONSIGNMENT ITEMS TABLE
-#
-# The four snapshot columns are copied from the item master when the
-# line is first saved and are never read from the master again.
-# Editing an item next year must not rewrite what a consignment
-# cleared under last year.
 #--------------------------------
 
 class ConsignmentItem(Base, TimestampMixin):
     __tablename__ = "consignment_items"
 
-    id : Mapped[int] = mapped_column(primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    consignment_id : Mapped[int] = mapped_column(
-        ForeignKey("consignments.id", ondelete = "CASCADE"),
-        nullable = False
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("consignments.id", ondelete="CASCADE"),
+        nullable=False
     )
 
-    item_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("items.id", ondelete = "SET NULL"),
-        nullable = True
+    item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("items.id", ondelete="SET NULL"),
+        nullable=True
     )
 
     #--- snapshots taken from the item master ---
-    item_code : Mapped[str] = mapped_column(
+    item_code: Mapped[str] = mapped_column(
         String(100),
-        nullable = False
+        nullable=False
     )
 
-    item_name : Mapped[str] = mapped_column(
+    item_name: Mapped[str] = mapped_column(
         String(255),
-        nullable = False
+        nullable=False
     )
 
-    specification : Mapped[Optional[str]] = mapped_column(
+    specification: Mapped[Optional[str]] = mapped_column(
         String(500),
-        nullable = True
+        nullable=True
     )
 
-    hs_code : Mapped[Optional[str]] = mapped_column(
+    hs_code: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
     #--- what was ordered ---
-    quantity : Mapped[Decimal] = mapped_column(
+    quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 3),
-        nullable = False
+        nullable=False
     )
 
-    unit_price : Mapped[Optional[Decimal]] = mapped_column(
+    unit_price: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 4),
-        nullable = True
+        nullable=True
     )
 
-    unit_of_measurement : Mapped[Optional[str]] = mapped_column(
+    unit_of_measurement: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
-    batch_no : Mapped[Optional[str]] = mapped_column(
+    batch_no: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    requisition_type : Mapped[Optional[str]] = mapped_column(
+    requisition_type: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
     # Landed cost is typed in by hand, in PKR. Nothing calculates it —
     # duty, freight and agent fees are not tracked in this system.
-    elc : Mapped[Optional[Decimal]] = mapped_column(
+    elc: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
-        nullable = True
+        nullable=True
     )
 
-    alc : Mapped[Optional[Decimal]] = mapped_column(
+    alc: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
-        nullable = True
+        nullable=True
     )
 
     # These four vary line by line, which is why they sit here and not
     # on the consignment. One consignment can carry Store and
     # Engineering items together.
-    reference_number : Mapped[Optional[str]] = mapped_column(
+    reference_number: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    job_number : Mapped[Optional[str]] = mapped_column(
+    job_number: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    mo_number : Mapped[Optional[str]] = mapped_column(
+    mo_number: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    description : Mapped[Optional[str]] = mapped_column(
+    description: Mapped[Optional[str]] = mapped_column(
         String(500),
-        nullable = True
+        nullable=True
     )
 
-    consignment : Mapped["Consignment"] = relationship(
-        back_populates = "items"
+    consignment: Mapped["Consignment"] = relationship(
+        back_populates="items"
     )
 
-    item : Mapped[Optional["Item"]] = relationship(
-        back_populates = "consignment_items"
+    item: Mapped[Optional["Item"]] = relationship(
+        back_populates="consignment_items"
     )
-
 
 #--------------------------------
 # PAYMENTS TABLE
-#
-# Partial payments are normal, so a consignment usually has several
-# rows. Each payment carries its own exchange rate because instalments
-# made months apart settle at different rates. Leave it blank to fall
-# back to the rate booked on the consignment.
 #--------------------------------
 
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
 
-    id : Mapped[int] = mapped_column(primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    consignment_id : Mapped[int] = mapped_column(
-        ForeignKey("consignments.id", ondelete = "CASCADE"),
-        nullable = False
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("consignments.id", ondelete="CASCADE"),
+        nullable=False
     )
 
-    retirement_date : Mapped[Optional[date]] = mapped_column(
+    retirement_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    value : Mapped[Optional[Decimal]] = mapped_column(
+    value: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 4),
-        nullable = True
+        nullable=True
     )
 
-    exchange_rate : Mapped[Optional[Decimal]] = mapped_column(
+    payment_exchange_rate: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(12, 6),
-        nullable = True
+        nullable=True
     )
 
-    bank_charges : Mapped[Optional[Decimal]] = mapped_column(
+    bank_charges: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
-        nullable = True
+        nullable=True
     )
 
-    status : Mapped[str] = mapped_column(
+    status: Mapped[str] = mapped_column(
         String(20),
-        default = "Unpaid",
-        nullable = False
+        default="Unpaid",
+        nullable=False
     )
 
-    bank_reference : Mapped[Optional[str]] = mapped_column(
+    bank_reference: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable = True
+        nullable=True
     )
 
-    consignment : Mapped["Consignment"] = relationship(
-        back_populates = "payments"
+    consignment: Mapped["Consignment"] = relationship(
+        back_populates="payments"
     )
 
 
@@ -470,40 +469,44 @@ class Payment(Base, TimestampMixin):
 class EtaRevisionHistory(Base, TimestampMixin):
     __tablename__ = "eta_revision_history"
 
-    id : Mapped[int] = mapped_column(primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    consignment_id : Mapped[int] = mapped_column(
-        ForeignKey("consignments.id", ondelete = "CASCADE"),
-        nullable = False
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("consignments.id", ondelete="CASCADE"),
+        nullable=False
     )
 
-    eta_type : Mapped[str] = mapped_column(String) #ETA or ETA works 
+    # "ETA" or "ETA works". String needs an explicit length for MySQL.
+    eta_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False
+    )
 
-    previous_eta : Mapped[Optional[date]] = mapped_column(
+    previous_eta: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable = True
+        nullable=True
     )
 
-    new_eta : Mapped[date] = mapped_column(
+    new_eta: Mapped[date] = mapped_column(
         Date,
-        nullable = False
+        nullable=False
     )
 
-    cause_of_revision : Mapped[Optional[str]] = mapped_column(
+    cause_of_revision: Mapped[Optional[str]] = mapped_column(
         String(500),
-        nullable = True
+        nullable=True
     )
 
-    user_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete = "SET NULL"),
-        nullable = True
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    consignment : Mapped["Consignment"] = relationship(
-        back_populates = "eta_revisions"
+    consignment: Mapped["Consignment"] = relationship(
+        back_populates="eta_revisions"
     )
 
-    user : Mapped[Optional["User"]] = relationship()
+    user: Mapped[Optional["User"]] = relationship()
 
 
 #--------------------------------
@@ -517,44 +520,44 @@ class EtaRevisionHistory(Base, TimestampMixin):
 class StatusUpdateHistory(Base, TimestampMixin):
     __tablename__ = "status_update_history"
 
-    id : Mapped[int] = mapped_column(primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    consignment_id : Mapped[int] = mapped_column(
-        ForeignKey("consignments.id", ondelete = "CASCADE"),
-        nullable = False
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("consignments.id", ondelete="CASCADE"),
+        nullable=False
     )
 
-    previous_status : Mapped[Optional[str]] = mapped_column(
+    previous_status: Mapped[Optional[str]] = mapped_column(
         String(50),
-        nullable = True
+        nullable=True
     )
 
-    new_status : Mapped[str] = mapped_column(
+    new_status: Mapped[str] = mapped_column(
         String(50),
-        nullable = False
+        nullable=False
     )
 
-    effective_date : Mapped[date] = mapped_column(
+    effective_date: Mapped[date] = mapped_column(
         Date,
-        nullable = False,
-        index = True
+        nullable=False,
+        index=True
     )
 
-    remarks : Mapped[Optional[str]] = mapped_column(
+    remarks: Mapped[Optional[str]] = mapped_column(
         String(500),
-        nullable = True
+        nullable=True
     )
 
-    user_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete = "SET NULL"),
-        nullable = True
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    consignment : Mapped["Consignment"] = relationship(
-        back_populates = "status_updates"
+    consignment: Mapped["Consignment"] = relationship(
+        back_populates="status_updates"
     )
 
-    user : Mapped[Optional["User"]] = relationship()
+    user: Mapped[Optional["User"]] = relationship()
 
 
 #--------------------------------
@@ -577,69 +580,69 @@ class ConsignmentChangeHistory(Base, TimestampMixin):
         Index("ix_change_history_consignment", "consignment_id", "created_at"),
     )
 
-    id : Mapped[int] = mapped_column(primary_key = True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    consignment_id : Mapped[int] = mapped_column(
-        ForeignKey("consignments.id", ondelete = "CASCADE"),
-        nullable = False
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("consignments.id", ondelete="CASCADE"),
+        nullable=False
     )
 
-    change_type : Mapped[str] = mapped_column(
+    change_type: Mapped[str] = mapped_column(
         String(20),
-        nullable = False
+        nullable=False
     )
 
     # {"gd_number": "GD-99120", "free_days_allowed": 7}
-    previous_values : Mapped[dict] = mapped_column(
+    previous_values: Mapped[dict] = mapped_column(
         JSON,
-        default = dict,
-        nullable = False
+        default=dict,
+        nullable=False
     )
 
-    new_values : Mapped[dict] = mapped_column(
+    new_values: Mapped[dict] = mapped_column(
         JSON,
-        default = dict,
-        nullable = False
+        default=dict,
+        nullable=False
     )
 
-    changed_by_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete = "SET NULL"),
-        nullable = True
+    changed_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
     )
 
     # Set once this change has been undone, so it cannot be undone twice
-    is_reverted : Mapped[bool] = mapped_column(
+    is_reverted: Mapped[bool] = mapped_column(
         Boolean,
-        default = False,
-        nullable = False
+        default=False,
+        nullable=False
     )
 
-    reverted_by_id : Mapped[Optional[int]] = mapped_column(
-        ForeignKey("users.id", ondelete = "SET NULL"),
-        nullable = True
+    reverted_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
     )
 
-    reverted_at : Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone = True),
-        nullable = True
+    reverted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
     )
 
     # True when this row was itself created by a revert. Kept so the
     # history reads honestly rather than looking like a normal edit.
-    is_revert : Mapped[bool] = mapped_column(
+    is_revert: Mapped[bool] = mapped_column(
         Boolean,
-        default = False,
-        nullable = False
+        default=False,
+        nullable=False
     )
 
-    consignment : Mapped["Consignment"] = relationship(
-        back_populates = "change_history"
+    consignment: Mapped["Consignment"] = relationship(
+        back_populates="change_history"
     )
 
-    changed_by : Mapped[Optional["User"]] = relationship(
-        foreign_keys = [changed_by_id]
+    changed_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[changed_by_id]
     )
 
-    reverted_by : Mapped[Optional["User"]] = relationship(
-        foreign_keys = [reverted_by_id]
+    reverted_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[reverted_by_id]
     )

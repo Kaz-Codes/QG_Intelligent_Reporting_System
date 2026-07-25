@@ -6,9 +6,10 @@ from sqlalchemy import select
 
 from app.enums import ChangeType
 from app.imports.models import (
-    Consignment, ConsignmentChangeHistory, ConsignmentItem, Payment,
+    Consignment, ConsignmentChangeHistory, ConsignmentItem, Payment, EtaRevisionHistory, StatusUpdateHistory
 )
 
+from sqlalchemy.orm import selectinload
 #-----------------------------------------------------
 # SMALL JOBS EVERY IMPORTS ROUTE NEEDS
 #
@@ -46,7 +47,6 @@ def get_consignment(consignment_id, db, include_deleted=False):
         )
 
     return consignment
-
 
 def get_item(item_id, consignment_id, db):
     item = db.execute(

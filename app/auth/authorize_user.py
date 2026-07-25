@@ -17,7 +17,7 @@ from fastapi import HTTPException
 # up a second time.
 #-------------------------------------------
 
-def authorize(user_data, required_role, db):
+def authorize(user_data, allowed_roles, db):
     # authenticate() returns the token payload, which is a
     # dict, so the id is read as a dict key. getattr is kept
     # as a fallback in case it is ever handed an object.
@@ -25,12 +25,6 @@ def authorize(user_data, required_role, db):
         user_id = user_data.get("id")
     else:
         user_id = getattr(user_data, "id", None)
-
-    if user_id is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid token"
-        )
 
     user = db.execute(
         select(User).where(User.id == user_id)
@@ -52,7 +46,9 @@ def authorize(user_data, required_role, db):
         select(Role).where(Role.id == user.role_id)
     ).scalar_one_or_none()
 
-    if role is None or role.name.strip().lower() != required_role.strip().lower():
+    allowed = [r.strip().lower() for r in allowed_roles]
+
+    if role is None or role.name.strip().lower() not in allowed:
         raise HTTPException(
             status_code=403,
             detail="Not authorized"

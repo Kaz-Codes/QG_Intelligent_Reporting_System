@@ -2,7 +2,7 @@ from datetime import date
 
 from app.auth.authenticate_user import authenticate
 from app.database import SessionLocal
-from app.imports.helpers import get_consignment as fetch_consignment
+from app.imports.helpers import get_consignment as fetch_consignment 
 from app.imports.permissions import CAN_VIEW, allow
 from app.imports.routes.router import router
 from app.imports.serializers import serialize_consignment
