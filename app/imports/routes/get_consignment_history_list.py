@@ -3,13 +3,15 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import fetch_consignment
-from app.imports.serializers import serialize_consignment
+from app.imports.helpers import fetch_all_consignment_history, fetch_consignment
+from app.imports.serializers import serialize_consignment_history
+from typing import Optional
 
-@router.get("/{consignment_id}")
-def get_consignment(
+@router.get("/change-history/{consignment_id}")
+def get_consignment_history_list(
     request : Request,
-    consignment_id : int
+    consignment_id : int,
+    include_reverted : Optional[bool] = False
     ):
 
     db = SessionLocal()
@@ -30,11 +32,18 @@ def get_consignment(
                 status_code=404,
                 detail="Consignment not found"
             )
+        
+        consignment_history = fetch_all_consignment_history(db, include_reverted, consignment.id)
+
+        # Serializeing all consignment histories
+        serialized_consignment_history = [
+            serialize_consignment_history(history) for history in consignment_history
+        ]
       
         return {
             "status_code":200,
-            "detail":"Consignment fetched",
-            "data":serialize_consignment(consignment, db)
+            "detail":"Consignment history fetched",
+            "data":serialized_consignment_history
         }
 
     except HTTPException:

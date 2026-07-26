@@ -1,59 +1,52 @@
-from datetime import datetime, timezone
-
-from app.auth.authenticate_user import authenticate
-from app.database import SessionLocal
-from app.enums import ChangeType
-from app.imports.helpers import apply_updates, get_consignment, record_change
-from app.imports.permissions import CAN_DELETE, allow
 from app.imports.routes.router import router
 from fastapi import Request, HTTPException
-
-#-------------------------------------------
-# DELETE A CONSIGNMENT (ADMIN, MANAGER)
-#
-# Nothing is ever really deleted. This only
-# sets a flag, so the row stays and an admin or
-# a manager can put it back, and so the item
-# lines, payments and history hanging off it
-# are not destroyed along with it. Closed and
-# deleted records have to stay available to
-# reports.
-#
-# It disappears from the list immediately
-# either way, because every read filters the
-# flag out.
-#-------------------------------------------
+from app.database import SessionLocal
+from app.auth.authenticate_user import authenticate
+from app.auth.authorize_user import authorize
+from app.imports.helpers import fetch_consignment
+from app.imports.serializers import serialize_consignment
+from datetime import datetime, timezone
 
 @router.delete("/{consignment_id}")
-async def delete_consignment(consignment_id : int, request: Request):
+def delete_consignment( 
+        request : Request,
+        consignment_id : int
+    ):
+
     db = SessionLocal()
 
     try:
-        request_user_data = authenticate(request)
-        user, role_name = allow(request_user_data, CAN_DELETE, db)
 
-        consignment = get_consignment(consignment_id, db)
+        # Authenticate user (whether user is logged in or not)
+        user_payload = authenticate(request)
 
-        previous_values, new_values = apply_updates(consignment, {
-            "is_deleted": True,
-            "deleted_at": datetime.now(timezone.utc),
-            "deleted_by_id": user.id
-        })
+        # Authorize user (Check whether user is allowed for this 
+        # action)
+        user = authorize(user_payload, ["admin", "manager"], db)
 
-        record_change(
-            consignment.id, previous_values, new_values, user.id, db,
-            change_type=ChangeType.DELETE.value
-        )
+        consignment = fetch_consignment(db, consignment_id)
+
+        if consignment is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Consignment not found"
+            )
+
+        consignment.is_deleted = True
+        consignment.deleted_by_id = user.id
+        consignment.deleted_at = datetime.now(timezone.utc)
 
         db.commit()
-
+        db.refresh(consignment)
+      
         return {
-            "status": 200,
-            "message": "Consignment deleted",
-            "data": {"id": consignment.id, "is_deleted": True}
+            "status_code":200,
+            "detail":"Consignment deleted",
+            "data":serialize_consignment(consignment, db)
         }
 
     except HTTPException:
+        db.rollback()
         raise
 
     except Exception as e:
@@ -67,3 +60,4 @@ async def delete_consignment(consignment_id : int, request: Request):
 
     finally:
         db.close()
+ 

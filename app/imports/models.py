@@ -162,7 +162,7 @@ class Consignment(Base, TimestampMixin):
 
     effective_date: Mapped[date] = mapped_column(
         Date,
-        nullable=False,
+        nullable=True,
         index=True
     )
     
@@ -322,12 +322,12 @@ class ConsignmentItem(Base, TimestampMixin):
     #--- snapshots taken from the item master ---
     item_code: Mapped[str] = mapped_column(
         String(100),
-        nullable=False
+        nullable=True
     )
 
     item_name: Mapped[str] = mapped_column(
         String(255),
-        nullable=False
+        nullable=True
     )
 
     specification: Mapped[Optional[str]] = mapped_column(
@@ -343,7 +343,7 @@ class ConsignmentItem(Base, TimestampMixin):
     #--- what was ordered ---
     quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 3),
-        nullable=False
+        nullable=True
     )
 
     unit_price: Mapped[Optional[Decimal]] = mapped_column(
@@ -539,7 +539,7 @@ class StatusUpdateHistory(Base, TimestampMixin):
 
     effective_date: Mapped[date] = mapped_column(
         Date,
-        nullable=False,
+        nullable=True,
         index=True
     )
 
@@ -592,14 +592,7 @@ class ConsignmentChangeHistory(Base, TimestampMixin):
         nullable=False
     )
 
-    # {"gd_number": "GD-99120", "free_days_allowed": 7}
-    previous_values: Mapped[dict] = mapped_column(
-        JSON,
-        default=dict,
-        nullable=False
-    )
-
-    new_values: Mapped[dict] = mapped_column(
+    history: Mapped[dict] = mapped_column(
         JSON,
         default=dict,
         nullable=False

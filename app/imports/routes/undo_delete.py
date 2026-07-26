@@ -6,10 +6,10 @@ from app.auth.authorize_user import authorize
 from app.imports.helpers import fetch_consignment
 from app.imports.serializers import serialize_consignment
 
-@router.get("/{consignment_id}")
-def get_consignment(
-    request : Request,
-    consignment_id : int
+@router.post("/undo-delete/{consignment_id}")
+def undo_delete(
+        consignment_id : int, 
+        request : Request
     ):
 
     db = SessionLocal()
@@ -21,7 +21,7 @@ def get_consignment(
 
         # Authorize user (Check whether user is allowed for this 
         # action)
-        user = authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        user = authorize(user_payload, ["admin", "manager"], db)
 
         consignment = fetch_consignment(db, consignment_id)
 
@@ -30,10 +30,17 @@ def get_consignment(
                 status_code=404,
                 detail="Consignment not found"
             )
-      
+        
+        consignment.is_deleted = False
+        consignment.deleted_by_id = None
+        consignment.deleted_at = None
+
+        db.commit()
+        db.refresh(consignment)
+
         return {
             "status_code":200,
-            "detail":"Consignment fetched",
+            "detail":"Consignment reverted",
             "data":serialize_consignment(consignment, db)
         }
 
