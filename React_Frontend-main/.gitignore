@@ -1,0 +1,14 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Secrets / local-only state
+.env
+
+# Editor/OS
+.DS_Store
+
+# Throwaway browser-verification scripts + screenshots (never commit)
+frontend/_verify*
+frontend/_debug*

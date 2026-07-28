@@ -4,11 +4,11 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing
 
 from app.imports.helpers import fetch_consignment
 from app.imports.models import ConsignmentItem, Payment
-from app.imports.serializers import serialize_consignment
+from app.imports.serializers import serialize_consignment, serialize_many
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -44,8 +44,43 @@ def update_consignment(
         new_payments = new_payments_to_add(consignment_data)
         payment_updates = updated_payments(consignment, consignment_data, db)
 
+        # Deleting missing items and payments
+
+        present_item_ids = [
+            item.id
+            for item in consignment_data.items
+            if item.id is not None
+        ]
+
+        present_payment_ids = [
+            payment.id
+            for payment in consignment_data.payments
+            if payment.id is not None
+        ]
+
+        deleted_items = delete_missing(consignment, present_item_ids, ConsignmentItem.id, db, ConsignmentItem)
+        deleted_payments = delete_missing(consignment, present_payment_ids, Payment.id, db, Payment)
+
+
+        # Adding new items and payments
+        created_items = []
+        for item_schema in new_items:
+            item_dict = item_schema.model_dump()
+            item = ConsignmentItem(**item_dict)
+            consignment.items.append(item)
+            created_items.append(item)
+
+        created_payments = []
+        for payment_schema in new_payments:
+            payment_dict = payment_schema.model_dump()
+            payment = Payment(**payment_dict)
+            consignment.payments.append(payment)
+            created_payments.append(payment)
+
+        db.flush()
+
         # Adding changes in consignment change history and eta revisions and status updates
-        add_in_consignment_change_history(updation_dict, new_items, new_payments, item_updates, payment_updates, consignment, user, db)
+        add_in_consignment_change_history(updation_dict, serialize_many(created_items), serialize_many(created_payments), deleted_items, deleted_payments, item_updates, payment_updates, consignment, user, db)
 
         add_in_eta_revision_history(updation_dict, consignment, user, db)
         add_in_status_change_history(updation_dict, consignment, user, db)
@@ -67,19 +102,8 @@ def update_consignment(
             payment_id = updated_payment.pop("id")
             old_payment = consignment_payments_map.get(payment_id)
             if old_payment:
-                apply_updates(updated_payment, old_payment)
-
-
-        # Adding new items and payments
-        for item_schema in new_items:
-            item_dict = item_schema.model_dump()
-            item = ConsignmentItem(**item_dict)
-            consignment.items.append(item)
-
-        for payment_schema in new_payments:
-            payment_dict = payment_schema.model_dump()
-            payment = Payment(**payment_dict)
-            consignment.payments.append(payment)
+                apply_updates(updated_payment, old_payment)        
+                
 
         db.commit()
         db.refresh(consignment)

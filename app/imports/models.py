@@ -401,6 +401,18 @@ class ConsignmentItem(Base, TimestampMixin):
         nullable=True
     )
 
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
     consignment: Mapped["Consignment"] = relationship(
         back_populates="items"
     )
@@ -451,6 +463,18 @@ class Payment(Base, TimestampMixin):
 
     bank_reference: Mapped[Optional[str]] = mapped_column(
         String(100),
+        nullable=True
+    )
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
         nullable=True
     )
 

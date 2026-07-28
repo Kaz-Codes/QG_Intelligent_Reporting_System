@@ -91,4 +91,3 @@ class ConsignmentSchema(BaseModel):
     #---items and payments---
     items : Optional[list[ConsignmentItemSchema]] = []
     payments : Optional[list[ConsignmentPaymentSchema]] = []
-    

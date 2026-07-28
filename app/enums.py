@@ -180,3 +180,35 @@ class LogAction(str, Enum):
     VERIFY = "Verify"
     REVERT = "Revert"
     RESTORE = "Restore"
+
+
+#--------------------------------
+# LOGISTICS: EXPORT OR LOCAL ORDER
+#
+# The order type drives which fields apply on several
+# steps, which is why it sits on the order itself.
+#--------------------------------
+
+class OrderType(str, Enum):
+    EXPORT = "Export"
+    LOCAL = "Local"
+
+
+#--------------------------------
+# LOGISTICS: THE STAGES AN ORDER MOVES THROUGH
+#
+# One list holding both the export and local stages.
+# Export orders run the full chain; local orders skip the
+# sea legs and close at Delivered. The order here is the
+# order they actually happen in.
+#--------------------------------
+
+class LogisticsStatus(str, Enum):
+    UNDER_PRODUCTION = "Under Production"
+    UNDER_PACKING = "Under Packing"
+    TRANSPORTATION = "Transportation"
+    UNDER_SHIPPING_ARRANGEMENT = "Under Shipping Arrangement"
+    AT_QFL = "At QFL"
+    AT_PORT = "At Port"
+    ON_WATER = "On Water"
+    DELIVERED = "Delivered"

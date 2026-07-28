@@ -7,6 +7,22 @@ from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, Sta
 
 from app.accounts.models import Role
 from sqlalchemy import select
+from datetime import datetime, timezone, date
+from sqlalchemy.inspection import inspect
+from decimal import Decimal
+
+def coerce_value(model, field, value):
+    if value is None:
+        return value
+    col_type = model.__table__.columns[field].type.__class__.__name__
+    if col_type == "Date" and isinstance(value, str):
+        return date.fromisoformat(value)
+    if col_type == "DateTime" and isinstance(value, str):
+        return datetime.fromisoformat(value)
+    if col_type == "Numeric" and not isinstance(value, Decimal):
+        return Decimal(str(value))
+    return value
+
 
 def verify_entry_ownership(consignment, user, db):
 
@@ -173,6 +189,22 @@ def fetch_all_consignment_history(db, include_reverted, consignment_id):
 
     return db.execute(query).scalars().all()
 
+def fetch_latest_consignment_history(db, consignment_id):
+    query = select(ConsignmentChangeHistory).where(
+            ConsignmentChangeHistory.is_reverted == False
+    )
+        
+    query = query.where(
+        ConsignmentChangeHistory.consignment_id == consignment_id
+    ).options(
+        joinedload(ConsignmentChangeHistory.consignment),
+        joinedload(ConsignmentChangeHistory.changed_by),
+        joinedload(ConsignmentChangeHistory.reverted_by)
+    ).order_by(ConsignmentChangeHistory.created_at.desc())
+    
+
+    return db.execute(query).scalars().first()
+
 
 #----------------------------------------
 # FETCH CONSIGNMENT HISTORY BY ID
@@ -223,6 +255,10 @@ def updated_fields(consignment, update_consignment_data, db):
 
     return updation_dict
 
+#----------------------------------
+# FINDING NEW ITEMS AND PAYMENTS
+# TO ADD
+#----------------------------------
 
 def new_items_to_add(consignment, update_consignment_data):
     new_items = []
@@ -246,6 +282,35 @@ def new_payments_to_add(update_consignment_data):
             new_payments.append(payment)
 
     return new_payments
+
+
+#--------------------------------------
+# DELETING ITEMS AND PAYMENTS FROM
+# DATABASE THAT ARE NOT COMING
+# IN REQUEST BODY (ASSIMING USER 
+# HAS DELETED THEM)
+#--------------------------------------
+
+def delete_missing(consignment, present_ids, id_column,db, model):
+    query = select(model).where(
+            model.consignment_id == consignment.id
+    ).where(
+        model.is_deleted == False
+    )
+
+    if present_ids:
+        query = query.where(
+            id_column.not_in(present_ids)
+        )
+
+    rows_to_delete = db.execute(query).scalars().all()
+
+    for row in rows_to_delete:
+        row.is_deleted = True
+        row.deleted_at = datetime.now(timezone.utc)
+
+    return rows_to_delete
+    
 
 
 def updated_items(consignment, update_consignment_data, db):
@@ -337,6 +402,8 @@ def add_in_consignment_change_history(
         updation_dict, 
         new_items_added,
         new_payments_added,
+        deleted_items,
+        deleted_payments,
         item_updates,
         payment_updates,
         consignment,
@@ -344,21 +411,18 @@ def add_in_consignment_change_history(
         db
 ):
 
-    new_items_dicts = []
-    new_payments_dicts = []
+    serialized_deleted_items = serialize_many(deleted_items)
 
-    for item in new_items_added:
-        new_items_dicts.append(item.model_dump())
-
-    for payment in new_payments_added:
-        new_payments_dicts.append(payment.model_dump())
+    serialized_deleted_payments = serialize_many(deleted_payments)
 
     updates_history = {
         "fields" : updation_dict, 
         "items" : item_updates, 
         "payments" : payment_updates,
-        "new_items": new_items_dicts,
-        "new_payments" : new_payments_dicts
+        "new_items": new_items_added,
+        "new_payments" : new_payments_added,
+        "deleted_items" : serialized_deleted_items,
+        "deleted_payments" : serialized_deleted_payments 
     }
 
     change_history = ConsignmentChangeHistory(
@@ -431,3 +495,88 @@ def add_in_status_change_history(updation_dict, consignment, user, db):
 
         db.add(status_change)
         
+
+#---------------------------------
+# HELPERS REQUIRED FOR REVERTING
+# UPDATES
+#---------------------------------
+
+def revert(consignment_history, consignment, db):
+    history = consignment_history.history
+    fields = history["fields"]
+    items_updates = history["items"]
+    payments_updates = history["payments"]
+    new_items = history["new_items"]
+    new_payments = history["new_payments"]
+    deleted_items = history["deleted_items"]
+    deleted_payments = history["deleted_payments"]
+
+    # Reverting local fields
+    revert_local_fields(consignment, fields)
+
+    # Deletig new items added in update
+    add_or_delete(new_items, ConsignmentItem, consignment.id, ConsignmentItem.id, db, delete=True)
+
+    # Deleting new payments added in update
+    add_or_delete(new_payments, Payment, consignment.id, Payment.id, db, delete=True)
+
+    # Adding deleted items back
+    add_or_delete(deleted_items, ConsignmentItem, consignment.id, ConsignmentItem.id, db, delete=False)
+
+    # Adding deleted payments back
+    add_or_delete(deleted_payments, Payment, consignment.id, Payment.id, db, delete=False)
+
+    # Reverting already existing items updates
+    revert_old_values(items_updates, ConsignmentItem, consignment.id, ConsignmentItem.id, db)
+
+    # Reverting already existing payments updates
+    revert_old_values(payments_updates, Payment, consignment.id, Payment.id, db)
+
+
+def revert_local_fields(consignment, fields):
+    consignment_columns = inspect(consignment).mapper.column_attrs
+    for column in consignment_columns:
+        change = fields.get(column.key)
+        if isinstance(change, dict) and "old_value" in change:
+            old_value = coerce_value(Consignment, column.key, change["old_value"])
+            setattr(consignment, column.key, old_value)
+
+
+def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
+    for data in data:
+        data_id = data.get("id")
+        if data_id:
+            consignment_data = db.execute(
+                    select(model).where(
+                        model.consignment_id == consignment_id
+                    ).where(
+                        id_column == data_id
+                )
+            ).scalar_one_or_none()
+            if consignment_data:
+                if delete:
+                    consignment_data.is_deleted = True
+                    consignment_data.deleted_at = datetime.now(timezone.utc)
+                else:  
+                    consignment_data.is_deleted = False
+                    consignment_data.deleted_at = None
+
+
+def revert_old_values(updated_data, model, consignment_id, id_column, db):
+    for data in updated_data:
+        data_id = data.get("id")
+        if data_id:
+            consignment_data = db.execute(
+                    select(model).where(
+                        model.consignment_id == consignment_id
+                    ).where(
+                        id_column == data_id
+                )
+            ).scalar_one_or_none()
+            if consignment_data:
+                consignment_data_columns = inspect(consignment_data).mapper.column_attrs
+                for column in consignment_data_columns:
+                    change = data.get(column.key)
+                    if isinstance(change, dict) and "old_value" in change:   # <-- skips "id" (a bare int)
+                        old_value = coerce_value(model, column.key, change["old_value"])  # <-- see #6
+                        setattr(consignment_data, column.key, old_value)
