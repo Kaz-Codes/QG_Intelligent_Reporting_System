@@ -19,9 +19,11 @@ export type PageKey =
   | 'imports'
   | 'importsStatus'
   | 'logisticsStatus'
+  | 'dataEntry'
   | 'logistics'
   | 'reports'
   | 'assistant'
+  | 'userManagement'
 
 export const MODULE_ACCENTS: Record<PageKey, string> = {
   dashboard: BRAND,
@@ -30,9 +32,11 @@ export const MODULE_ACCENTS: Record<PageKey, string> = {
   imports: '#0EA5E9',
   importsStatus: '#0891B2',
   logisticsStatus: '#E11D48',
+  dataEntry: '#0891B2',
   logistics: '#FB7185',
   reports: '#06B6D4',
   assistant: '#8B5CF6',
+  userManagement: '#64748B',
 }
 
 export interface Palette {

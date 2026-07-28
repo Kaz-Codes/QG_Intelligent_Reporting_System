@@ -3,20 +3,25 @@ import type { PageKey } from '@/theme/tokens'
 export type Role = 'admin' | 'manager' | 'entry' | 'viewer'
 
 export const ALL_PAGES: PageKey[] = [
-  'dashboard', 'purchases', 'inventory', 'imports', 'importsStatus', 'logisticsStatus', 'logistics', 'reports', 'assistant',
+  'dashboard', 'purchases', 'inventory', 'imports', 'dataEntry', 'logistics', 'reports', 'assistant', 'userManagement',
 ]
 
+/** The reporting/BI side of the app — everything except data entry and
+ * account administration. */
+const REPORTING_PAGES: PageKey[] = ['dashboard', 'purchases', 'inventory', 'imports', 'logistics', 'reports', 'assistant']
+
 /**
- * Role -> allowed page keys. All four roles see every page — the permission
- * matrix (README) only restricts *actions* (create/edit/manage), never page
- * visibility, and values/prices/PKR amounts are never hidden by role. See
- * `can()` below for the action-level checks.
+ * Role -> allowed page keys. This is a UI-only gate (hide/redirect away from
+ * pages a role shouldn't see) — the backend team owns real authorization;
+ * nothing here should be treated as a security boundary. Within a page a
+ * role CAN see, `can()` below still governs which actions are available
+ * (values/prices are never hidden, only entry/edit/admin capabilities are).
  */
 const PAGE_ACCESS: Record<Role, PageKey[]> = {
-  admin: ALL_PAGES,
-  manager: ALL_PAGES,
-  entry: ALL_PAGES,
-  viewer: ALL_PAGES,
+  admin: [...REPORTING_PAGES, 'dataEntry', 'userManagement'],
+  manager: [...REPORTING_PAGES, 'dataEntry'],
+  entry: ['dataEntry'],
+  viewer: REPORTING_PAGES,
 }
 
 export function pagesForRole(role: string | undefined): PageKey[] {

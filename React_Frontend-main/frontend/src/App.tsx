@@ -1,6 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
+import { RequirePage } from '@/features/auth/RequirePage'
+import { RootRedirect } from '@/features/auth/RootRedirect'
 import { AppLayout } from '@/components/AppLayout'
 import { Dashboard } from '@/pages/Dashboard'
 import { Purchases } from '@/pages/Purchases'
@@ -9,6 +11,7 @@ import { Imports } from '@/pages/Imports'
 import { Logistics } from '@/pages/Logistics'
 import { Reports } from '@/pages/Reports'
 import { Assistant } from '@/pages/Assistant'
+import { UserManagement } from '@/pages/UserManagement'
 import { ImportsStatusList } from '@/features/importsStatus/ImportsStatusList'
 import { ImportsStatusDetail } from '@/features/importsStatus/ImportsStatusDetail'
 import { ImportsStatusWizard } from '@/features/importsStatus/wizard/ImportsStatusWizard'
@@ -24,38 +27,38 @@ function App() {
 
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/purchases" element={<Purchases />} />
-            <Route path="/inventory" element={<Inventory />} />
-            <Route path="/imports" element={<Imports />} />
+            <Route path="/dashboard" element={<RequirePage pageKey="dashboard"><Dashboard /></RequirePage>} />
+            <Route path="/purchases" element={<RequirePage pageKey="purchases"><Purchases /></RequirePage>} />
+            <Route path="/inventory" element={<RequirePage pageKey="inventory"><Inventory /></RequirePage>} />
+            <Route path="/imports" element={<RequirePage pageKey="imports"><Imports /></RequirePage>} />
 
-            {/* Consignment tracking — separate from the Imports dashboard above.
-                Nested so list/new/detail/edit share one parent path. */}
-            <Route path="/imports-status">
-              <Route index element={<ImportsStatusList />} />
-              <Route path="new" element={<ImportsStatusWizard />} />
-              <Route path=":id" element={<ImportsStatusDetail />} />
-              <Route path=":id/edit/:step" element={<ImportsStatusWizard />} />
+            {/* Consignment tracking + Logistics order tracking — grouped in
+                the sidebar as "Operations", gated together the same way. */}
+            <Route element={<RequirePage pageKey="dataEntry"><Outlet /></RequirePage>}>
+              <Route path="/imports-status">
+                <Route index element={<ImportsStatusList />} />
+                <Route path="new" element={<ImportsStatusWizard />} />
+                <Route path=":id" element={<ImportsStatusDetail />} />
+                <Route path=":id/edit/:step" element={<ImportsStatusWizard />} />
+              </Route>
+
+              <Route path="/logistics-status">
+                <Route index element={<LogisticsStatusList />} />
+                <Route path="new" element={<LogisticsStatusWizard />} />
+                <Route path=":id" element={<LogisticsStatusDetail />} />
+                <Route path=":id/edit/:step" element={<LogisticsStatusWizard />} />
+              </Route>
             </Route>
 
-            {/* Logistics order tracking — Export/Local/Packing entry wizard,
-                parallel to /imports-status. Separate from the Logistics
-                dashboard route below. */}
-            <Route path="/logistics-status">
-              <Route index element={<LogisticsStatusList />} />
-              <Route path="new" element={<LogisticsStatusWizard />} />
-              <Route path=":id" element={<LogisticsStatusDetail />} />
-              <Route path=":id/edit/:step" element={<LogisticsStatusWizard />} />
-            </Route>
-
-            <Route path="/logistics" element={<Logistics />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/assistant" element={<Assistant />} />
+            <Route path="/logistics" element={<RequirePage pageKey="logistics"><Logistics /></RequirePage>} />
+            <Route path="/reports" element={<RequirePage pageKey="reports"><Reports /></RequirePage>} />
+            <Route path="/assistant" element={<RequirePage pageKey="assistant"><Assistant /></RequirePage>} />
+            <Route path="/user-management" element={<RequirePage pageKey="userManagement"><UserManagement /></RequirePage>} />
           </Route>
         </Route>
 
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<RootRedirect />} />
+        <Route path="*" element={<RootRedirect />} />
       </Routes>
     </BrowserRouter>
   )

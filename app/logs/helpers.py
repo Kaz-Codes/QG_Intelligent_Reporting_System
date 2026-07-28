@@ -1,5 +1,4 @@
 from app.enums import LogAction
-from app.imports.helpers import to_json
 from app.logs.models import ActivityLog
 
 #-----------------------------------------------------
@@ -57,7 +56,8 @@ def serialize_log(log):
         "entity_id": log.entity_id,
         "status_code": log.status_code,
         "detail": log.detail,
-        "created_at": to_json(log.created_at)
+        # stringified so the websocket's send_json can handle it
+        "created_at": log.created_at.isoformat() if log.created_at else None
     }
 
 

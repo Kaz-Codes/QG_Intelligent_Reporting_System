@@ -2,7 +2,7 @@ from fastapi import HTTPException
 from app.imports.models import Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
-from app.imports.serializers import serialize_consignment, serialize_many
+from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
 
 from app.accounts.models import Role

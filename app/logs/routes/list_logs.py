@@ -2,7 +2,7 @@ from typing import Optional
 
 from app.auth.authenticate_user import authenticate
 from app.database import SessionLocal
-from app.imports.permissions import ADMIN, allow
+from app.auth.authorize_user import authorize
 from app.logs.helpers import serialize_log
 from app.logs.models import ActivityLog
 from app.logs.routes.router import router
@@ -31,7 +31,7 @@ async def list_logs(request: Request,
 
     try:
         request_user_data = authenticate(request)
-        allow(request_user_data, [ADMIN], db)
+        authorize(request_user_data, ["admin"], db)
 
         if limit < 1 or limit > 500:
             limit = 100

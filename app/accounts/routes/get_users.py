@@ -25,7 +25,7 @@ async def get_all_users(request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, "admin", db)
+        authorize(request_user_data, ["admin"], db)
 
         users = db.execute(
             select(User)

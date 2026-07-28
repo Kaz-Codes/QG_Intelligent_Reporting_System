@@ -23,7 +23,7 @@ async def change_status(id : int, is_active: bool, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, "admin", db)
+        authorize(request_user_data, ["admin"], db)
 
         user = check_existence(id, User, db)
         user.is_active = is_active

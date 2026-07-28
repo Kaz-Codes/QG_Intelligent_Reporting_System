@@ -20,7 +20,7 @@ async def edit_user(id : int, user_schema : UserSchema, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, "admin", db)
+        authorize(request_user_data, ["admin"], db)
 
         user = check_existence(id, User, db)
 

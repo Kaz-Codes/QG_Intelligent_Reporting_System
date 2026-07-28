@@ -134,17 +134,12 @@
 .animate-scale-in { animation: scale-in 150ms cubic-bezier(0.16, 1, 0.3, 1); }
 
 /* ---------------------------------------------------------------------------
-   Thematic background motion (ThemedBackground / login) — subject-related
-   field icons drift slowly over soft moving aurora blobs. Deliberately slow
-   and low-opacity: ambient texture, never something that pulls focus from
-   the content on top. All CSS-only (Recharts JS animation is unreliable
-   here; CSS keyframes are the safe path).
+   Thematic background motion (ThemedBackground / login) — soft moving
+   aurora blobs behind a single static per-module watermark icon.
+   Deliberately slow and low-opacity: ambient texture, never something that
+   pulls focus from the content on top. All CSS-only (Recharts JS animation
+   is unreliable here; CSS keyframes are the safe path).
 --------------------------------------------------------------------------- */
-@keyframes drift {
-  0%   { transform: translate(0, 0) rotate(0deg); }
-  50%  { transform: translate(var(--drift-x, 24px), var(--drift-y, -28px)) rotate(var(--drift-r, 8deg)); }
-  100% { transform: translate(0, 0) rotate(0deg); }
-}
 @keyframes aurora {
   0%   { transform: translate(0, 0) scale(1); }
   33%  { transform: translate(6%, -4%) scale(1.12); }
@@ -159,14 +154,13 @@
   50%      { transform: translateY(-10px); }
 }
 
-.animate-drift { animation: drift var(--drift-dur, 18s) ease-in-out infinite; }
 .animate-aurora { animation: aurora var(--aurora-dur, 24s) ease-in-out infinite; }
 .animate-route-dash { animation: route-dash 1.4s linear infinite; }
 .animate-float-bob { animation: float-bob 4s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in-up, .animate-fade-in, .animate-scale-in,
-  .animate-drift, .animate-aurora, .animate-route-dash, .animate-float-bob {
+  .animate-aurora, .animate-route-dash, .animate-float-bob {
     animation: none;
   }
 }

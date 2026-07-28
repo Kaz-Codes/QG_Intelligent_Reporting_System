@@ -1,6 +1,6 @@
 from app.auth.verify_token import verify_token
 from app.database import SessionLocal
-from app.imports.permissions import ADMIN, get_current_user, get_role_name
+from app.auth.authorize_user import authorize
 from app.logs.manager import manager
 from app.logs.routes.router import router
 from fastapi import WebSocket, WebSocketDisconnect
@@ -28,8 +28,9 @@ def _is_admin(token):
 
     try:
         payload = verify_token(token)
-        user = get_current_user(payload, db)
-        return get_role_name(user, db) == ADMIN
+        # authorize raises unless the caller is an active admin
+        authorize(payload, ["admin"], db)
+        return True
 
     except Exception:
         return False

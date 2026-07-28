@@ -19,7 +19,7 @@ async def create_user(user_schema : UserSchema, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, "admin", db)
+        authorize(request_user_data, ["admin"], db)
 
         # check whether username already exists
         user_exists = db.execute(

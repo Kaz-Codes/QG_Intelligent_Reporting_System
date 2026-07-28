@@ -1,7 +1,7 @@
 from app.auth.authenticate_user import authenticate
 from app.database import SessionLocal
 from app.masters.helpers import check_unique, parse_payload, set_hs_codes, used_counts
-from app.masters.permissions import CAN_INLINE_CREATE, allow
+from app.auth.authorize_user import authorize
 from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
@@ -35,7 +35,7 @@ async def inline_create(master : str, payload : dict, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        allow(request_user_data, CAN_INLINE_CREATE, db)
+        authorize(request_user_data, ["admin", "manager", "entry operator"], db)
 
         config = get_master_config(master)
 
