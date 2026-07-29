@@ -19,6 +19,7 @@ export type PageKey =
   | 'imports'
   | 'importsStatus'
   | 'logisticsStatus'
+  | 'truckingStatus'
   | 'dataEntry'
   | 'logistics'
   | 'reports'
@@ -32,6 +33,7 @@ export const MODULE_ACCENTS: Record<PageKey, string> = {
   imports: '#0EA5E9',
   importsStatus: '#0891B2',
   logisticsStatus: '#E11D48',
+  truckingStatus: '#EA580C',
   dataEntry: '#0891B2',
   logistics: '#FB7185',
   reports: '#06B6D4',

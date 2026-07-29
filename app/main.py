@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
-from loading.scripts.load_all import call_load
+from app.loading.scripts.load_all import call_load
 
 # Importing the model modules registers every table on Base.metadata, so
 # create_all below knows about all of them. Nothing is created until this
@@ -15,7 +15,9 @@ import app.accounts.models
 import app.masters.models
 import app.imports.models
 import app.logistics.models
+import app.trucking.models
 import app.logs.models
+import app.loading.schemas.stores_schemas
 
 from app.accounts.models import Role, User
 
@@ -25,6 +27,7 @@ from app.accounts.routes import router as accounts_router
 from app.masters.routes import router as masters_router
 from app.imports.routes import router as imports_router
 from app.logistics.routes import router as logistics_router
+from app.trucking.routes import router as trucking_router
 from app.logs.routes import router as logs_router
 from app.dashboard.imports.routes import router as imports_dashboard_router
 from app.dashboard.logistics.routes import router as logistics_dashboard_router
@@ -160,6 +163,7 @@ app.include_router(accounts_router)
 app.include_router(masters_router)
 app.include_router(imports_router)
 app.include_router(logistics_router)
+app.include_router(trucking_router)
 app.include_router(logs_router)
 app.include_router(imports_dashboard_router)
 app.include_router(logistics_dashboard_router)
@@ -176,6 +180,7 @@ def root():
 
 # Build the tables and seed the roles and the admin as the server module
 # loads, so a fresh database is ready the moment the server starts.
+
 create_tables()
 seed_roles()
 seed_admin()

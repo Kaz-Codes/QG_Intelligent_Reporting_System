@@ -38,6 +38,7 @@ function RoleBadge({ role }: { role: Role }) {
 export function UserManagement() {
   const { user: me } = useAuth()
   const [users, setUsers] = useState(() => listUsers())
+  const [name, setName] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<Role>('entry')
@@ -49,8 +50,9 @@ export function UserManagement() {
     setError(null)
     setSubmitting(true)
     try {
-      createUser({ username, password, role })
+      createUser({ name, username, password, role })
       setUsers(listUsers())
+      setName('')
       setUsername('')
       setPassword('')
       setRole('entry')
@@ -97,6 +99,10 @@ export function UserManagement() {
             </p>
             <p className="mb-4 text-xs text-muted">Only admins can create accounts.</p>
             <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="new-name">Name</Label>
+                <Input id="new-name" value={name} onChange={(e) => setName(e.target.value)} required />
+              </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="new-username">Username</Label>
                 <Input id="new-username" value={username} onChange={(e) => setUsername(e.target.value)} required />

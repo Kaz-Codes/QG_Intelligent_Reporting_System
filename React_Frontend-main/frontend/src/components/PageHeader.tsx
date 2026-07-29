@@ -15,8 +15,20 @@ export function PageHeader({
     <div className="mb-6 flex items-center gap-3">
       <span className="h-8 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
       <div>
-        <h1 className="font-display text-2xl font-bold text-navy">{title}</h1>
-        {subtitle && <p className="text-sm text-muted">{subtitle}</p>}
+        <h1
+          className="font-display text-2xl font-extrabold text-navy"
+          style={{ textShadow: '0 1px 3px rgba(0,0,0,0.18)' }}
+        >
+          {title}
+        </h1>
+        {subtitle && (
+          <p
+            className="text-sm font-semibold text-muted"
+            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.14)' }}
+          >
+            {subtitle}
+          </p>
+        )}
       </div>
     </div>
   )

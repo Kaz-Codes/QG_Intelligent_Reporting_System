@@ -1,5 +1,5 @@
 import {
-  Gauge, ShoppingCart, PackageOpen, Plane, ClipboardList, Truck, BarChart3, MessageSquare, Users,
+  Gauge, ClipboardList, BarChart3, MessageSquare, Users,
   type LucideIcon,
 } from 'lucide-react'
 import type { PageKey } from '@/theme/tokens'
@@ -11,21 +11,20 @@ export interface PageDef {
   path: string
   icon: LucideIcon
   /** Sub-links rendered under this item instead of it being a direct link
-   * itself — used for Operations, which groups two independent route trees
-   * (Imports Status, Logistics Status) behind one sidebar entry. */
+   * itself — used for Operations, which groups three independent route trees
+   * (Imports Status, Logistics Status, Trucking Status) behind one sidebar
+   * entry. */
   children?: { label: string; path: string }[]
 }
 
 // Single source of truth for the sidebar/routes — mirrors the old
 // Streamlit `PAGES` dict in app.py: to reorder/rename a tab, edit here only.
+// Purchases/Inventory/Imports/Logistics aren't separate entries — they live
+// as tabs inside Dashboard (see Dashboard.tsx's own tab bar).
 export const PAGE_DEFS: PageDef[] = [
-  { key: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: Gauge },
-  { key: 'purchases', label: 'Purchases', path: '/purchases', icon: ShoppingCart },
-  { key: 'inventory', label: 'Inventory', path: '/inventory', icon: PackageOpen },
-  { key: 'imports', label: 'Imports', path: '/imports', icon: Plane },
-  { key: 'logistics', label: 'Logistics', path: '/logistics', icon: Truck },
-  { key: 'reports', label: 'Reports', path: '/reports', icon: BarChart3 },
   { key: 'assistant', label: 'Assistant', path: '/assistant', icon: MessageSquare },
+  { key: 'dashboard', label: 'Dashboards', path: '/dashboard', icon: Gauge },
+  { key: 'reports', label: 'Customize Reports', path: '/reports', icon: BarChart3 },
   // Kept separate from the reporting pages above (its own section in the
   // sidebar, not interleaved between them) — a different kind of work.
   {
@@ -33,16 +32,23 @@ export const PAGE_DEFS: PageDef[] = [
     children: [
       { label: 'Imports Status', path: '/imports-status' },
       { label: 'Logistics Status', path: '/logistics-status' },
+      { label: 'Trucking Status', path: '/trucking-status' },
     ],
   },
   { key: 'userManagement', label: 'User Management', path: '/user-management', icon: Users },
 ]
 
 /** Where to land a given role right after login (or when they're bounced
- * off a page they can't access) — the first page in PAGE_DEFS order that
- * their role is allowed to see. */
+ * off a page they can't access). Bot (Assistant) is the intended default
+ * landing page for everyone right now — no real roles yet, just mock data
+ * (see README) — so it wins whenever the role can see it. Otherwise falls
+ * back to the first page in PAGE_DEFS order that the role is allowed to see. */
 export function defaultPathForRole(role: string | undefined): string {
   const allowed = pagesForRole(role)
+  if (allowed.includes('assistant')) {
+    const assistantDef = PAGE_DEFS.find((p) => p.key === 'assistant')
+    if (assistantDef) return assistantDef.path
+  }
   const first = PAGE_DEFS.find((p) => allowed.includes(p.key))
   return first?.path ?? '/login'
 }

@@ -92,14 +92,16 @@ def update_consignment(
 
         consignment_payments_map = {payment.id : payment for payment in consignment.payments}
 
+        # The id is read, not popped, so the change history's copy of these
+        # dicts keeps its id and a revert can still find the line.
         for updated_item in item_updates:
-            item_id = updated_item.pop("id")
+            item_id = updated_item.get("id")
             old_item = consignment_items_map.get(item_id)
             if old_item:
                 apply_updates(updated_item, old_item)
 
         for updated_payment in payment_updates:
-            payment_id = updated_payment.pop("id")
+            payment_id = updated_payment.get("id")
             old_payment = consignment_payments_map.get(payment_id)
             if old_payment:
                 apply_updates(updated_payment, old_payment)        

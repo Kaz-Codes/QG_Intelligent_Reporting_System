@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.inspection import inspect
 from datetime import datetime, timezone, date
@@ -90,25 +90,57 @@ def fetch_consignment(db, consignment_id):
 
 
 #-------------------------------------
-# FETCH ALL ORDERS FROM DB
+# FETCH ONE PAGE OF ORDERS, FILTERED
+#
+# The list screen filters and pages, so the filters are applied in SQL and
+# only one page is loaded. The total count is worked out with the same
+# filters so the caller can say how many pages there are.
 #-------------------------------------
 
-def fetch_all_consignments(db, include_deleted):
-    query = select(LogisticsConsignment)
+def fetch_consignments_page(db, include_deleted, status, order_type,
+                            shipping_line, q, page, page_size):
+    conditions = []
 
     if not include_deleted:
-        query = query.where(
-            LogisticsConsignment.is_deleted == False
+        conditions.append(LogisticsConsignment.is_deleted == False)
+
+    if status:
+        conditions.append(LogisticsConsignment.current_status == status)
+
+    if order_type:
+        conditions.append(LogisticsConsignment.order_type == order_type)
+
+    if shipping_line:
+        conditions.append(LogisticsConsignment.shipping_line == shipping_line)
+
+    if q:
+        pattern = "%" + q.strip() + "%"
+        conditions.append(
+            or_(
+                LogisticsConsignment.customer_name.ilike(pattern),
+                LogisticsConsignment.pod.ilike(pattern),
+                LogisticsConsignment.origin_country.ilike(pattern)
+            )
         )
 
-    query = query.options(
+    # how many match, for the page count
+    total = db.execute(
+        select(func.count(LogisticsConsignment.id)).where(*conditions)
+    ).scalar()
+
+    # the page itself, newest first
+    query = select(LogisticsConsignment).where(*conditions).options(
         selectinload(LogisticsConsignment.status_updates),
         selectinload(LogisticsConsignment.change_history),
         joinedload(LogisticsConsignment.created_by),
         joinedload(LogisticsConsignment.deleted_by)
-    )
+    ).order_by(
+        LogisticsConsignment.id.desc()
+    ).limit(page_size).offset((page - 1) * page_size)
 
-    return db.execute(query).scalars().all()
+    rows = db.execute(query).scalars().all()
+
+    return rows, total
 
 
 #----------------------------------------

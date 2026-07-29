@@ -5,6 +5,7 @@ from app.models_mixins import TimestampMixin
 
 from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData, StoreRequisition
 
 # Only used inside quoted "Mapped[...]" annotations, which SQLAlchemy resolves
 # from its class registry. A real import here would make masters.models and
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 # only.
 if TYPE_CHECKING:
     from app.imports.models import Consignment, ConsignmentItem
+
 
 #-----------------------------------------------------
 # MASTER TABLES
@@ -339,7 +341,7 @@ class Item(Base, TimestampMixin):
 
     name : Mapped[str] = mapped_column(
         String(255),
-        nullable = False
+        nullable = True
     )
 
     default_specification : Mapped[Optional[str]] = mapped_column(
@@ -378,6 +380,22 @@ class Item(Base, TimestampMixin):
 
     consignment_items : Mapped[list["ConsignmentItem"]] = relationship(
         back_populates = "item"
+    )
+
+    stock: Mapped[list["Stock"]] = relationship(
+    back_populates="item"
+    )
+
+    issuances: Mapped[list["Issuance"]] = relationship(
+        back_populates="item"
+    )
+    
+    store_requisitions: Mapped[list["StoreRequisition"]] = relationship(
+        back_populates="item"
+    )
+    
+    purchases: Mapped[list["PurchasesData"]] = relationship(
+        back_populates="item"
     )
 
 

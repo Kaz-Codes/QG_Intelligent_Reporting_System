@@ -13,7 +13,7 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { CategoryBar } from '@/components/charts/CategoryBar'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { Donut } from '@/components/charts/Donut'
-import { BRAND, VIOLET } from '@/theme/tokens'
+import { useTheme } from '@/theme/ThemeContext'
 import { monthInRange } from '@/lib/format'
 import {
   getStock, type StockRow,
@@ -35,6 +35,7 @@ function countBy(rows: StockRow[], key: 'branch') {
 }
 
 export function Inventory() {
+  const { colors } = useTheme()
   const [status, setStatus] = useState<string[]>([])
   const [reorderStatus, setReorderStatus] = useState<string[]>([])
   const [category, setCategory] = useState<string[]>([])
@@ -124,15 +125,19 @@ export function Inventory() {
 
       {/* Spotlight: at-risk headline + stock health composition, in place of a
           trend hero — inventory is a snapshot, not a time series. */}
-      <Card className="overflow-hidden border-0 text-white shadow-lg" style={{ background: `linear-gradient(135deg, ${BRAND} 0%, ${VIOLET} 100%)` }}>
+      <Card className="overflow-hidden">
         <CardContent className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[1fr_auto]">
           <div className="flex flex-col justify-center">
-            <p className="text-sm font-medium text-white/70">% At Risk</p>
-            <p className="font-display mt-1 text-4xl font-extrabold tracking-tight">{data.length ? `${atRiskPct}%` : '—'}</p>
-            <p className="mt-1 text-xs text-white/60">out of stock + below reorder, current filter</p>
+            <p className="text-sm font-medium text-muted">% At Risk</p>
+            <p className="font-display mt-1 text-4xl font-extrabold tracking-tight text-navy">{data.length ? `${atRiskPct}%` : '—'}</p>
+            <p className="mt-1 text-xs text-muted">out of stock + below reorder, current filter</p>
             <div className="mt-4 flex gap-3">
-              <span className="rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold">{outOfStock} out of stock</span>
-              <span className="rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold">{belowReorder} below reorder</span>
+              <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: colors.riskBg, color: colors.risk }}>
+                {outOfStock} out of stock
+              </span>
+              <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ backgroundColor: colors.watchBg, color: colors.watch }}>
+                {belowReorder} below reorder
+              </span>
             </div>
           </div>
           <div className="w-full lg:w-56">

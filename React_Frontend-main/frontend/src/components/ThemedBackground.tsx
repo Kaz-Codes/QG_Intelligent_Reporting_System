@@ -1,5 +1,5 @@
 import {
-  Truck, Plane, Warehouse, ShoppingCart, Container, Globe,
+  Truck, Plane, Warehouse, ShoppingCart, Container, Globe, Route,
   ClipboardList, BarChart3, MessageSquare, Gauge, Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -7,8 +7,12 @@ import type { PageKey } from '@/theme/tokens'
 import { MODULE_ACCENTS } from '@/theme/tokens'
 import { useTheme } from '@/theme/ThemeContext'
 import { cn } from '@/lib/utils'
-import heroLight from '@/assets/dashboard-hero-light.png'
-import heroDark from '@/assets/dashboard-hero-dark.png'
+import dashboardLight from '@/assets/dashboard-hero-light.png'
+import dashboardDark from '@/assets/dashboard-hero-dark.png'
+import logisticsLight from '@/assets/logistics-hero-light.png'
+import logisticsDark from '@/assets/logistics-hero-dark.png'
+import importsLight from '@/assets/imports-hero-light.png'
+import importsDark from '@/assets/imports-hero-dark.png'
 
 /**
  * Ambient, subject-related backdrop: a slow, soft "smoke" of blurred,
@@ -21,6 +25,10 @@ import heroDark from '@/assets/dashboard-hero-dark.png'
  *
  * CSS-only motion for the smoke (see index.css `aurora` keyframes) — the
  * safe, reliable path here. The watermark icon itself never animates.
+ *
+ * A module can instead be given a real photo (see MODULE_PHOTOS below) —
+ * that replaces the icon+aurora treatment entirely for that module, the
+ * same way Dashboard's port/logistics photo always has.
  */
 
 const MODULE_ICON: Partial<Record<PageKey | 'login', LucideIcon>> = {
@@ -30,6 +38,7 @@ const MODULE_ICON: Partial<Record<PageKey | 'login', LucideIcon>> = {
   imports: Plane,
   importsStatus: Container,
   logisticsStatus: Truck,
+  truckingStatus: Route,
   dataEntry: ClipboardList,
   logistics: Truck,
   reports: BarChart3,
@@ -38,11 +47,21 @@ const MODULE_ICON: Partial<Record<PageKey | 'login', LucideIcon>> = {
   login: Globe,
 }
 
-function DashboardPhoto({ className }: { className?: string }) {
+/** Modules with a real photo instead of the icon+aurora treatment.
+ * Add an entry here (plus a light/dark import above) to give another
+ * module the same "photo behind glass cards" look Dashboard and
+ * Logistics have. */
+const MODULE_PHOTOS: Partial<Record<PageKey, { light: string; dark: string }>> = {
+  dashboard: { light: dashboardLight, dark: dashboardDark },
+  logistics: { light: logisticsLight, dark: logisticsDark },
+  imports: { light: importsLight, dark: importsDark },
+}
+
+function ModulePhoto({ photo, className }: { photo: { light: string; dark: string }; className?: string }) {
   const { dark } = useTheme()
   return (
     <div aria-hidden className={cn('pointer-events-none absolute inset-0 z-0 overflow-hidden', className)}>
-      <img src={dark ? heroDark : heroLight} alt="" className="h-full w-full object-cover" />
+      <img src={dark ? photo.dark : photo.light} alt="" className="h-full w-full object-cover" />
       {/* Light scrim so cards can go semi-transparent anywhere on the page
           and still keep their text readable over busy parts of the photo. */}
       <div className="absolute inset-0" style={{ background: dark ? 'rgba(11,14,20,0.4)' : 'rgba(255,255,255,0.3)' }} />
@@ -60,11 +79,12 @@ interface Props {
 }
 
 export function ThemedBackground({ module = 'dashboard', variant = 'ambient', className }: Props) {
-  // Dashboard is the flagship: a real port/logistics photo fills the whole
-  // page behind the (semi-transparent) cards, instead of a per-module icon.
-  // It's a single static <img> — no blur/animation — so it costs one paint,
-  // not a per-frame one.
-  if (module === 'dashboard') return <DashboardPhoto className={className} />
+  // A real photo fills the whole page behind the (semi-transparent) cards,
+  // instead of a per-module icon, for any module listed in MODULE_PHOTOS.
+  // It's a single static <img> — no blur/animation — so it costs one
+  // paint, not a per-frame one.
+  const photo = module !== 'login' ? MODULE_PHOTOS[module] : undefined
+  if (photo) return <ModulePhoto photo={photo} className={className} />
 
   const Icon = MODULE_ICON[module] ?? Globe
   const accent = module === 'login' ? '#4F46E5' : MODULE_ACCENTS[module as PageKey] ?? '#4F46E5'

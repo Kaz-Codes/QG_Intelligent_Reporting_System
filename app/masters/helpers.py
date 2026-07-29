@@ -1,9 +1,10 @@
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
 
 from app.imports.models import Consignment, ConsignmentItem
-from app.masters.models import HsCode
+from app.masters.models import HsCode, Item
 
 #-----------------------------------------------------
 # SMALL JOBS EVERY MASTERS ROUTE NEEDS
@@ -38,6 +39,33 @@ def parse_payload(schema, payload):
                 for error in e.errors()
             ]
         )
+
+
+#--------------------------------
+# SEARCH ITEMS BY NAME FOR DATA ENTRY
+#
+# Feeds the item name typeahead on the consignment wizard.
+# As the operator types a name, the matching active items
+# come back with everything the form auto-fills: the code,
+# the default specification and unit, and the H.S. codes
+# (an item can have several, so it is a list).
+#
+# Unverified items are included, because an item created
+# inline a moment ago must be findable straight away. Only
+# a handful come back, since it is a live typeahead.
+#--------------------------------
+
+def search_items(db, q, limit):
+    query = select(Item).where(Item.is_active == True)
+
+    if q:
+        query = query.where(Item.name.ilike("%" + q.strip() + "%"))
+
+    query = query.options(
+        selectinload(Item.hs_codes)
+    ).order_by(Item.name).limit(limit)
+
+    return db.execute(query).scalars().all()
 
 
 #--------------------------------

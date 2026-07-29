@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { ShieldCheck, Sparkles, Sun, Moon } from 'lucide-react'
 import { useAuth } from './AuthContext'
 import { useTheme } from '@/theme/ThemeContext'
+import { defaultPathForRole } from '@/lib/pages'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,7 +20,10 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
 
   if (!loading && user) {
-    const redirectTo = (location.state as { from?: string } | null)?.from ?? '/dashboard'
+    // Land on Bot (Assistant) by default post-login, not a hardcoded page —
+    // unless the user was bounced here from a specific page they tried to
+    // visit directly (location.state.from), in which case send them back there.
+    const redirectTo = (location.state as { from?: string } | null)?.from ?? defaultPathForRole(user.role)
     return <Navigate to={redirectTo} replace />
   }
 

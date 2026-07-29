@@ -2,13 +2,13 @@ import type { PageKey } from '@/theme/tokens'
 
 export type Role = 'admin' | 'manager' | 'entry' | 'viewer'
 
-export const ALL_PAGES: PageKey[] = [
-  'dashboard', 'purchases', 'inventory', 'imports', 'dataEntry', 'logistics', 'reports', 'assistant', 'userManagement',
-]
+export const ALL_PAGES: PageKey[] = ['assistant', 'dashboard', 'reports', 'dataEntry', 'userManagement']
 
 /** The reporting/BI side of the app — everything except data entry and
- * account administration. */
-const REPORTING_PAGES: PageKey[] = ['dashboard', 'purchases', 'inventory', 'imports', 'logistics', 'reports', 'assistant']
+ * account administration. Purchases/Inventory/Imports/Logistics aren't
+ * listed here: they're no longer routed pages of their own, just tabs
+ * inside Dashboard, so they need no separate role gate. */
+const REPORTING_PAGES: PageKey[] = ['assistant', 'dashboard', 'reports']
 
 /**
  * Role -> allowed page keys. This is a UI-only gate (hide/redirect away from
@@ -20,7 +20,10 @@ const REPORTING_PAGES: PageKey[] = ['dashboard', 'purchases', 'inventory', 'impo
 const PAGE_ACCESS: Record<Role, PageKey[]> = {
   admin: [...REPORTING_PAGES, 'dataEntry', 'userManagement'],
   manager: [...REPORTING_PAGES, 'dataEntry'],
-  entry: ['dataEntry'],
+  // 'assistant' (Bot) added for every role, including entry, so Bot can be
+  // the universal default landing page post-login while we're still on
+  // mock data with no real role enforcement (see README).
+  entry: ['assistant', 'dataEntry'],
   viewer: REPORTING_PAGES,
 }
 

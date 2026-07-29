@@ -212,3 +212,84 @@ class LogisticsStatus(str, Enum):
     AT_PORT = "At Port"
     ON_WATER = "On Water"
     DELIVERED = "Delivered"
+
+
+#--------------------------------
+# TRUCKING: WHICH WAY THE GOODS MOVE
+#
+# The movement type drives which fields apply on several
+# steps, which is why it sits on the consignment.
+#--------------------------------
+
+class MovementType(str, Enum):
+    INTRAFACTORY = "Intrafactory"
+    OUTBOUND = "Outbound"
+    INBOUND = "Inbound"
+
+
+#--------------------------------
+# TRUCKING: WHERE A JOB CAME FROM
+#
+# A derived row reflects a live logistics or import record;
+# a manual row is fully owned by the trucking operator.
+#--------------------------------
+
+class TruckingSource(str, Enum):
+    MANUAL = "manual"
+    FROM_LOGISTICS = "from-logistics"
+    FROM_IMPORT_FOB = "from-import-fob"
+
+
+#--------------------------------
+# TRUCKING: KIND OF SHIFTING
+#--------------------------------
+
+class ShiftingType(str, Enum):
+    REGULAR = "Regular"
+    SPECIAL = "Special"
+    OTHERS = "Others"
+
+
+#--------------------------------
+# TRUCKING: CONTAINER SIZE (INBOUND / IMPORT FOB)
+#--------------------------------
+
+class ContainerType(str, Enum):
+    TWENTY_FT = "20ft"
+    FORTY_FT = "40ft"
+    FORTY_FT_HC = "40ft HC"
+    OTHER = "Other"
+
+
+#--------------------------------
+# TRUCKING: WHO SETTLES THE FREIGHT
+#--------------------------------
+
+class TruckingPaymentStatus(str, Enum):
+    CUSTOMER_TO_PAY = "Customer to pay"
+    QG_TO_PAY = "QG to pay"
+
+
+#--------------------------------
+# TRUCKING: PER VEHICLE TRACKING PIPELINE
+#
+# Each truck advances on its own. The consignment level
+# status is a rollup over the vehicles, worked out on the
+# front end, never stored. Order matters, it is the order
+# the stages actually happen in.
+#--------------------------------
+
+class VehicleTrackingStatus(str, Enum):
+    GOING_TO_LOAD = "Going to load"
+    LOADING = "Loading"
+    ON_ROAD = "On road"
+    DELIVERED = "Delivered"
+
+
+#--------------------------------
+# TRUCKING: WHETHER A BUILTY WAS ISSUED
+#--------------------------------
+
+class BuiltyStatus(str, Enum):
+    YES = "Yes"
+    NA = "NA"

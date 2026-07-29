@@ -100,6 +100,27 @@ def serialize_item(row, used=0):
 
 
 #--------------------------------
+# AN ITEM AS THE WIZARD TYPEAHEAD NEEDS IT
+#
+# Just the fields the consignment form auto-fills when an
+# item is picked, kept light because this is a live search.
+# The used count, verified flag and active flag are left off
+# on purpose, they are not needed to fill the form.
+#--------------------------------
+
+def serialize_item_for_entry(item):
+    return {
+        "id": item.id,
+        "item_code": item.item_code,
+        "name": item.name,
+        "default_specification": item.default_specification,
+        "default_unit_of_measurement": item.default_unit_of_measurement,
+        "category": item.category,
+        "hs_codes": [code.code for code in item.hs_codes if code.is_active]
+    }
+
+
+#--------------------------------
 # ONE ENTRY POINT, SO THE ROUTES DO NOT EACH
 # HOLD A MAP OF MASTER TO SERIALIZER
 #--------------------------------

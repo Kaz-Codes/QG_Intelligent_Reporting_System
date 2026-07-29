@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from app.imports.models import Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
@@ -132,18 +132,59 @@ def fetch_consignment(db, consignment_id):
 
 
 #-------------------------------------
-# FETCH ALL CONSIGNMENTS FROM DB
+# FETCH ONE PAGE OF CONSIGNMENTS, FILTERED
+#
+# The list screen filters and pages, so the filters are applied in SQL and
+# only one page is loaded, rather than pulling every consignment and cutting
+# it down in python. The total count is worked out with the same filters so
+# the caller can say how many pages there are. requisition type lives on the
+# item line, so it is filtered through a sub query on the items.
 #-------------------------------------
 
-def fetch_all_consignments(db, include_deleted):
-    query = select(Consignment)
+def fetch_consignments_page(db, include_deleted, status, branch_id, supplier_id, consignment_type, requisition_type, q, page, page_size):
+    conditions = []
 
     if not include_deleted:
-        query = query.where(
-            Consignment.is_deleted == False
+        conditions.append(Consignment.is_deleted == False)
+
+    if status:
+        conditions.append(Consignment.current_status == status)
+
+    if branch_id is not None:
+        conditions.append(Consignment.branch_id == branch_id)
+
+    if supplier_id is not None:
+        conditions.append(Consignment.supplier_id == supplier_id)
+
+    if consignment_type:
+        conditions.append(Consignment.consignment_type == consignment_type)
+
+    if requisition_type:
+        conditions.append(
+            Consignment.id.in_(
+                select(ConsignmentItem.consignment_id).where(
+                    ConsignmentItem.requisition_type == requisition_type
+                )
+            )
         )
-        
-    query = query.options(
+
+    if q:
+        pattern = "%" + q.strip() + "%"
+        conditions.append(
+            or_(
+                Consignment.origin.ilike(pattern),
+                Consignment.gd_number.ilike(pattern),
+                Consignment.instrument_number.ilike(pattern)
+            )
+        )
+
+    # how many match, for the page count
+    total = db.execute(
+        select(func.count(Consignment.id)).where(*conditions)
+    ).scalar()
+
+    # the page itself, newest first
+    query = select(Consignment).where(*conditions).options(
         joinedload(Consignment.branch),
         joinedload(Consignment.supplier),
         joinedload(Consignment.works),
@@ -155,14 +196,16 @@ def fetch_all_consignments(db, include_deleted):
         selectinload(Consignment.payments),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
-        selectinload(Consignment.change_history),
 
         joinedload(Consignment.created_by),
         joinedload(Consignment.deleted_by)
-    )
-    
+    ).order_by(
+        Consignment.id.desc()
+    ).limit(page_size).offset((page - 1) * page_size)
 
-    return db.execute(query).scalars().all()
+    rows = db.execute(query).scalars().all()
+
+    return rows, total
 
 
 #----------------------------------------------
@@ -389,8 +432,15 @@ def updated_payments(consignment, update_consignment_data, db):
 def apply_updates(updation_dict, consignment):
 
     for field, change_data in updation_dict.items():
-        new_value = change_data["new_value"]
-        setattr(consignment, field, new_value)
+        # An item or payment update dict also carries a plain "id" so the row
+        # can be matched. Skip anything that is not an {old_value, new_value}
+        # change, so the id is left alone rather than popped, which would also
+        # strip it out of the copy already stored in the change history and
+        # break reverting that line's fields.
+        if not isinstance(change_data, dict) or "new_value" not in change_data:
+            continue
+
+        setattr(consignment, field, change_data["new_value"])
 
 
 #------------------------------------

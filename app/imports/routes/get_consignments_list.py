@@ -3,14 +3,22 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import fetch_all_consignments
+from app.imports.helpers import fetch_consignments_page
 from app.imports.serializers import serialize_consignment
 from typing import Optional
 
 @router.get("/")
 def get_consignments_list(
     request : Request,
-    include_deleted : Optional[bool] = False
+    page : int = 1,
+    page_size : int = 20,
+    include_deleted : Optional[bool] = False,
+    status : Optional[str] = None,
+    branch_id : Optional[int] = None,
+    supplier_id : Optional[int] = None,
+    consignment_type : Optional[str] = None,
+    requisition_type : Optional[str] = None,
+    q : Optional[str] = None
     ):
 
     db = SessionLocal()
@@ -20,21 +28,37 @@ def get_consignments_list(
         # Authenticate user (whether user is logged in or not)
         user_payload = authenticate(request)
 
-        # Authorize user (Check whether user is allowed for this 
+        # Authorize user (Check whether user is allowed for this
         # action)
         user = authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
 
-        consignments = fetch_all_consignments(db, include_deleted)
+        # Keep the page and size sane
+        if page < 1:
+            page = 1
 
-        # Serializeing all consignments
+        if page_size < 1 or page_size > 100:
+            page_size = 20
+
+        consignments, total = fetch_consignments_page(
+            db, include_deleted, status, branch_id, supplier_id,
+            consignment_type, requisition_type, q, page, page_size
+        )
+
+        # Serializeing this page of consignments
         serialized_consignments = [
             serialize_consignment(consignment, db) for consignment in consignments
         ]
-      
+
         return {
             "status_code":200,
             "detail":"Consignments fetched",
-            "data":serialized_consignments
+            "data":serialized_consignments,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size if total else 0
+            }
         }
 
     except HTTPException:
@@ -52,4 +76,3 @@ def get_consignments_list(
 
     finally:
         db.close()
- 

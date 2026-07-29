@@ -50,11 +50,11 @@ export function listUsers(): Omit<MockUser, 'password'>[] {
   return loadUsers().map(({ password: _password, ...rest }) => rest)
 }
 
-/** Admin-only: create a new account — username, password, role, same as the
- * old Streamlit admin panel. Display name is derived from the username
- * since the create form intentionally only asks for those three fields. */
-export function createUser(input: { username: string; password: string; role: Role }): void {
+/** Admin-only: create a new account — name, username, password, role. */
+export function createUser(input: { name: string; username: string; password: string; role: Role }): void {
   const username = input.username.trim()
+  const name = input.name.trim()
+  if (!name) throw new Error('Name is required')
   if (!username) throw new Error('Username is required')
   if (!input.password) throw new Error('Password is required')
 
@@ -63,7 +63,6 @@ export function createUser(input: { username: string; password: string; role: Ro
     throw new Error('That username is already taken')
   }
 
-  const name = username.charAt(0).toUpperCase() + username.slice(1)
   users.push({ username, password: input.password, name, role: input.role })
   saveUsers(users)
 }
