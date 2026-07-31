@@ -18,7 +18,7 @@ from sqlalchemy.orm import (
 # each other in a circle, so they are pulled in for the type checker only. User
 # lives in accounts, not masters.
 if TYPE_CHECKING:
-    from app.masters.models import Branch, Supplier, Port, ClearingAgent, Works, Item
+    from app.masters.models import Branch, Supplier, Port, ClearingAgent, Item
     from app.accounts.models import User
 
 #-----------------------------------------------------
@@ -65,8 +65,16 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
-    works_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("works.id", ondelete="SET NULL"),
+    requisition_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    # Works is typed in by hand, not picked from a master, so it is free
+    # text rather than a foreign key. The sheet's "Works" column is the
+    # branch and fills branch_id above.
+    works: Mapped[Optional[str]] = mapped_column(
+        String(255),
         nullable=True
     )
 
@@ -293,10 +301,6 @@ class Consignment(Base, TimestampMixin):
 )
 
     supplier: Mapped[Optional["Supplier"]] = relationship(
-        back_populates="consignments"
-    )
-    
-    works: Mapped[Optional["Works"]] = relationship(
         back_populates="consignments"
     )
 

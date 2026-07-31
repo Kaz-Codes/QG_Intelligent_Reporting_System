@@ -15,7 +15,7 @@ def serialize_consignment(consignment, db):
         "id" : consignment.id,
         "branch" : serialize_master(consignment.branch),
         "supplier" : serialize_master(consignment.supplier),
-        "works" : serialize_master(consignment.works),
+        "works" : consignment.works,
         "clearing_agent" : serialize_master(consignment.clearing_agent),
         "loading_port" : serialize_master(consignment.loading_port),
         "delivery_port" : serialize_master(consignment.delivery_port),
@@ -30,6 +30,7 @@ def serialize_consignment(consignment, db):
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,
 
         "origin" : consignment.origin,
+        "requisition_date" : consignment.requisition_date,
         "currency" : consignment.currency,
         "consignment_type" : consignment.consignment_type,
         "mode_of_shipment" : consignment.mode_of_shipment,

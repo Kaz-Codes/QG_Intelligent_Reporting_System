@@ -1,3 +1,4 @@
 .env
 /venv
-/React_Frontend-main/frontend/node_modules
+/React_Frontend-main
+/data

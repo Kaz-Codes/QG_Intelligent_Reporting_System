@@ -190,9 +190,8 @@ class Works(Base, TimestampMixin):
         nullable = False
     )
 
-    consignments : Mapped[list["Consignment"]] = relationship(
-        back_populates = "works"
-    )
+    # Works is no longer a foreign key on the consignment (it is typed in by
+    # hand there), so this table has no consignment back-reference.
 
 
 #--------------------------------

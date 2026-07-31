@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.imports.models import Consignment
+from app.imports.models import Consignment, ConsignmentItem, Supplier
 
 
 #-------------------------------------
@@ -25,3 +25,57 @@ def fetch_consignments(db):
     )
 
     return db.execute(query).scalars().all()
+
+
+def fetch_filtered_consigments(
+        db,
+        work, status, item_category,
+        supplier, country, from_date,
+        to_date, mode_of_shipment
+    ):
+
+    query = select(Consignment).where(
+        Consignment.is_deleted == False
+    )
+
+    if work:
+        query = query.where(
+            Consignment.works == work
+        )
+
+    if status:
+       query = query.where(
+            Consignment.current_status == status
+        )
+
+    if item_category:
+        query = (
+            query.join(Consignment.items)
+                 .where(ConsignmentItem.category == item_category)
+        )
+
+    if supplier:
+        query = (
+            query.join(Consignment.supplier)
+                 .where(Supplier.name == supplier)
+        )
+
+    if country:
+        query = query.where(
+            Consignment.origin == country
+        )
+
+    if from_date and to_date:
+        query = query.where(
+            Consignment.requisition_date >= from_date and Consignment.requisition_date <= to_date
+        )
+
+    if mode_of_shipment:
+        query = query.where(
+            Consignment.mode_of_shipment == mode_of_shipment
+        )
+
+    return db.execute(query).scalars().all()
+
+
+

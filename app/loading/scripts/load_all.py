@@ -3,6 +3,12 @@ from app.loading.scripts.stores.load_04_issuance import load_issuances
 from app.loading.scripts.stores.load_06_store_requisitions import load_store_requisitions
 from app.loading.scripts.stores.load_05_stock import load_stock
 from app.loading.scripts.stores.load_01_items import load_items
+from app.loading.scripts.imports.load_01_suppliers import load_suppliers
+from app.loading.scripts.imports.load_02_branches import load_branches
+from app.loading.scripts.imports.load_03_clearing_agent import load_clearing_agent
+from app.loading.scripts.imports.load_04_ports import load_ports
+from app.loading.scripts.imports.load_05_consignments import load_consignments
+
 from app.loading.database_connection import cursor, connection
 
 """
@@ -24,7 +30,7 @@ Usage:  python -m database.scripts.load_all
 # ---------------------------------------------------------------------------
 print("Deleting old data...\n")
 
-cursor.execute('DROP TABLE IF EXISTS export_documents,export_shipments,exports,import_details,import_item,issuance,items,suppliers,store_requisition,stock,shipment_details,shipment_containers,shifting_movements,purchase_order,payment_history,packing_details, purchases_data, ab_items CASCADE;')
+cursor.execute('DROP TABLE IF EXISTS branches, clearing_agents,issuance,items,suppliers,store_requisition,stock, purchases, ports, consignments, eta_revision_history CASCADE;')
 
 connection.commit()
 
@@ -48,5 +54,10 @@ def call_load():
     load_data("Issuances", load_issuances)
     load_data("Stocks", load_stock)
     load_data("Store Requisitions", load_store_requisitions)
+    load_data("Suppliers", load_suppliers)
+    load_data("Branches", load_branches)
+    load_data("Clearing Agents", load_clearing_agent)
+    load_data("Ports", load_ports)
+    load_data("Consignments", load_consignments)
 
     print("\nAll load steps complete.")

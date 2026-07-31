@@ -148,7 +148,9 @@ def used_counts(master, ids, db):
         return _grouped_count(Consignment.branch_id, ids, db, counts)
 
     if master == "works":
-        return _grouped_count(Consignment.works_id, ids, db, counts)
+        # Works is no longer linked to consignments (it is free text there),
+        # so nothing references a works row.
+        return counts
 
     if master == "agent":
         return _grouped_count(Consignment.clearing_agent_id, ids, db, counts)

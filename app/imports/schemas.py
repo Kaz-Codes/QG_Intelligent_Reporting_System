@@ -59,12 +59,13 @@ class ConsignmentSchema(BaseModel):
     currency : Optional[Currency] = None
     consignment_type : Optional[ConsignmentType] = None
     po_date : Optional[date] = None
+    requisition_date : Optional[date] = None
 
     #---finance---
     payment_instrument : Optional[PaymentInstrument] = None
     instrument_number : Optional[str] = Field(None, max_length=100)
     opening_or_retirement_date : Optional[date] = None
-    works_id : Optional[int] = None
+    works : Optional[str] = Field(None, max_length=255)
     exchange_rate : Optional[Decimal] = Field(None, ge = 0)
     rate_booked_on : Optional[date] = None
     rate_source : Optional[RateSource] = None

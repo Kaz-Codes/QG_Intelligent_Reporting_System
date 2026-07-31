@@ -112,7 +112,6 @@ def fetch_consignment(db, consignment_id):
     ).options(
         joinedload(Consignment.branch),
         joinedload(Consignment.supplier),
-        joinedload(Consignment.works),
         joinedload(Consignment.loading_port),
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),
@@ -187,7 +186,6 @@ def fetch_consignments_page(db, include_deleted, status, branch_id, supplier_id,
     query = select(Consignment).where(*conditions).options(
         joinedload(Consignment.branch),
         joinedload(Consignment.supplier),
-        joinedload(Consignment.works),
         joinedload(Consignment.loading_port),
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),
