@@ -35,21 +35,26 @@ def imports_dashboard(
         consignments = fetch_consignments(db)
         filtered_consignments = fetch_filtered_consigments(db, work, status, item_category, supplier, country, from_date, to_date, mode_of_shipment)
 
-        works = ()
-        suppliers = ()
-        countries = ()
-        item_categories = ()
-        statuses = ()
+        works = set()
+        suppliers = set()
+        countries = set()
+        item_categories = set()
+        statuses = set()
 
         for consignment in consignments:
-            works.add(consignment.works)
-            suppliers.add(consignment.suppliers.name)
-            countries.add(consignment.origin)
+            if consignment.branch and consignment.branch.name:
+                works.add(consignment.branch.name)
+            if consignment.supplier:
+                suppliers.add(consignment.supplier.name)
+            if consignment.origin:
+                countries.add(consignment.origin)
             for item in consignment.items:
-                item_categories.add(item.category)
+                if item.item and item.item.category:
+                    item_categories.add(item.item.category)
 
-            statuses.add(consignment.current_status)
-        
+            if consignment.current_status:
+                statuses.add(consignment.current_status)
+
 
         data = {
             "consignments": serialize_imports_dashboard(filtered_consignments),

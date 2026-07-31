@@ -1,7 +1,8 @@
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.imports.models import Consignment, ConsignmentItem, Supplier
+from app.imports.models import Consignment, ConsignmentItem
+from app.masters.models import Supplier, Item, Branch
 
 
 #-------------------------------------
@@ -39,8 +40,9 @@ def fetch_filtered_consigments(
     )
 
     if work:
-        query = query.where(
-            Consignment.works == work
+        query = (
+            query.join(Consignment.branch)
+                 .where(Branch.name == work)
         )
 
     if status:
@@ -51,7 +53,8 @@ def fetch_filtered_consigments(
     if item_category:
         query = (
             query.join(Consignment.items)
-                 .where(ConsignmentItem.category == item_category)
+                 .join(ConsignmentItem.item)
+                 .where(Item.category == item_category)
         )
 
     if supplier:
@@ -64,11 +67,11 @@ def fetch_filtered_consigments(
         query = query.where(
             Consignment.origin == country
         )
-
-    if from_date and to_date:
-        query = query.where(
-            Consignment.requisition_date >= from_date and Consignment.requisition_date <= to_date
-        )
+        
+    if from_date:
+        query = query.where(Consignment.eta_works >= from_date)
+    if to_date:
+        query = query.where(Consignment.eta_works <= to_date)
 
     if mode_of_shipment:
         query = query.where(

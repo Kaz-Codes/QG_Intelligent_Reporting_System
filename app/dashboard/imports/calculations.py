@@ -151,8 +151,11 @@ def value_by_branch(consignments, limit=8):
 #-------------------------------------
 # VALUE OVER TIME, MONTH BY MONTH
 #
-# Grouped by the PO date, falling back to the day the
-# consignment was created when there is no PO date yet.
+# Grouped by ETA at works, falling back through ETD/ETA/cargo readiness for
+# rows missing it. NOT po_date/created_at: po_date is never populated by the
+# current loader, and created_at is just the moment the row was bulk-loaded
+# — every consignment in a batch shares the same one, which collapsed the
+# whole trend into a single point regardless of any real date or filter.
 # Oldest month first, so a line chart reads left to right.
 #-------------------------------------
 
@@ -160,8 +163,9 @@ def monthly_value_trend(consignments):
     totals = {}
 
     for consignment in consignments:
-        day = consignment.po_date or (
-            consignment.created_at.date() if consignment.created_at else None
+        day = (
+            consignment.eta_works or consignment.etd
+            or consignment.eta or consignment.cargo_readiness_date
         )
 
         if day is None:
