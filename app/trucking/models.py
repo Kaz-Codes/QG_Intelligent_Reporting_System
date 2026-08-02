@@ -7,6 +7,7 @@ from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,10 +56,35 @@ class TruckingConsignment(Base, TimestampMixin):
         nullable=True
     )
 
-    # Where the job came from: manual, from-logistics or from-import-fob.
+    # Where the job came from: manual, from-logistics, from-import-fob or
+    # from-export.
     source: Mapped[Optional[str]] = mapped_column(
         String(30),
         nullable=True
+    )
+
+    # Set only when the job was created by a "Take Action" on an open
+    # request. A point-in-time reference to the originating record ("taken
+    # from order X"), never a live pointer — later changes to that record do
+    # not flow through.
+    source_ref: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    # ISO datetime the operator clicked Take Action.
+    taken_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    # Snapshot of the source's items/packages at the moment of taking, used
+    # only to pre-fill the form. A list of
+    # {source_package_id, label, item_details, quantity, weight}.
+    taken_snapshot: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False
     )
 
     execution_date: Mapped[Optional[date]] = mapped_column(
@@ -121,6 +147,12 @@ class TruckingConsignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # Vehicle / container detention cost.
+    detention: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
     #--- step 4: tracking ---
     dispatch_note_date: Mapped[Optional[date]] = mapped_column(
         Date,
@@ -135,6 +167,31 @@ class TruckingConsignment(Base, TimestampMixin):
     remarks: Mapped[Optional[str]] = mapped_column(
         String(500),
         nullable=True
+    )
+
+    # Draft vs submitted. Optional, opt-in from the front end: a draft saves
+    # with anything filled (the normal create/update); submitting runs the
+    # rule set (helpers.submission_errors) and only then flips this to
+    # "submitted". Submitting never locks the job. server_default so rows
+    # written straight to the table come in as drafts.
+    record_state: Mapped[str] = mapped_column(
+        String(20),
+        default="draft",
+        server_default="draft",
+        nullable=False,
+        index=True
+    )
+
+    # The closed lock. A job closes once every one of its vehicles is
+    # "Delivered"; from then on nobody may edit it until an admin reopens it.
+    # Trucking has no stored job-level status, so "closed" is derived from the
+    # vehicles (see helpers.is_closed). Separate from record_state.
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+        index=True
     )
 
     #--- who made it ---
@@ -249,9 +306,20 @@ class TruckingVehicle(Base, TimestampMixin):
         nullable=False
     )
 
-    builty_status: Mapped[str] = mapped_column(
-        String(10),
-        default="NA",
+    # Which logistics packages ride on this truck: a list of {package_id}.
+    # A package may fill a whole truck or share one with others (many to
+    # many), so this is a list, driven by the front end.
+    package_refs: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False
+    )
+
+    # Which import consignments ride on this truck: a list of
+    # {consignment_id}. Two or more imports can move on one vehicle.
+    import_consignment_refs: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
         nullable=False
     )
 

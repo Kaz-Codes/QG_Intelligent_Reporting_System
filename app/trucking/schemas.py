@@ -1,11 +1,36 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.enums import (
-    BuiltyStatus, ContainerType, MovementType, ShiftingType, TruckingPaymentStatus,
+    ContainerType, MovementType, ShiftingType, TruckingPaymentStatus,
     TruckingSource, VehicleTrackingStatus,
 )
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+
+
+#------------------------------------
+# NESTED REFS AND SNAPSHOTS STORED AS JSON
+#
+# These small collections are always written whole from the front end, so
+# they ride inside their parent row as JSON rather than getting their own
+# tables. They reference records in other modules (logistics packages, import
+# consignments) by id.
+#------------------------------------
+
+class VehiclePackageRefSchema(BaseModel):
+    package_id: Optional[str] = None
+
+
+class VehicleImportRefSchema(BaseModel):
+    consignment_id: Optional[str] = None
+
+
+class TakenSourceSnapshotSchema(BaseModel):
+    source_package_id: Optional[str] = None
+    label: Optional[str] = None
+    item_details: Optional[str] = None
+    quantity: Optional[float] = None
+    weight: Optional[float] = None
 
 
 #------------------------------------
@@ -27,7 +52,8 @@ class TruckingVehicleSchema(BaseModel):
     container_no: Optional[str] = Field(None, max_length=100)
     container_type: Optional[ContainerType] = None
     tracking_status: Optional[VehicleTrackingStatus] = None
-    builty_status: Optional[BuiltyStatus] = None
+    package_refs: Optional[list[VehiclePackageRefSchema]] = []
+    import_consignment_refs: Optional[list[VehicleImportRefSchema]] = []
 
 
 #------------------------------------
@@ -44,6 +70,9 @@ class TruckingConsignmentSchema(BaseModel):
     #--- step 1: movement and item ---
     movement_type: Optional[MovementType] = None
     source: Optional[TruckingSource] = None
+    source_ref: Optional[str] = Field(None, max_length=100)
+    taken_at: Optional[datetime] = None
+    taken_snapshot: Optional[list[TakenSourceSnapshotSchema]] = None
     execution_date: Optional[date] = None
     transporter_name: Optional[str] = Field(None, max_length=255)
     shifting_type: Optional[ShiftingType] = None
@@ -57,6 +86,7 @@ class TruckingConsignmentSchema(BaseModel):
     actual_freight: Optional[Decimal] = Field(None, ge=0)
     payment_status: Optional[TruckingPaymentStatus] = None
     paid_amount: Optional[Decimal] = Field(None, ge=0)
+    detention: Optional[Decimal] = Field(None, ge=0)
 
     #--- step 4: tracking ---
     dispatch_note_date: Optional[date] = None

@@ -4,7 +4,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object
+from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived
 
 from app.imports.serializers import serialize_consignment
 
@@ -32,6 +32,13 @@ def create_consignment(
 
         consignment.items = consignment_items
         consignment.payments = consignment_payments
+
+        # Record who entered any landed-cost figure supplied at entry.
+        for item in consignment_items:
+            stamp_landed_cost_audit(item, user, item.elc is not None, item.alc is not None)
+
+        # Store the derived money totals + per-line variance.
+        recompute_derived(consignment)
 
         db.add(consignment)
         db.commit()

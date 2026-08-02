@@ -6,6 +6,8 @@ from app.auth.authorize_user import authorize
 from app.logistics.helpers import fetch_consignments_page
 from app.logistics.serializers import serialize_consignment
 from typing import Optional
+from datetime import date
+from fastapi import Query
 
 @router.get("/")
 def get_consignments_list(
@@ -13,9 +15,11 @@ def get_consignments_list(
     page : int = 1,
     page_size : int = 20,
     include_deleted : Optional[bool] = False,
-    status : Optional[str] = None,
-    order_type : Optional[str] = None,
-    shipping_line : Optional[str] = None,
+    status : Optional[list[str]] = Query(None),
+    order_type : Optional[list[str]] = Query(None),
+    customer : Optional[list[str]] = Query(None),
+    gate_out_from : Optional[date] = None,
+    gate_out_to : Optional[date] = None,
     q : Optional[str] = None
     ):
 
@@ -38,7 +42,8 @@ def get_consignments_list(
             page_size = 20
 
         consignments, total = fetch_consignments_page(
-            db, include_deleted, status, order_type, shipping_line, q, page, page_size
+            db, include_deleted, status, order_type, customer,
+            gate_out_from, gate_out_to, q, page, page_size
         )
 
         # Serializeing this page of orders

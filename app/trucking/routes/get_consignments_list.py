@@ -6,6 +6,7 @@ from app.auth.authorize_user import authorize
 from app.trucking.helpers import fetch_consignments_page
 from app.trucking.serializers import serialize_consignment
 from typing import Optional
+from fastapi import Query
 
 @router.get("/")
 def get_consignments_list(
@@ -13,10 +14,10 @@ def get_consignments_list(
     page : int = 1,
     page_size : int = 20,
     include_deleted : Optional[bool] = False,
-    movement_type : Optional[str] = None,
-    source : Optional[str] = None,
-    payment_status : Optional[str] = None,
-    shifting_type : Optional[str] = None,
+    movement_type : Optional[list[str]] = Query(None),
+    source : Optional[list[str]] = Query(None),
+    open_only : Optional[bool] = False,
+    pending_only : Optional[bool] = False,
     q : Optional[str] = None
     ):
 
@@ -39,8 +40,8 @@ def get_consignments_list(
             page_size = 20
 
         consignments, total = fetch_consignments_page(
-            db, include_deleted, movement_type, source, payment_status,
-            shifting_type, q, page, page_size
+            db, include_deleted, movement_type, source,
+            open_only, pending_only, q, page, page_size
         )
 
         # Serializeing this page of jobs

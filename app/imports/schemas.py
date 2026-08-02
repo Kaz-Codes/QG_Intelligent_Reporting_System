@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.enums import (
-    ConsignmentType, Currency, ModeOfShipment, PaymentInstrument,
+    ConsignmentType, Currency, Incoterm, ModeOfShipment, PaymentInstrument,
     PaymentStatus, RateSource, RequisitionType, Status, UnitOfMeasurement,
 )
 from datetime import date
@@ -58,8 +58,10 @@ class ConsignmentSchema(BaseModel):
     origin : Optional[str] = Field(None, max_length=255)
     currency : Optional[Currency] = None
     consignment_type : Optional[ConsignmentType] = None
+    incoterm : Optional[Incoterm] = None
     po_date : Optional[date] = None
     requisition_date : Optional[date] = None
+    required_date : Optional[date] = None
 
     #---finance---
     payment_instrument : Optional[PaymentInstrument] = None
@@ -89,6 +91,7 @@ class ConsignmentSchema(BaseModel):
     free_days_allowed : Optional[int] = Field(None, ge = 0)
     gate_out_date : Optional[date] = None
     demurrage_or_detention_paid : Optional[Decimal] = Field(None, ge = 0)
+    container_detention : Optional[Decimal] = Field(None, ge = 0)
     #---items and payments---
     items : Optional[list[ConsignmentItemSchema]] = []
     payments : Optional[list[ConsignmentPaymentSchema]] = []

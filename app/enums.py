@@ -89,17 +89,17 @@ class PortUsedAs(str, Enum):
 #--------------------------------
 
 class Status(str, Enum):
-    TT_LC_IN_PROCESS = "TT/LC in process"
-    UNDER_PRODUCTION = "Under production"
-    READY_AWAITING_SAILING = "Ready awaiting sailing"
-    IN_TRANSIT = "In transit"
-    ARRIVED_AT_PORT = "Arrived at port"
-    UNDER_CUSTOM_CLEARANCE = "Under custom clearance"
-    UNDER_EXAMINATION = "Under examination"
-    UNDER_ASSESSMENT = "Under assessment"
+    TT_LC_IN_PROCESS = "TT/LC in Process"
+    UNDER_PRODUCTION = "Under Production"
+    READY_AWAITING_SAILING = "Ready Awaiting Sailing"
+    IN_TRANSIT = "In Transit"
+    ARRIVED_AT_PORT = "Arrived at Port"
+    UNDER_CUSTOM_CLEARANCE = "Under Custom Clearance"
+    UNDER_EXAMINATION = "Under Examination"
+    UNDER_ASSESSMENT = "Under Assessment"
     ARRIVED_AT_QFL = "Arrived at QFL"
-    ON_ROAD = "On road"
-    ARRIVED_AT_WORKS = "Arrived at works"
+    ON_ROAD = "On Road"
+    ARRIVED_AT_WORKS = "Arrived at Works"
 
 
 #--------------------------------
@@ -195,6 +195,50 @@ class OrderType(str, Enum):
 
 
 #--------------------------------
+# LOGISTICS: DEPARTMENT
+#
+# Sits on the order header and drives the merged "Order Type"
+# label in the list (e.g. "Cement Export", "General Local").
+#--------------------------------
+
+class Department(str, Enum):
+    CEMENT = "Cement"
+    SUGAR = "Sugar"
+    GENERAL = "General"
+
+
+#--------------------------------
+# INCOTERM
+#
+# Shared by imports and logistics. Kept short: only the terms that
+# actually change who arranges freight, not the full ICC list. FOB
+# feeds the trucking module's import-FOB request derivation.
+#--------------------------------
+
+class Incoterm(str, Enum):
+    FOB = "FOB"
+    CIF = "CIF"
+    CFR = "CFR"
+    EXW = "EXW"
+    DAP = "DAP"
+
+
+#--------------------------------
+# LOGISTICS: PACKING STATUS
+#
+# Each package advances on its own through these stages. Separate
+# from the order-level LogisticsStatus below.
+#--------------------------------
+
+class PackingStatus(str, Enum):
+    PACKING_UNDER_MANUFACTURING = "Packing under manufacturing"
+    UNDER_PACKING = "Under Packing"
+    UNDER_PAINT = "Under Paint"
+    UNDER_FINAL_PACKING = "Under Final Packing"
+    PACKED = "Packed"
+
+
+#--------------------------------
 # LOGISTICS: THE STAGES AN ORDER MOVES THROUGH
 #
 # One list holding both the export and local stages.
@@ -238,6 +282,7 @@ class TruckingSource(str, Enum):
     MANUAL = "manual"
     FROM_LOGISTICS = "from-logistics"
     FROM_IMPORT_FOB = "from-import-fob"
+    FROM_EXPORT = "from-export"
 
 
 #--------------------------------
@@ -284,12 +329,3 @@ class VehicleTrackingStatus(str, Enum):
     LOADING = "Loading"
     ON_ROAD = "On road"
     DELIVERED = "Delivered"
-
-
-#--------------------------------
-# TRUCKING: WHETHER A BUILTY WAS ISSUED
-#--------------------------------
-
-class BuiltyStatus(str, Enum):
-    YES = "Yes"
-    NA = "NA"

@@ -144,14 +144,64 @@ logic lives in exactly one place:
 Almost every field can be filled later. Consignments therefore carry a draft
 state and a completeness calculation.
 
-- `save_draft` accepts anything, including empty required fields
-- `submit` enforces the full rule set
-- Django forms validate all-or-nothing by default, so this needs a `submitting`
-  flag checked inside `clean()` — two validation paths on one form
+State lives on the row as `record_state` (`'draft'` / `'submitted'`, column
+default `'draft'`, `server_default='draft'` so rows written straight to the
+table by the Excel loader come in as drafts). It is server-controlled — the
+client never sends it; only the submit endpoint changes it.
+
+- **Save draft** is the normal create / `PUT /consignments/{id}` — permissive,
+  accepts anything (or nothing), leaves `record_state` as `'draft'`.
+- **Submit** is `POST /consignments/{id}/submit` — runs the full rule set
+  (`helpers.submission_errors`, which mirrors the front end's
+  `consignmentSubmitSchema`) and only flips `record_state` to `'submitted'` if
+  nothing is missing; otherwise `422` with the list of gaps. Enforced
+  server-side because client validation is never the boundary.
+- Submitting does **not** lock the record — a submitted consignment is still
+  editable (see the closed lock below).
+
+The rules are NOT database constraints: drafts and submitted rows share one
+table and a draft may be empty, so completeness is a conditional rule checked
+in the application, never `NOT NULL`.
+
+Submit rule set (backend field names): `branch_id`, `supplier_id`, `origin`,
+`currency` present; ≥1 item; each item has `item_name`, `item_code`,
+`quantity`, `unit_of_measurement`, `requisition_type` + its conditional fields
+(the `REQUISITION_REQUIRED` dict: Store→`reference_number`;
+Engineering→`reference_number`+`job_number`+`mo_number`; Others→`description`);
+`payment_instrument`, `instrument_number`, `works`, `exchange_rate`,
+`rate_booked_on`, `current_status` present; `eta` not before `etd`.
+
+**The closed lock (separate from record_state).** A consignment closes when
+its status reaches "Arrived at works". `is_locked` (bool, `server_default
+false`) is set on the update that makes that transition; from then on **no
+role** may edit it — the update and submit endpoints return `423`. Only an
+**admin** can reopen it, via `POST /consignments/{id}/reopen`, which clears
+`is_locked` (the status is left alone). Being submitted never locks a record;
+only being closed does. Loaded historical rows import unlocked, so they stay
+editable for cleanup — the lock only engages on an in-app transition to
+"Arrived at works".
 
 Fields commonly filled later: batch no, H.S. code, consignment type, unit price,
 exchange rate, rate date, reference/job/MO numbers, and the entire clearance
 and landed-cost modules.
+
+**Logistics and trucking carry the same pair of columns and endpoints**, added
+as an opt-in capability (the frontend may call submit or ignore it entirely —
+the fields are server-controlled with `server_default`s, so nothing existing
+breaks):
+
+- Logistics: `record_state` + `is_locked`; `POST /logistics/{id}/submit`
+  (rules from the logistics `consignmentSchema`: customer name, origin by order
+  type, ≥1 item, each item detail + quantity>0) and `POST /logistics/{id}/reopen`.
+  Closes/locks when `current_status` reaches **"Delivered"**.
+- Trucking: `record_state` + `is_locked`; `POST /trucking/{id}/submit` (rules
+  from `truckingSubmitSchema`: reference no. for non-intrafactory, ≥1 vehicle,
+  container no. per vehicle for inbound) and `POST /trucking/{id}/reopen`.
+  Trucking has no stored job status, so it closes/locks when **every vehicle is
+  "Delivered"** (derived in `helpers.is_closed`).
+
+Reopen is admin-only in all three modules. Submitting never locks; only closing
+does.
 
 ## 9. Status list (ordered — do not reorder)
 
@@ -288,6 +338,31 @@ they are editing.
 Excel carries every column; PDF carries a readable subset in landscape.
 Both are one Django view: `GET /consignments/export/?<same querystring>&format=xlsx|pdf`,
 sharing the list view's queryset function so filters cannot drift apart.
+
+**List filters (backend query params).** Each module's `GET /<module>/` list
+endpoint applies every filter its list screen offers, in SQL, on the paged
+queryset. Multi-select filters are repeated query params (`?status=A&status=B`)
+bound to a list and applied as `IN`. Masters filter by **id** (`branch_id`,
+`supplier_id`) — never by free-text name; enums/statuses filter by their stored
+value; the frontend maps its selections to those. The contract:
+
+- **Imports** `GET /consignments/`: `status[]`, `stage` (one of the six
+  pipeline groups → its statuses), `branch_id[]`, `supplier_id[]`,
+  `requisition_type[]` (via the item lines), `missing_only` (= `record_state`
+  is draft), `etd_from`/`etd_to`, `include_closed` (default false hides
+  "Arrived at works"), `include_deleted`, `q`, `page`, `page_size`.
+- **Logistics** `GET /logistics/`: `status[]`, `order_type[]`, `customer[]`
+  (free-text `customer_name`, no master), `gate_out_from`/`gate_out_to`,
+  `include_deleted`, `q`, `page`, `page_size`.
+- **Trucking** `GET /trucking/`: `movement_type[]`, `source[]`, `open_only`
+  (job has no vehicles or any vehicle not yet delivered — trucking has no
+  stored job status), `pending_only` (= `record_state` is draft),
+  `include_deleted`, `q`, `page`, `page_size`.
+
+`missing_only`/`pending_only` are approximated by `record_state`, not the full
+per-field completeness calc. `include_deleted` (soft-deleted rows) is distinct
+from `include_closed` (closed-status rows). Keep this list and the list
+screens' filters in lockstep — add a param here in the same change.
 
 **List view table header.** Do not re-add `position:sticky` to
 `consignment_list.html`'s table header. The table sits inside an

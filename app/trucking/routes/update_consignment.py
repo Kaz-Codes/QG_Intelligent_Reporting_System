@@ -7,7 +7,7 @@ from app.auth.authorize_user import authorize
 from app.trucking.helpers import (
     updated_fields, verify_entry_ownership, apply_updates, new_vehicles_to_add,
     updated_vehicles, delete_missing, add_in_consignment_change_history,
-    fetch_consignment,
+    fetch_consignment, is_closed,
 )
 from app.trucking.models import TruckingVehicle
 from app.trucking.serializers import serialize_consignment, serialize_many
@@ -36,6 +36,14 @@ def update_consignment(
             raise HTTPException(
                 status_code=404,
                 detail="Trucking job not found"
+            )
+
+        # A closed job (every vehicle delivered) is locked for everyone until
+        # an admin reopens it.
+        if consignment.is_locked:
+            raise HTTPException(
+                status_code=423,
+                detail="This trucking job is closed. An admin must reopen it before it can be edited."
             )
 
         verify_entry_ownership(consignment, user, db)
@@ -79,6 +87,12 @@ def update_consignment(
             old_vehicle = consignment_vehicles_map.get(vehicle_id)
             if old_vehicle:
                 apply_updates(updated_vehicle, old_vehicle)
+
+        # If every vehicle is now delivered the job is closed, so lock it. The
+        # closing update itself goes through; only later edits are refused,
+        # until an admin reopens.
+        if is_closed(consignment):
+            consignment.is_locked = True
 
         db.commit()
         db.refresh(consignment)

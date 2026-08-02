@@ -7,6 +7,7 @@ from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    text,
 )
 from sqlalchemy.orm import (
     Mapped, mapped_column, relationship, declarative_mixin,
@@ -99,7 +100,27 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # FOB feeds the trucking module's import-FOB request derivation.
+    incoterm: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True
+    )
+
     po_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    # The day the requisition/indent was raised — before a supplier or PO
+    # exists. The gap to po_date is procurement lead time.
+    requisition_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    # The day the business actually needs the goods. Delay is measured
+    # against this, not a target the system enforces.
+    required_date: Mapped[Optional[date]] = mapped_column(
         Date,
         nullable=True
     )
@@ -160,10 +181,24 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # Derived, but STORED (recompute_derived, run on every save). foreign_total
+    # is the sum of the line totals; pkr_total is that at the booked exchange
+    # rate. The PKR figure is stored, not recomputed on read, so a later rate
+    # change or edit can never silently restate what a printed report showed.
+    foreign_total: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 4),
+        nullable=True
+    )
+
+    pkr_total: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 2),
+        nullable=True
+    )
+
     #--- status ---
     current_status: Mapped[str] = mapped_column(
         String(50),
-        default="TT/LC in process",
+        default="TT/LC in Process",
         nullable=False,
         index=True
     )
@@ -205,6 +240,12 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # Container detention — separate from port demurrage above. PKR.
+    container_detention: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
     #--- shipping ---
     loading_port_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("ports.id", ondelete="SET NULL"),
@@ -214,6 +255,32 @@ class Consignment(Base, TimestampMixin):
     delivery_port_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("ports.id", ondelete="SET NULL"),
         nullable=True
+    )
+
+    # Draft vs submitted. A draft saves with anything (or nothing) filled;
+    # submitting runs the full rule set (see helpers.submission_errors) and,
+    # only if it passes, flips this to "submitted". Submitting never locks the
+    # record — editing stays allowed after it. server_default so rows written
+    # straight to the table (the Excel loader) come in as drafts without the
+    # loader having to set it.
+    record_state: Mapped[str] = mapped_column(
+        String(20),
+        default="draft",
+        server_default="draft",
+        nullable=False,
+        index=True
+    )
+
+    # The closed lock. A consignment closes when its status reaches "Arrived
+    # at works"; from then on nobody may edit it until an admin reopens it
+    # (which clears this flag). This is separate from record_state: a
+    # submitted consignment is still editable, a closed one is not.
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+        index=True
     )
 
     # Deleting only sets this flag. The row stays, so an admin or
@@ -379,6 +446,41 @@ class ConsignmentItem(Base, TimestampMixin):
 
     alc: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
+        nullable=True
+    )
+
+    # ELC and ALC are usually entered weeks apart by different people, so each
+    # figure records who entered it and when, separately — one updated_by /
+    # updated_at pair on the line cannot answer "who entered which".
+    elc_updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    elc_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    alc_updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    alc_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    # Variance = ALC - ELC, stored both as an absolute PKR figure and as a
+    # percentage of ELC (recompute_derived). Stored so reports do not recompute.
+    variance_absolute: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
+    variance_percentage: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(9, 2),
         nullable=True
     )
 

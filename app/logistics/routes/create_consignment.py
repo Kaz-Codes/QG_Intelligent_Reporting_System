@@ -4,7 +4,8 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.logistics.helpers import create_consignment_object, fetch_consignment
+from app.logistics.helpers import create_consignment_object, create_child_objects, fetch_consignment
+from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment
 
 @router.post("/")
@@ -24,8 +25,11 @@ def create_consignment(
         # action)
         user = authorize(user_payload, ["admin", "manager", "entry operator"], db)
 
-        # Create object to add in database
+        # Create the header and its line objects
         consignment = create_consignment_object(consignment_data, user)
+        consignment.items = create_child_objects(consignment_data.items, LogisticsItem)
+        consignment.packages = create_child_objects(consignment_data.packages, LogisticsPackage)
+        consignment.containers = create_child_objects(consignment_data.containers, LogisticsContainer)
 
         db.add(consignment)
         db.commit()

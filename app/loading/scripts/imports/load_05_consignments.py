@@ -36,7 +36,7 @@ EXCEL_FILE = next(
     if f.suffix == ".xlsx" and not f.name.startswith("~$")
 )
 
-DEFAULT_STATUS = "TT/LC in process"
+DEFAULT_STATUS = "TT/LC in Process"
 
 CURRENCY_MAP = {"$": "USD", "US$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY", "RMB": "CNY"}
 

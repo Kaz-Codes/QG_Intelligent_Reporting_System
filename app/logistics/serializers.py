@@ -18,6 +18,9 @@ def serialize_consignment(consignment):
         for column in inspect(consignment).mapper.column_attrs
     }
 
+    data["items"] = serialize_many(consignment.items)
+    data["packages"] = serialize_many(consignment.packages)
+    data["containers"] = serialize_many(consignment.containers)
     data["status_updates"] = serialize_many(consignment.status_updates)
     data["change_history"] = serialize_many(consignment.change_history)
 

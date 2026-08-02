@@ -3,7 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert
+from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived
 from app.imports.serializers import serialize_consignment
 from datetime import datetime, timezone
 
@@ -62,6 +62,10 @@ def revert_update(
 
         # Revert updates
         revert(consignment_history, consignment, db)
+
+        # Derived totals are not part of the change history (they are never
+        # sent by the client), so recompute them from the reverted state.
+        recompute_derived(consignment)
 
         db.commit()
         db.refresh(consignment)

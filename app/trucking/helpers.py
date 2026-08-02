@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_, exists
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.inspection import inspect
 from datetime import datetime, timezone, date
@@ -10,6 +10,7 @@ from app.trucking.models import (
 )
 from app.trucking.serializers import serialize_many
 from app.accounts.models import Role
+from app.enums import VehicleTrackingStatus
 
 
 #----------------------------------
@@ -86,8 +87,8 @@ def create_vehicle_object(consignment_data):
     objects = []
 
     for vehicle in vehicles:
-        # exclude_none so an omitted tracking or builty status falls back to
-        # the column default instead of writing NULL over it
+        # exclude_none so an omitted tracking status falls back to the
+        # column default instead of writing NULL over it
         vehicle_dict = vehicle.model_dump(exclude_none=True)
         objects.append(
             TruckingVehicle(**vehicle_dict)
@@ -122,23 +123,44 @@ def fetch_consignment(db, consignment_id):
 #-------------------------------------
 
 def fetch_consignments_page(db, include_deleted, movement_type, source,
-                            payment_status, shifting_type, q, page, page_size):
+                            open_only, pending_only, q, page, page_size):
+    # movement_type and source are lists (the list screen filters are
+    # multi-select), so each is an IN filter, not an equals.
     conditions = []
 
     if not include_deleted:
         conditions.append(TruckingConsignment.is_deleted == False)
 
     if movement_type:
-        conditions.append(TruckingConsignment.movement_type == movement_type)
+        conditions.append(TruckingConsignment.movement_type.in_(movement_type))
 
     if source:
-        conditions.append(TruckingConsignment.source == source)
+        conditions.append(TruckingConsignment.source.in_(source))
 
-    if payment_status:
-        conditions.append(TruckingConsignment.payment_status == payment_status)
+    # "Open only" — a job is closed once it has vehicles and every one of them
+    # is delivered (there is no stored job status). So an open job is one that
+    # has no vehicles yet, or still has at least one vehicle not delivered.
+    if open_only:
+        delivered = VehicleTrackingStatus.DELIVERED.value
+        has_vehicle = exists().where(
+            and_(
+                TruckingVehicle.consignment_id == TruckingConsignment.id,
+                TruckingVehicle.is_deleted == False,
+            )
+        )
+        has_undelivered = exists().where(
+            and_(
+                TruckingVehicle.consignment_id == TruckingConsignment.id,
+                TruckingVehicle.is_deleted == False,
+                TruckingVehicle.tracking_status != delivered,
+            )
+        )
+        conditions.append(or_(~has_vehicle, has_undelivered))
 
-    if shifting_type:
-        conditions.append(TruckingConsignment.shifting_type == shifting_type)
+    # "Pending only" — the server-side notion of an incomplete job is a draft
+    # (a submitted one has passed the full rule set).
+    if pending_only:
+        conditions.append(TruckingConsignment.record_state == "draft")
 
     if q:
         pattern = "%" + q.strip() + "%"
@@ -463,3 +485,54 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
                     if isinstance(change, dict) and "old_value" in change:
                         old_value = coerce_value(model, column.key, change["old_value"])
                         setattr(consignment_data, column.key, old_value)
+
+
+#---------------------------------------
+# THE CLOSED LOCK
+#
+# Trucking has no stored job-level status — the job status is a rollup over
+# the vehicles. So a job is "closed" once it has vehicles and every one of
+# them is "Delivered". While closed it cannot be edited by anyone until an
+# admin reopens it.
+#---------------------------------------
+
+def is_closed(consignment):
+    active_vehicles = [v for v in consignment.vehicles if not v.is_deleted]
+    if not active_vehicles:
+        return False
+    return all(
+        vehicle.tracking_status == VehicleTrackingStatus.DELIVERED.value
+        for vehicle in active_vehicles
+    )
+
+
+#---------------------------------------
+# SUBMIT VALIDATION
+#
+# The rule set enforced only when a draft is submitted — never at the database
+# level. Mirrors the front end's truckingSubmitSchema. Returns a list of
+# messages; empty means complete enough to submit. Opt-in: the front end only
+# sees these if it calls the submit endpoint.
+#---------------------------------------
+
+def submission_errors(consignment):
+    errors = []
+
+    # Shipment reference / IDM is required for outbound and inbound movements
+    # (not for intrafactory).
+    if consignment.movement_type and consignment.movement_type != "Intrafactory":
+        if not consignment.reference_no:
+            errors.append("Shipment reference / IDM is required for outbound and inbound movements")
+
+    active_vehicles = [v for v in consignment.vehicles if not v.is_deleted]
+
+    if not active_vehicles:
+        errors.append("At least one vehicle is required")
+
+    # Container no. is required per vehicle for inbound (import FOB) jobs.
+    if consignment.movement_type == "Inbound":
+        for index, vehicle in enumerate(active_vehicles, start=1):
+            if not vehicle.container_no:
+                errors.append(f"Vehicle {index}: container no. is required for import FOB")
+
+    return errors

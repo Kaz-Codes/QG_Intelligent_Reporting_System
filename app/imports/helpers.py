@@ -6,10 +6,36 @@ from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
 
 from app.accounts.models import Role
+from app.enums import Status
 from sqlalchemy import select
 from datetime import datetime, timezone, date
 from sqlalchemy.inspection import inspect
 from decimal import Decimal
+
+#-------------------------------------
+# THE SIX-STAGE PIPELINE
+#
+# The list view rolls the eleven statuses into six stages. Kept as stored
+# Status values so a stage filter maps straight to an IN clause. "Arrived at
+# works" is the one closed status, hidden from the list by default.
+#-------------------------------------
+
+STAGE_GROUPS = {
+    "Pre-shipment": [Status.TT_LC_IN_PROCESS.value],
+    "Production": [Status.UNDER_PRODUCTION.value, Status.READY_AWAITING_SAILING.value],
+    "In transit": [Status.IN_TRANSIT.value],
+    "Clearance": [
+        Status.ARRIVED_AT_PORT.value,
+        Status.UNDER_CUSTOM_CLEARANCE.value,
+        Status.UNDER_EXAMINATION.value,
+        Status.UNDER_ASSESSMENT.value,
+    ],
+    "Inbound": [Status.ARRIVED_AT_QFL.value, Status.ON_ROAD.value],
+    "Closed": [Status.ARRIVED_AT_WORKS.value],
+}
+
+CLOSED_STATUS_VALUE = Status.ARRIVED_AT_WORKS.value
+
 
 def coerce_value(model, field, value):
     if value is None:
@@ -140,32 +166,57 @@ def fetch_consignment(db, consignment_id):
 # item line, so it is filtered through a sub query on the items.
 #-------------------------------------
 
-def fetch_consignments_page(db, include_deleted, status, branch_id, supplier_id, consignment_type, requisition_type, q, page, page_size):
+def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
+                            branch_id, supplier_id, requisition_type,
+                            missing_only, etd_from, etd_to, q, page, page_size):
+    # status, branch_id, supplier_id and requisition_type are lists (the list
+    # screen filters are multi-select), so each is an IN filter, not an equals.
     conditions = []
 
     if not include_deleted:
         conditions.append(Consignment.is_deleted == False)
 
+    # A stage is a group of statuses (the six-stage pipeline strip); it narrows
+    # to that group's statuses.
+    if stage and stage != "all":
+        stage_statuses = STAGE_GROUPS.get(stage)
+        if stage_statuses:
+            conditions.append(Consignment.current_status.in_(stage_statuses))
+
     if status:
-        conditions.append(Consignment.current_status == status)
+        conditions.append(Consignment.current_status.in_(status))
 
-    if branch_id is not None:
-        conditions.append(Consignment.branch_id == branch_id)
+    # "Arrived at works" is closed and hidden by default, unless the caller
+    # asks to include it, is looking at the Closed stage, or explicitly filters
+    # to that status. Mirrors the list view's own rule.
+    if not include_closed and stage != "Closed" and not (status and CLOSED_STATUS_VALUE in status):
+        conditions.append(Consignment.current_status != CLOSED_STATUS_VALUE)
 
-    if supplier_id is not None:
-        conditions.append(Consignment.supplier_id == supplier_id)
+    if branch_id:
+        conditions.append(Consignment.branch_id.in_(branch_id))
 
-    if consignment_type:
-        conditions.append(Consignment.consignment_type == consignment_type)
+    if supplier_id:
+        conditions.append(Consignment.supplier_id.in_(supplier_id))
 
     if requisition_type:
         conditions.append(
             Consignment.id.in_(
                 select(ConsignmentItem.consignment_id).where(
-                    ConsignmentItem.requisition_type == requisition_type
+                    ConsignmentItem.requisition_type.in_(requisition_type)
                 )
             )
         )
+
+    # "Missing information only" — the server-side notion of an incomplete
+    # record is a draft (a submitted one has passed the full rule set).
+    if missing_only:
+        conditions.append(Consignment.record_state == "draft")
+
+    if etd_from:
+        conditions.append(Consignment.etd >= etd_from)
+
+    if etd_to:
+        conditions.append(Consignment.etd <= etd_to)
 
     if q:
         pattern = "%" + q.strip() + "%"
@@ -628,3 +679,146 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
                     if isinstance(change, dict) and "old_value" in change:   # <-- skips "id" (a bare int)
                         old_value = coerce_value(model, column.key, change["old_value"])  # <-- see #6
                         setattr(consignment_data, column.key, old_value)
+
+
+#---------------------------------------
+# THE CLOSED LOCK
+#
+# A consignment closes when its status reaches "Arrived at works". While
+# closed it cannot be edited by anyone until an admin reopens it. The check
+# lives here so the one status value that means "closed" is written once.
+#---------------------------------------
+
+def is_closed(consignment):
+    return consignment.current_status == Status.ARRIVED_AT_WORKS.value
+
+
+#---------------------------------------
+# SUBMIT VALIDATION
+#
+# The full rule set, enforced only when a draft is submitted — never at the
+# database level, because drafts and submitted rows share one table and a
+# draft is allowed to be empty. Mirrors the front end's consignmentSubmitSchema
+# so the two cannot drift. Returns a list of human readable messages; an empty
+# list means the consignment is complete enough to submit.
+#
+# The requisition rules are a single dict, so adding a requisition type later
+# is a one line change here (and its mirror in the front end), not a hunt
+# through if-statements.
+#---------------------------------------
+
+REQUISITION_REQUIRED = {
+    "Store": [("reference_number", "Reference no.")],
+    "Engineering": [
+        ("reference_number", "Reference no."),
+        ("job_number", "Job no."),
+        ("mo_number", "MO no."),
+    ],
+    "Others": [("description", "Description")],
+}
+
+
+#---------------------------------------
+# STORED COMPUTED VALUES
+#
+# Calculated values are never keyed in, but the money totals are STORED (not
+# recomputed on read) so a later rate change or edit can never restate what a
+# printed report showed. Recomputed on every save from the fields it derives
+# from — line quantities x unit prices for the foreign total, the booked rate
+# for the PKR total, and ALC - ELC per line for variance.
+#---------------------------------------
+
+def recompute_derived(consignment):
+    active_items = [item for item in consignment.items if not item.is_deleted]
+
+    foreign_total = Decimal("0")
+    for item in active_items:
+        if item.quantity is not None and item.unit_price is not None:
+            foreign_total += item.quantity * item.unit_price
+
+    consignment.foreign_total = foreign_total
+
+    rate = consignment.exchange_rate
+    consignment.pkr_total = (foreign_total * rate) if rate is not None else None
+
+    for item in active_items:
+        if item.elc is not None and item.alc is not None:
+            variance = item.alc - item.elc
+            item.variance_absolute = variance
+            item.variance_percentage = (variance / item.elc * 100) if item.elc else None
+        else:
+            item.variance_absolute = None
+            item.variance_percentage = None
+
+
+#---------------------------------------
+# ELC / ALC AUDIT
+#
+# Stamp who entered each landed-cost figure and when, on the line, only for
+# the figure that actually changed. Called from create (a figure supplied at
+# entry) and update (a figure that changed).
+#---------------------------------------
+
+def stamp_landed_cost_audit(item, user, stamp_elc, stamp_alc):
+    now = datetime.now(timezone.utc)
+    if stamp_elc:
+        item.elc_updated_by_id = user.id
+        item.elc_updated_at = now
+    if stamp_alc:
+        item.alc_updated_by_id = user.id
+        item.alc_updated_at = now
+
+
+def submission_errors(consignment):
+    errors = []
+
+    if not consignment.branch_id:
+        errors.append("Branch is required")
+    if not consignment.supplier_id:
+        errors.append("Supplier is required")
+    if not consignment.origin:
+        errors.append("Country of origin is required")
+    if not consignment.currency:
+        errors.append("Currency is required")
+
+    active_items = [item for item in consignment.items if not item.is_deleted]
+
+    if not active_items:
+        errors.append("Add at least one item")
+
+    for index, item in enumerate(active_items, start=1):
+        if not item.item_name:
+            errors.append(f"Item {index}: item name is required")
+        if not item.item_code:
+            errors.append(f"Item {index}: item code is required")
+        if item.quantity is None:
+            errors.append(f"Item {index}: quantity is required")
+        if not item.unit_of_measurement:
+            errors.append(f"Item {index}: unit of measure is required")
+
+        if not item.requisition_type:
+            errors.append(f"Item {index}: requisition type is required")
+        else:
+            for field, label in REQUISITION_REQUIRED.get(item.requisition_type, []):
+                if not getattr(item, field):
+                    errors.append(
+                        f"Item {index}: {label} is required for a {item.requisition_type} item"
+                    )
+
+    if not consignment.payment_instrument:
+        errors.append("Payment instrument is required")
+    if not consignment.instrument_number:
+        errors.append("Instrument number is required")
+    if not consignment.works:
+        errors.append("Works is required")
+    if consignment.exchange_rate is None:
+        errors.append("Exchange rate is required")
+    if not consignment.rate_booked_on:
+        errors.append("The date the rate was booked is required")
+    if not consignment.current_status:
+        errors.append("Status is required")
+
+    if consignment.etd and consignment.eta and consignment.eta < consignment.etd:
+        errors.append("ETA cannot be before ETD")
+
+    return errors

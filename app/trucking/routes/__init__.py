@@ -10,9 +10,15 @@
 from app.trucking.routes.router import router
 
 from app.trucking.routes import create_consignment
+# Registered before get_consignment so GET /export and GET /open-requests are
+# not captured by the GET /{consignment_id} route.
+from app.trucking.routes import export_consignments
+from app.trucking.routes import open_requests
 from app.trucking.routes import get_consignment
 from app.trucking.routes import get_consignments_list
 from app.trucking.routes import update_consignment
+from app.trucking.routes import submit_consignment
+from app.trucking.routes import reopen_consignment
 from app.trucking.routes import delete_consignment
 from app.trucking.routes import undo_delete
 from app.trucking.routes import get_consignment_history_list

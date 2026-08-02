@@ -4,7 +4,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, is_closed, stamp_landed_cost_audit, recompute_derived
 
 from app.imports.helpers import fetch_consignment
 from app.imports.models import ConsignmentItem, Payment
@@ -35,7 +35,15 @@ def update_consignment(
                 status_code=404,
                 detail="Consignment not found"
             )
-        
+
+        # A closed consignment (status reached "Arrived at works") is locked
+        # for everyone until an admin reopens it.
+        if consignment.is_locked:
+            raise HTTPException(
+                status_code=423,
+                detail="This consignment is closed. An admin must reopen it before it can be edited."
+            )
+
         verify_entry_ownership(consignment, user, db)
 
         updation_dict = updated_fields(consignment, consignment_data, db)
@@ -69,6 +77,8 @@ def update_consignment(
             item = ConsignmentItem(**item_dict)
             consignment.items.append(item)
             created_items.append(item)
+            # Record who entered any landed-cost figure supplied on a new line.
+            stamp_landed_cost_audit(item, user, item.elc is not None, item.alc is not None)
 
         created_payments = []
         for payment_schema in new_payments:
@@ -88,6 +98,13 @@ def update_consignment(
         # Applying updates
         apply_updates(updation_dict, consignment)
 
+        # If this update pushed the status to "Arrived at works" the
+        # consignment is now closed, so lock it. The closing update itself
+        # goes through (it started from an unlocked state); only later edits
+        # are refused, until an admin reopens.
+        if is_closed(consignment):
+            consignment.is_locked = True
+
         consignment_items_map = {item.id : item for item in consignment.items}
 
         consignment_payments_map = {payment.id : payment for payment in consignment.payments}
@@ -99,13 +116,19 @@ def update_consignment(
             old_item = consignment_items_map.get(item_id)
             if old_item:
                 apply_updates(updated_item, old_item)
+                # Stamp the landed-cost audit only for the figure that changed.
+                if "elc" in updated_item or "alc" in updated_item:
+                    stamp_landed_cost_audit(old_item, user, "elc" in updated_item, "alc" in updated_item)
 
         for updated_payment in payment_updates:
             payment_id = updated_payment.get("id")
             old_payment = consignment_payments_map.get(payment_id)
             if old_payment:
-                apply_updates(updated_payment, old_payment)        
-                
+                apply_updates(updated_payment, old_payment)
+
+        # Recompute + store the derived money totals and per-line variance from
+        # the now-updated lines and rate.
+        recompute_derived(consignment)
 
         db.commit()
         db.refresh(consignment)

@@ -7,6 +7,7 @@ from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,15 +22,27 @@ if TYPE_CHECKING:
 #
 # Shape of the data, kept deliberately close to the imports module:
 #
-#     LogisticsConsignment              one export or local order
+#     LogisticsConsignment              one export or local order (one batch)
 #       |
+#       +-- LogisticsItem               the things being shipped (per item)
+#       +-- LogisticsPackage            the physical packages they go in
+#       +-- LogisticsContainer          the containers booked for the order
 #       +-- LogisticsStatusHistory      a log of every status change
 #       +-- LogisticsChangeHistory      what a field was before it changed
 #
-# A logistics order is flatter than an import. It carries one item detail,
-# one customer and a fixed set of expenditure figures, so there is no
-# repeating item or payment child table the way imports has. Everything a
-# step captures sits on the order itself.
+# An order is now a header with repeating item, package and container lines,
+# the same header + line pattern imports uses. Two collections that hang off
+# a line and are always written as a whole from the front end are kept as JSON
+# rather than their own tables, so a save is one round trip and a revert is one
+# field:
+#
+#   * a package's per-item allocations (LogisticsPackage.allocations), and
+#   * a per-item RFD-date change feed (LogisticsItem.rfd_history), and
+#   * the order's remarks feed (LogisticsConsignment.remarks_log).
+#
+# The MO / batch grouping and cross-batch item sharing are driven by the front
+# end; the backend stores what it is given (batch_no, allocation refs) and does
+# not itself renumber batches or resolve cross-batch references.
 #
 # Two rules carried over from imports:
 #
@@ -57,6 +70,12 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # Cement / Sugar / General. Merged with order_type for the list label.
+    department: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True
+    )
+
     # Origin is a country for exports, and city + province for local orders.
     # All three are kept; the front end fills the pair that matches.
     origin_country: Mapped[Optional[str]] = mapped_column(
@@ -79,102 +98,30 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
-    item_detail: Mapped[Optional[str]] = mapped_column(
-        String(500),
-        nullable=True
-    )
-
-    quantity: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(14, 3),
-        nullable=True
-    )
-
-    net_weight: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(14, 3),
-        nullable=True
-    )
-
-    gross_weight: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(14, 3),
-        nullable=True
-    )
-
-    # IDM is captured for every order. Export orders also carry an export no.
-    idm: Mapped[Optional[str]] = mapped_column(
+    # MO number is a grouping key, not a unique id. Several orders (batches)
+    # can share one MO. batch_no is assigned per MO by the front end and kept
+    # here as given; batch_label is its renameable display label.
+    mo_no: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True
     )
 
-    export_no: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    batch_no: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    #--- step 2: transportation ---
-    # delay days (gate out - dispatch note) and rate per weight
-    # (actual freight / gross weight) are worked out on the front end and
-    # never stored, the same way transit time is handled in imports.
-    transporter_name: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True
-    )
-
-    vehicle_type: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    gate_out_date: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
-    dispatch_note_date: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
-    quoted_freight: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(14, 2),
-        nullable=True
-    )
-
-    actual_freight: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(14, 2),
-        nullable=True
-    )
-
-    actual_delivery_date: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
-    origin_factory: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True
-    )
-
-    destination: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True
-    )
-
-    #--- step 3: shipping ---
-    container_count: Mapped[Optional[int]] = mapped_column(
+    batch_no: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True
     )
 
-    container_type: Mapped[Optional[str]] = mapped_column(
+    batch_label: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True
     )
 
+    incoterm: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True
+    )
+
+    #--- step 3: shipping ---
     # Port of loading and port of discharge
     pol: Mapped[Optional[str]] = mapped_column(
         String(255),
@@ -231,6 +178,12 @@ class LogisticsConsignment(Base, TimestampMixin):
     )
 
     transportation_charges: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
+    # Container detention — applies to any order with containers.
+    container_detention: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2),
         nullable=True
     )
@@ -301,9 +254,53 @@ class LogisticsConsignment(Base, TimestampMixin):
         index=True
     )
 
-    remarks: Mapped[Optional[str]] = mapped_column(
-        String(500),
+    # The day the goods left the works. Transportation is not a logistics
+    # step; the order hands off to trucking, and this is the one date the
+    # status step keeps for the handoff.
+    gate_out_date: Mapped[Optional[date]] = mapped_column(
+        Date,
         nullable=True
+    )
+
+    # Set once the order has been handed to the trucking module.
+    sent_to_trucking: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    # A feed of remark entries: {id, text, authored_by, authored_at, system}.
+    # System entries are generated on the front end (e.g. from RFD changes);
+    # user entries are typed. Stored whole, so it is one field to read and
+    # write.
+    remarks_log: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False
+    )
+
+    # Draft vs submitted. Optional, opt-in from the front end: a draft saves
+    # with anything filled (the normal create/update); submitting runs the
+    # rule set (helpers.submission_errors) and only then flips this to
+    # "submitted". Submitting never locks the order. server_default so rows
+    # written straight to the table come in as drafts.
+    record_state: Mapped[str] = mapped_column(
+        String(20),
+        default="draft",
+        server_default="draft",
+        nullable=False,
+        index=True
+    )
+
+    # The closed lock. An order closes when its status reaches "Delivered";
+    # from then on nobody may edit it until an admin reopens it. Separate from
+    # record_state — a submitted order is still editable, a closed one is not.
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+        index=True
     )
 
     #--- who made it ---
@@ -342,6 +339,21 @@ class LogisticsConsignment(Base, TimestampMixin):
     )
 
     #--- everything that hangs off an order ---
+    items: Mapped[list["LogisticsItem"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
+    )
+
+    packages: Mapped[list["LogisticsPackage"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
+    )
+
+    containers: Mapped[list["LogisticsContainer"]] = relationship(
+        back_populates="consignment",
+        cascade="all, delete-orphan"
+    )
+
     status_updates: Mapped[list["LogisticsStatusHistory"]] = relationship(
         back_populates="consignment",
         cascade="all, delete-orphan"
@@ -350,6 +362,211 @@ class LogisticsConsignment(Base, TimestampMixin):
     change_history: Mapped[list["LogisticsChangeHistory"]] = relationship(
         back_populates="consignment",
         cascade="all, delete-orphan"
+    )
+
+
+#--------------------------------
+# LOGISTICS ITEMS TABLE
+#
+# One row per item. Net weight (quantity x unit weight) is worked out on the
+# front end and never stored. rfd_history is the per-item feed of Planned /
+# Actual RFD date changes, kept whole as JSON.
+#--------------------------------
+
+class LogisticsItem(Base, TimestampMixin):
+    __tablename__ = "logistics_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("logistics_consignments.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    job_no: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    item_detail: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True
+    )
+
+    quantity: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    unit_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    gross_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    planned_rfd_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    actual_rfd_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    # Feed of {id, field, previous_value, new_value, changed_by, changed_at,
+    # remark}. Written whole from the front end.
+    rfd_history: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False
+    )
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    consignment: Mapped["LogisticsConsignment"] = relationship(
+        back_populates="items"
+    )
+
+
+#--------------------------------
+# LOGISTICS PACKAGES TABLE
+#
+# One row per physical package. allocations is the per-item quantity placed in
+# this package, kept whole as JSON: a list of
+# {id, item_id, source_order_id, quantity}. source_order_id lets a package
+# reference an item owned by a sibling batch under the same MO — the items are
+# shared, not copied, and this reference is what the front end drives.
+#--------------------------------
+
+class LogisticsPackage(Base, TimestampMixin):
+    __tablename__ = "logistics_packages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("logistics_consignments.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    colour_code: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    packing_works: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
+    packing_ready_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    packing_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    quoted_packing_cost: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
+    actual_packing_cost: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
+    gross_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(50),
+        default="Packing under manufacturing",
+        nullable=False
+    )
+
+    allocations: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False
+    )
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    consignment: Mapped["LogisticsConsignment"] = relationship(
+        back_populates="packages"
+    )
+
+
+#--------------------------------
+# LOGISTICS CONTAINERS TABLE
+#
+# One row per container booked for the order.
+#--------------------------------
+
+class LogisticsContainer(Base, TimestampMixin):
+    __tablename__ = "logistics_containers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    consignment_id: Mapped[int] = mapped_column(
+        ForeignKey("logistics_consignments.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    container_no: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    container_type: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    consignment: Mapped["LogisticsConsignment"] = relationship(
+        back_populates="containers"
     )
 
 
