@@ -29,7 +29,10 @@ from app.loading.scripts.etl_common import (
     bulk_insert,
 )
 
-DIRECTORY = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
+CURRENT_DIR = Path(__file__).resolve().parents[2]
+DIRECTORY = CURRENT_DIR / "data" / "imports"
+
+# DIRECTORY = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
 
 EXCEL_FILE = next(
     f for f in DIRECTORY.iterdir()

@@ -6,7 +6,10 @@ from app.loading.scripts.etl_common import (
 )
 
 from pathlib import Path
-directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\stocks")
+
+CURRENT_DIR = Path(__file__).resolve().parents[2]
+directory = CURRENT_DIR / "data" / "stocks"
+# directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\stocks")
 
 files = list(directory.iterdir())
 

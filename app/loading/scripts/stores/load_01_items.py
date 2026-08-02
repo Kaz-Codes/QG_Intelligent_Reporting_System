@@ -13,7 +13,10 @@ from pathlib import Path
 folders = ["items_database", "purchases", "stocks", "store_requisitions"]
 file_names = {}
 for folder in folders:
-    directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data") /folder
+    CURRENT_DIR = Path(__file__).resolve().parents[2]
+    directory = CURRENT_DIR / "data" / folder
+
+    # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data") /folder
     
     files = list(directory.iterdir())
 

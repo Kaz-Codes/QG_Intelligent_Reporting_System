@@ -17,7 +17,11 @@ from pathlib import Path
 
 from app.loading.scripts.etl_common import read_sheet, clean_text, bulk_insert
 
-DIRECTORY = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
+
+CURRENT_DIR = Path(__file__).resolve().parents[2]
+DIRECTORY = CURRENT_DIR / "data" / "imports"
+
+# DIRECTORY = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
 
 # the real workbook, skipping any ~$ excel lock file
 EXCEL_FILE = next(

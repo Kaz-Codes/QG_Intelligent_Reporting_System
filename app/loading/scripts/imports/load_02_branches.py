@@ -5,7 +5,11 @@ from app.loading.scripts.etl_common import (
     read_sheet, clean_text, bulk_insert, clean_int
 )
 from pathlib import Path
-directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
+
+CURRENT_DIR = Path(__file__).resolve().parents[2]
+directory = CURRENT_DIR / "data" / "imports"
+
+# directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
 
 files = list(directory.iterdir())
 
