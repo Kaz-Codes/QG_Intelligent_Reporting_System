@@ -26,7 +26,7 @@ from sqlalchemy import select
 # today.
 #-------------------------------------------
 
-TOKEN_HOURS = 1
+TOKEN_HOURS = 3
 
 
 class LoginSchema(BaseModel):

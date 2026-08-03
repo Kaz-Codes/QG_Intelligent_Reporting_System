@@ -60,7 +60,10 @@ def inventory_dashboard(
                 item_categories.add(stock.item.category)
 
         data = {
-            "rows": rows,
+            # The "view data" table is being removed from the dashboard, so
+            # only the aggregates + filter option lists are returned. The
+            # serialized rows are still built above, but only to feed the
+            # aggregates, not shipped over the wire.
             **serialize_inventory_dashboard(rows),
             "statuses": STOCK_STATUSES,
             "reorder_statuses": REORDER_STATUSES,

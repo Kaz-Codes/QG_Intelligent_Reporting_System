@@ -256,7 +256,9 @@ from the whole table; multi-select filters are repeated query params.
 
 - imports/logistics read the operational tables; **purchases** and **inventory**
   read the flat loaded stores tables (`purchases_data`, `stock`, `issuance`,
-  `store_requisition`) and return **rows + aggregates + option lists**.
+  `store_requisition`) and return **aggregates + option lists only** (the
+  per-row "view data" table was dropped, so no row list is shipped — keeps the
+  payload in KBs).
 - Purchases derives an order **status** (Pending/Completed/Delayed) and overdue;
   inventory derives **stock status**, **reorder level** (from store
   requisitions), and **days-of-stock runway** (from issuance).

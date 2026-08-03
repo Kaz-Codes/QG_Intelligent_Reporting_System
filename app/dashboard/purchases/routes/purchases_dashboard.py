@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.dashboard.purchases.helpers import fetch_consignments, fetch_filtered_consignments
-from app.dashboard.purchases.serializers import serialize_rows, serialize_purchases_dashboard
+from app.dashboard.purchases.serializers import serialize_purchases_dashboard
 from app.dashboard.purchases.calculations import derive_status, PURCHASE_STATUSES
 from typing import Optional
 from datetime import date
@@ -66,7 +66,9 @@ def purchases_dashboard(
                 item_categories.add(row.item.category)
 
         data = {
-            "rows": serialize_rows(rows),
+            # The "view data" table is being removed from the dashboard, so
+            # only the aggregates + filter option lists are returned (keeping
+            # the payload in KBs, like the imports dashboard).
             **serialize_purchases_dashboard(rows),
             "statuses": PURCHASE_STATUSES,
             "suppliers": sorted(suppliers),

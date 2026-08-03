@@ -8,6 +8,8 @@ from app.loading.scripts.imports.load_02_branches import load_branches
 from app.loading.scripts.imports.load_03_clearing_agent import load_clearing_agent
 from app.loading.scripts.imports.load_04_ports import load_ports
 from app.loading.scripts.imports.load_05_consignments import load_consignments
+from app.loading.scripts.logistics.load_01_logistics import load_logistics
+from app.loading.scripts.logistics.load_03_trucking import load_trucking
 
 from app.loading.database_connection import cursor, connection
 
@@ -59,5 +61,8 @@ def call_load():
     load_data("Clearing Agents", load_clearing_agent)
     load_data("Ports", load_ports)
     load_data("Consignments", load_consignments)
+    load_data("Logistics", load_logistics)
+    load_data("Trucking", load_trucking)
+
 
     print("\nAll load steps complete.")

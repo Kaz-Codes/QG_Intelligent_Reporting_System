@@ -39,9 +39,9 @@ def load_purchases(conn):
             clean_text(row.get("Bill No")),
             clean_text(row.get("Sourcing O")),
             clean_text(row.get("Item Code")),
-            clean_text(row.get("Supplier")),
             clean_text(row.get("Item Name")),
             clean_text(row.get("Specificati")),
+            clean_text(row.get("Supplier")),
             clean_text(row.get("PO Numbe")),
         ))
 

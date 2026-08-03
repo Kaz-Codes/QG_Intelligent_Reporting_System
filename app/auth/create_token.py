@@ -13,7 +13,7 @@ def create_token(data: dict):
 
     payload = data.copy()
 
-    expire = datetime.now(timezone.utc) + timedelta(hours=1)
+    expire = datetime.now(timezone.utc) + timedelta(hours=3)
 
     payload["exp"] = expire
 

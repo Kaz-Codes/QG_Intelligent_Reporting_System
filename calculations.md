@@ -78,10 +78,11 @@ and `search`.
 - **value_by_supplier**, **value_by_branch** — Σ `amount`, top 8.
 - **monthly_value_trend** — Σ `amount` by month of `purchase` (falling back to `po_date`).
 
-### Rows + option lists
-Returns the full serialized purchase rows (for the table) plus dynamic option
-lists: `statuses`, `suppliers`, `branches`, `item_categories`, `mops`,
-`sourcing_officers`.
+### Option lists
+Returns the aggregates above plus dynamic filter option lists: `statuses`,
+`suppliers`, `branches`, `item_categories`, `mops`, `sourcing_officers`. The
+per-row table was dropped from the dashboard, so no row list is shipped — the
+payload stays a few KB.
 
 ### Notes
 - `status` is derived, so it's filtered in Python after the SQL fetch.
@@ -140,9 +141,11 @@ planner's manual value).
 - **top_items** — Σ `stock_qty` per item, top 8.
 - **lowest_days_of_stock** — rows with a runway, ascending, top 8.
 
-### Rows + option lists
-Returns the full serialized stock rows plus dynamic option lists: `statuses`,
-`reorder_statuses`, `branches`, `items`, `item_categories`.
+### Option lists
+Returns the aggregates above plus dynamic filter option lists: `statuses`,
+`reorder_statuses`, `branches`, `items`, `item_categories`. The per-row table
+was dropped from the dashboard, so no row list is shipped (the derived rows are
+still built internally, only to feed the aggregates).
 
 ### Tunable constants (`app/dashboard/inventory/helpers.py`)
 `CONSUMPTION_WINDOW_DAYS = 90`, `DEMAND_WINDOW_DAYS = 180`,
