@@ -53,6 +53,7 @@ app/
   trucking/          jobs: header + vehicle children + history + revert
   logs/              activity-log middleware + admin live feed (WebSocket)
   dashboard/         imports · logistics · purchases · inventory · whole (overview)
+  reports/           cross-module report builder (4 types → one normalised row) + saved templates
   loading/           Excel → DB migration loaders + stores schemas (Stock, Issuance, StoreRequisition, PurchasesData)
 React_Frontend-main/frontend/   React SPA
 ```
@@ -270,6 +271,46 @@ keeping payloads in KBs).
   issuance).
 - **whole** — cross-module overview.
 - **All the formulas are in `calculations.md`.**
+
+## reports — `/reports`
+
+The **cross-module report builder**: pick one or more of four data types
+(**purchases, imports, inventory, logistics**), filter them, and get one flat
+table back — the four sources normalised into a single row shape (shared keys
+`ref/item/supplier/branch/category/status/value/date` + type-specific keys; a
+key a type has no value for is null, and every row carries its `type`). Unlike
+the dashboards this **does** return rows (a report is a table you download), so
+it is **paginated**. Reuses the dashboard derivations (purchase status, stock
+status + reorder level, logistics cost/kg + stage) — a figure in a report
+matches the same figure on its dashboard.
+
+- **`GET /reports/data`** — `types[]` + the shared filters (`item`, `supplier`,
+  `branch`, `category`, `date_from`/`date_to`, `search`) + `page`/`page_size`.
+  The result is the selected types **concatenated in a fixed order**
+  (purchases→imports→inventory→logistics) and paged as one list; only the rows
+  on the page are ever fetched (`plan_slices` maps the global offset/limit to a
+  per-type sub-offset/limit, after a cheap `COUNT` per type).
+- **Filter ↔ type support** (`FILTER_SUPPORT`): a type that can't honour an
+  active filter is **dropped entirely**, mirroring the front end — logistics has
+  no branch, so filtering by branch hides logistics; inventory has no date, so a
+  date range hides inventory. `search` never drops a type.
+- **`GET /reports/export`** — same query, whole filtered set (capped at 20 000),
+  `columns[]` picks/orders the sheet columns; `xlsx_response`. **`GET
+  /reports/options`** — distinct dropdown values (items/suppliers/branches/
+  categories) scoped to the selected types.
+- **Saved templates** — `SavedReport` (`types`/`columns`/`filters` as JSON, no
+  date range — chosen fresh each run; soft-deleted like everything). The list is
+  **shared** (everyone who can reach Reports sees all templates), replacing the
+  front end's localStorage. `GET/POST /reports/saved`, `GET/PUT/DELETE
+  /reports/saved/{id}`. Read is open to all four roles; create/edit/delete is an
+  authoring action (admin/manager/entry operator — viewers excluded), and an
+  entry operator may only touch their own.
+- **Dropped for want of a backend source** (by decision): imports `customer` /
+  `weight` / `shipping line` / `bank` / `documentation status`; inventory
+  `last_restocked`; purchases `material`. Imports `ref` falls back to the LC
+  instrument number (then `IMP-{id}`); `ppc_store` stays a date.
+- The front end (`Reports.tsx`, `reportBuilder.tsx`, `savedReports.ts`) is still
+  mock + localStorage — **not yet wired** to these endpoints.
 
 ## loading
 
