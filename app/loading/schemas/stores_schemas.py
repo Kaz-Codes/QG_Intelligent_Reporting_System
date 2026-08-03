@@ -59,6 +59,10 @@ class Stock(Base):
         Numeric(18, 2)
     )
 
+    reorder_level: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 2)
+    )
+
     item: Mapped[Optional["Item"]] = relationship(
         back_populates="stock"
     )

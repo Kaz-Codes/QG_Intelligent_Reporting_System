@@ -1,416 +1,427 @@
-# Import Status Management System
+# Qadri Group ERP
 
-Internal Django app replacing a manual imports status Excel sheet.
-Runs on the office LAN. Roughly 10-30 users. Not internet-facing.
+Internal ERP for Qadri Group, replacing the manual Excel sheets that still run
+the business (imports status, logistics, trucking, purchases, stores/stock).
+Runs on the office LAN, ~10–30 users, not internet-facing.
 
-This system tracks a consignment from requisition through payment, shipping,
-customs clearance and arrival at works. The Excel sheet it replaces is still
-being used to run the business, so business rules are not to be invented —
-if something is ambiguous, stop and ask rather than guessing.
+Business rules are **not to be invented** — if something is ambiguous, stop and
+ask rather than guessing. A wrong assumption baked into the data model is
+expensive; a question is cheap.
 
-## Stack — do not deviate without asking
+> **Dashboard formulas live in `calculations.md`, not here.** This file is the
+> architecture + implementation reference for everything else.
 
-- Django 5.2 LTS + PostgreSQL 16 (Python 3.12, conda env named `imports`)
-- Server-rendered Django templates + HTMX + Alpine.js + Tailwind (standalone CLI, no npm)
-- django-crispy-forms with crispy-tailwind
-- django-simple-history for audit trails
-- **No React, no DRF, no SPA.** The UI is HTML fragments returned by Django views.
-- Exports: openpyxl for Excel, WeasyPrint for PDF
+---
 
-## Apps
+## Stack (as built)
 
-| App | Owns |
-|---|---|
-| `accounts` | Custom User (`AUTH_USER_MODEL = 'accounts.User'`), roles, permission mixins |
-| `masters` | Supplier, Branch, Item, Port, ClearingAgent, Works, Currency, UoM |
-| `consignments` | Consignment header, ConsignmentItem lines, all 7 wizard steps, status and ETA history |
+The original plan was Django + server-rendered templates; it was built as a
+**FastAPI API + a separate React SPA** instead. Treat the following as the real
+stack — do not reintroduce Django/templates.
 
-## Roles
+**Backend** (`app/`)
+- FastAPI, SQLAlchemy 2.0 (`Mapped` / `mapped_column`), PostgreSQL, Python 3.12 (venv).
+- Pydantic schemas for request bodies; plain dict serializers for responses.
+- Cookie-based auth (an httpOnly session cookie set by `/auth/login`).
+- Excel export via **openpyxl**. No server-side PDF (the frontend prints/exports client-side).
+- **No migration tool** — `Base.metadata.create_all()` runs on startup. Schema
+  changes therefore need the tables dropped & recreated (or manual `ALTER`).
+  `create_all` only creates missing tables; it never adds/drops columns.
 
-| Role | Enter | Edit existing | Reports | Manage users |
+**Frontend** (`React_Frontend-main/frontend/`)
+- React + Vite + TypeScript, React Router, **@tanstack/react-query**, react-hook-form + zod, Tailwind.
+- Talks to the backend through `lib/api/client.ts`'s `apiFetch` (`credentials: 'include'`).
+- Only the **imports** module is wired to the live backend so far; the rest still runs on mock data (`lib/mockData`, `lib/*StatusData.ts`).
+
+---
+
+## Project layout
+
+```
+app/
+  main.py            FastAPI app: create_all, seed roles+admin, CORS, include routers
+  database.py        engine (json_serializer = json.dumps(..., default=str)), SessionLocal, Base
+  models_mixins.py   TimestampMixin (created_at/updated_at, server_default now())
+  enums.py           every fixed list as a (str, Enum), stored in String columns
+  export_utils.py    xlsx_response(filename, headers, rows) → StreamingResponse
+  cross_module.py    trucking ⇆ logistics/imports linkage (open requests + reverse lookup)
+  accounts/          User, Role
+  auth/              cookie login/logout, authenticate(), authorize()
+  masters/           6 master lists (config-driven registry) + inline create + review queue
+  imports/           consignments: header + item/payment children + history + revert
+  logistics/         orders: header + item/package/container children + history + revert
+  trucking/          jobs: header + vehicle children + history + revert
+  logs/              activity-log middleware + admin live feed (WebSocket)
+  dashboard/         imports · logistics · purchases · inventory · whole (overview)
+  loading/           Excel → DB migration loaders + stores schemas (Stock, Issuance, StoreRequisition, PurchasesData)
+React_Frontend-main/frontend/   React SPA
+```
+
+Each data-entry module (`imports`, `logistics`, `trucking`) has the same file
+shape: `models.py`, `schemas.py` (Pydantic in), `serializers.py` (dict out),
+`helpers.py` (queries + create/update/revert logic), `routes/` (one file per
+endpoint, all hanging off a shared `router`, listed in `routes/__init__.py`).
+
+---
+
+## App bootstrap (`main.py`)
+
+On startup: import every model module (so `Base.metadata` knows all tables) →
+`create_all` → seed the four roles and a default admin if absent → add CORS →
+`include_router` for every module (data-entry, masters, auth, logs, and the five
+dashboards).
+
+Route files self-register by importing the shared `router` and decorating it;
+`routes/__init__.py` imports every route file so one `include_router` wires the
+whole module. **Ordering matters** where a literal path could be captured by a
+param path: `GET /export`, `GET /open-requests` etc. are imported **before**
+`get_consignment` (`GET /{consignment_id}`), or FastAPI 422s on the int param.
+
+---
+
+## Auth & authorization
+
+- `POST /auth/login` verifies credentials and sets an httpOnly cookie; `POST /auth/logout` clears it.
+- `authenticate(request)` reads the cookie and returns the user payload (401 if missing/invalid).
+- `authorize(user_payload, [roles], db)` loads the user, checks their role name is in the allowed set (403 otherwise), and returns the user.
+- **Entry-ownership**: `verify_entry_ownership` lets admin/manager touch any
+  record but restricts an entry operator to records they created.
+- Permissions are enforced **server-side** on every route. The frontend hiding
+  something is UX, never the security boundary.
+
+### Roles
+
+| Role | Enter | Edit existing | Dashboards/Reports | Manage users |
 |---|---|---|---|---|
 | Admin | yes | yes | yes | yes |
 | Manager | yes | yes | yes | no |
-| Entry Operator | yes | own drafts only | yes | no |
-| Viewer | no | no | read-only list and reports | no |
+| Entry Operator | yes | own records only | yes | no |
+| Viewer | no | no | read-only | no |
 
-Viewers **can** see values, prices and PKR amounts. Nothing financial is hidden by role.
-
-Masters (Supplier, Port, ClearingAgent, Item, Branch, Works) are managed by
-Managers and Admins through a Masters screen reachable from the main nav —
-not through the Django admin. Entry Operators and Viewers don't get that nav item.
-
-Enforce permissions server-side with mixins and decorators. Template `{% if %}`
-hides things from view; it is never the security boundary.
+Viewers **can** see values, prices and PKR amounts — nothing financial is hidden
+by role. Dashboards are read-only and open to all four roles. Masters are
+managed by Manager/Admin.
 
 ---
 
-# Data model rules
+## Conventions
 
-## 1. Consignment (header) to ConsignmentItem (lines)
-
-One consignment carries many items. This is the single most important structural
-rule in the system — flattening it breaks the finance and clearance modules.
-
-**Header (`Consignment`) holds:**
-branch, supplier, country of origin, currency, consignment type (EFS / Regular),
-PO date, payment instrument type and number, instrument date, works,
-exchange rate, rate date, rate source, current status, system remarks,
-user remarks, clearing agent, GD number, gate out date, free days, ELC, ALC.
-
-**Line (`ConsignmentItem`) holds:**
-requisition type, reference no, job no, MO no, item, item code, specification,
-quantity, unit of measure, batch no, H.S. code, foreign unit price.
-
-## 2. Requisition details belong to the ITEM, not the consignment
-
-Reference No, Job No and MO No are properties of the demand that generated a
-line item, not of the shipment. Because they are driven by requisition type,
-**requisition type also sits on the line.**
-
-A single consignment can therefore carry Store items and Engineering items
-together. Anywhere the requisition type is displayed for a whole consignment
-(list view, reports), show the distinct set — e.g. "Store + Engineering".
-
-| Requisition type | Fields that appear |
-|---|---|
-| Store | Reference No |
-| Engineering | Reference No + Job No + MO No |
-| Others | Free-text description of the purpose |
-
-All of these are nullable and may be filled later. They still count toward the
-item's pending-information badge.
-
-Implement the mapping once as a rules dict, validated in the form's `clean()`.
-Mirror the same dict in JS for the UX. Adding a requisition type later must be
-a one-line change, not a hunt through if-statements.
-
-## 3. Money is DecimalField, never FloatField
-
-- Foreign amounts and unit prices: `max_digits=18, decimal_places=4`
-- Exchange rate: `max_digits=12, decimal_places=6`
-- PKR amounts: `max_digits=20, decimal_places=2`
-
-## 4. Calculated values are computed, never keyed in
-
-| Value | Derivation |
-|---|---|
-| Line foreign total | quantity x foreign unit price |
-| Consignment foreign total | sum of line totals |
-| Consignment PKR total | foreign total x exchange rate (**store this**, rates move) |
-| Transit time | ETA minus ETD, in days |
-| Clearance time | Gate out minus the actual arrival date — the date status became "Arrived at Port" in the `StatusChange` log. Falls back to ETA only if that status was never recorded |
-| Variance | ALC minus ELC, stored both as absolute and as a percentage |
-
-Exchange rate is booked **on the consignment** with the date it was taken and
-its source. Never convert a stored foreign value using a live or current rate —
-the same record would show a different PKR figure every time it was opened,
-and no printed report could be reconciled.
-
-## 5. History tables, never text fields
-
-**`ETARevision`** — consignment, old_eta, new_eta, reason, changed_by, changed_at.
-The "1st ETA was X, 2nd was Y" string shown in reports is **generated** from this
-table. Storing it as text destroys the delay analytics and can be overwritten by
-a user edit.
-
-**`StatusChange`** — consignment, from_status, to_status, changed_by, changed_at.
-Gives the audit trail and stage-ageing analysis ("average days under examination").
-
-Slippage on the list view = current ETA minus the **first** ETA ever promised.
-
-## 6. Remarks are two separate fields
-
-- `system_remarks` — auto-generated, read-only, built from ETA and status history
-- `user_remarks` — free text entered by the user
-
-They are displayed concatenated in reports but never share an input.
-
-## 7. Payments are a child table
-
-`Payment` — consignment, date, value, status (Paid / Unpaid), reference.
-Partial payments are normal and expected. Labels are instrument-driven and the
-logic lives in exactly one place:
-
-| Instrument | Number label | Date label |
-|---|---|---|
-| LC | LC number | Retirement date |
-| Adv | Advance payment reference | Opening date |
-| DP | DP document number | Opening date |
-| CAD | CAD document number | Opening date |
-
-## 8. Draft vs submitted
-
-Almost every field can be filled later. Consignments therefore carry a draft
-state and a completeness calculation.
-
-State lives on the row as `record_state` (`'draft'` / `'submitted'`, column
-default `'draft'`, `server_default='draft'` so rows written straight to the
-table by the Excel loader come in as drafts). It is server-controlled — the
-client never sends it; only the submit endpoint changes it.
-
-- **Save draft** is the normal create / `PUT /consignments/{id}` — permissive,
-  accepts anything (or nothing), leaves `record_state` as `'draft'`.
-- **Submit** is `POST /consignments/{id}/submit` — runs the full rule set
-  (`helpers.submission_errors`, which mirrors the front end's
-  `consignmentSubmitSchema`) and only flips `record_state` to `'submitted'` if
-  nothing is missing; otherwise `422` with the list of gaps. Enforced
-  server-side because client validation is never the boundary.
-- Submitting does **not** lock the record — a submitted consignment is still
-  editable (see the closed lock below).
-
-The rules are NOT database constraints: drafts and submitted rows share one
-table and a draft may be empty, so completeness is a conditional rule checked
-in the application, never `NOT NULL`.
-
-Submit rule set (backend field names): `branch_id`, `supplier_id`, `origin`,
-`currency` present; ≥1 item; each item has `item_name`, `item_code`,
-`quantity`, `unit_of_measurement`, `requisition_type` + its conditional fields
-(the `REQUISITION_REQUIRED` dict: Store→`reference_number`;
-Engineering→`reference_number`+`job_number`+`mo_number`; Others→`description`);
-`payment_instrument`, `instrument_number`, `works`, `exchange_rate`,
-`rate_booked_on`, `current_status` present; `eta` not before `etd`.
-
-**The closed lock (separate from record_state).** A consignment closes when
-its status reaches "Arrived at works". `is_locked` (bool, `server_default
-false`) is set on the update that makes that transition; from then on **no
-role** may edit it — the update and submit endpoints return `423`. Only an
-**admin** can reopen it, via `POST /consignments/{id}/reopen`, which clears
-`is_locked` (the status is left alone). Being submitted never locks a record;
-only being closed does. Loaded historical rows import unlocked, so they stay
-editable for cleanup — the lock only engages on an in-app transition to
-"Arrived at works".
-
-Fields commonly filled later: batch no, H.S. code, consignment type, unit price,
-exchange rate, rate date, reference/job/MO numbers, and the entire clearance
-and landed-cost modules.
-
-**Logistics and trucking carry the same pair of columns and endpoints**, added
-as an opt-in capability (the frontend may call submit or ignore it entirely —
-the fields are server-controlled with `server_default`s, so nothing existing
-breaks):
-
-- Logistics: `record_state` + `is_locked`; `POST /logistics/{id}/submit`
-  (rules from the logistics `consignmentSchema`: customer name, origin by order
-  type, ≥1 item, each item detail + quantity>0) and `POST /logistics/{id}/reopen`.
-  Closes/locks when `current_status` reaches **"Delivered"**.
-- Trucking: `record_state` + `is_locked`; `POST /trucking/{id}/submit` (rules
-  from `truckingSubmitSchema`: reference no. for non-intrafactory, ≥1 vehicle,
-  container no. per vehicle for inbound) and `POST /trucking/{id}/reopen`.
-  Trucking has no stored job status, so it closes/locks when **every vehicle is
-  "Delivered"** (derived in `helpers.is_closed`).
-
-Reopen is admin-only in all three modules. Submitting never locks; only closing
-does.
-
-## 9. Status list (ordered — do not reorder)
-
-TT/LC in Process, Under Production, Ready Awaiting Sailing, In Transit,
-Arrived at Port, Under Custom Clearance, Under Examination, Under Assessment,
-Arrived at QFL, On Road, Arrived at Works
-
-Store as a `TextChoices` with an explicit order attribute. The list view groups
-these into six stages: Pre-shipment, Production, In transit, Clearance, Inbound, Closed.
-
-"Arrived at Works" is treated as closed and is **hidden from the list by default**.
-
-## 10. Free text is banned for anything reported on
-
-Supplier, branch, works, port of loading, port of delivery, clearing agent and
-item all resolve to master tables. Free text guarantees three spellings of one
-supplier and destroys supplier-wise reporting.
-
-## 11. ELC and ALC are manual, per-item entries — never calculated
-
-Estimated Landed Cost and Actual Landed Cost are typed in by a user, per item,
-in PKR. Nothing in this system derives them. Goods value, bank charges and
-demurrage are shown alongside as reference figures only, to sanity-check what
-is entered — they are never summed into ELC or ALC. Duty, freight and
-clearing-agent fees are not tracked anywhere in this system; the figures here
-are a partial picture and are never a substitute for the numbers a user enters.
-
-Record the entering user and timestamp on each figure separately — ELC and ALC
-are usually entered weeks apart by different people, so one `updated_by` /
-`updated_at` pair on the line is not enough to answer who entered which.
-
-## 12. Item master carries defaults — the line stores its own values
-
-Item holds multiple H.S. codes (one-to-many — an item can classify differently
-by variant or origin), a default UoM and a default specification. Category is
-free text with existing values offered as suggestions, not a fixed choice list.
-
-These populate the consignment line when the item is picked, but the line
-stores its own copy from that point on. It never re-reads the master
-afterwards, so changing the master later does not retroactively change past
-consignments.
-
-## 13. Inline creation during data entry — Supplier, Item, Port, Clearing Agent only
-
-Any role that can enter data may create these four masters inline, without
-leaving the wizard: type a name that matches nothing, and a small form appends
-it to the master with `verified=False`. Unverified records surface in a review
-queue in Masters until a Manager or Admin opens and saves them, confirming the
-details are correct. Ports also need a Sea/Air type captured at creation, since
-mode-based filtering elsewhere depends on it.
-
-Branch and Works are **never** creatable inline — they are our own entities
-and must exist beforehand, set up deliberately through Masters, not typed into
-existence mid-consignment.
+- `snake_case` columns, `PascalCase` singular model names.
+- Every model carries `created_at` / `updated_at` (via `TimestampMixin`, DB
+  `server_default now()`) and a `created_by_id` where a creator applies.
+- **Nothing is hard-deleted.** Every table has `is_deleted` (+ `deleted_at`,
+  `deleted_by_id`); deleting sets the flag so closed/removed rows stay for reports.
+- **Money & weights are `Numeric`, never `Float`.** Foreign amounts / unit
+  prices `Numeric(18,4)`; exchange rate `Numeric(12,6)`; PKR amounts
+  `Numeric(20,2)`; quantities/weights `Numeric(14,3)`.
+- **Enums** live in `enums.py` as `(str, Enum)` and are stored in **String**
+  columns (not DB enum types), so adding a value is a one-line change, no
+  `ALTER TYPE`. Status values are Title Case and must match the frontend's.
+- **Server-side defaults for loader-written flags.** A Python-side `default=`
+  never runs on a raw `psycopg2` insert (the loaders), so flags the loaders rely
+  on (`record_state`, `is_locked`) use `server_default` too.
+- Business logic lives in models/helpers, never in serializers or routes-as-logic.
+- Use `selectinload` / `joinedload` on list & detail fetches — N+1 is the only
+  realistic performance risk. **Index** every column used in a list filter.
+- Branch, commit, push, open a PR. Never commit to `main` directly.
 
 ---
 
-# Wizard modules
+# Modules
 
-The wizard is seven steps. Status and Remarks are one screen — a status change
-and its context are usually entered together, and splitting them doubled the
-navigation for no benefit.
+## accounts
 
-1. **Consignment** (`wizard_step1.html`) — header fields plus repeating item panels
-2. **Finance** (`wizard_step2_finance.html`) — instrument type/number/date, works, per-item unit price, FX conversion
-3. **Shipping** (`wizard_step3_shipping.html`) — mode, POL, POD, readiness date, ETD, ETA, transit time, ETA works
-4. **Payments** (`wizard_step4_payments.html`) — partial payments table
-5. **Status & remarks** (`wizard_step5_status_remarks.html`) — status history, ETA revision log, system remarks (generated) and user remarks (free text)
-6. **Clearance** (`wizard_step6_clearance.html`) — agent, GD number, gate out, free days, clearance time
-7. **Landed cost** (`wizard_step7_landed_cost.html`) — ELC, ALC, variance
+Custom `User` (username, password hash, `role_id`) and `Role`. Roles + a default
+admin are seeded at startup.
 
-Each step saves independently. Users are interrupted mid-entry constantly;
-never require a single end-of-wizard submit.
+## masters
 
-The static prototypes toggle new-vs-edit with a `?id=` query string on each
-wizard file, carried through Continue/Back/stepper links, with one mock
-record's worth of data hand-written into each file's JS. That's a stand-in
-only. In Django these are distinct URLs — `/consignments/new/` for a fresh
-draft and `/consignments/<pk>/edit/<step>/` for an existing one — resolved
-from the database, not a query string parsed in the browser.
+The dropdown source-of-truth tables: **Supplier, Branch, Works, Port,
+ClearingAgent, Item** (+ `HsCode` under Item). Free text is banned for anything
+reported on — three spellings of one supplier destroys supplier-wise reporting.
+
+- **Config-driven registry** (`registry.py`): one dict per master (model,
+  serializer shape, search fields, whether it has HS codes / a port relation),
+  so `list`/`get`/`create`/`update` are generic over a `{master}` path param.
+- Endpoints: `GET /masters/{master}` (list, `?q`, `include_inactive`,
+  `unverified_only`), `GET /masters/{master}/{id}`, `POST /masters/{master}`,
+  `PUT /masters/{master}/{id}`, `POST /masters/{master}/inline`,
+  `POST /masters/{master}/{id}/verify`, `.../deactivate`, `.../reactivate`,
+  `GET /masters/review-queue`, `GET /masters/item-search`.
+- **`is_active`** turns a row off without deleting (rows pointing at it keep working).
+- **`is_verified`** — a row created mid-data-entry starts `False` and waits in
+  the review queue; rows created through the Masters screen are `True`.
+- **Inline creation** (Supplier, Item, Port, ClearingAgent only): type a name
+  that matches nothing → appended with `verified=False`. Ports also capture a
+  Sea/Air type at creation. **Branch and Works are never creatable inline.**
+- **Item** carries multiple H.S. codes (one-to-many), a default UoM and default
+  specification, and a free-text `category`. These *populate* a consignment line
+  when the item is picked, but the line stores its own copy — changing the
+  master later never rewrites past records.
+
+## imports (consignments) — `/consignments`
+
+The flagship module. See **Imports data model rules** below for the domain
+spec; this is the implementation.
+
+**Tables:** `Consignment` (header) → `ConsignmentItem` (lines), `Payment`
+(child), plus history tables `EtaRevisionHistory`, `StatusUpdateHistory`,
+`ConsignmentChangeHistory`. Header FKs to masters (`branch_id`, `supplier_id`,
+`loading_port_id`, `delivery_port_id`, `clearing_agent_id`); `works` is free
+text (typed by hand, not a master).
+
+**Stored derived values** (recomputed on every save — see rule 4):
+`Consignment.foreign_total`, `Consignment.pkr_total`, and per-item
+`variance_absolute` / `variance_percentage`. `helpers.recompute_derived` runs in
+create, update **and revert** (revert too, because these columns aren't in the
+change-history JSON).
+
+**System remarks** (rule 6): `serializers.build_system_remarks` generates a
+read-only string from the ETA-revision + status history at serialize time
+(never stored); the user's own `remarks` is a separate field.
+
+**ELC/ALC audit** (rule 11): each figure records who entered it and when,
+separately (`elc_updated_by_id`/`_at`, `alc_updated_by_id`/`_at`);
+`stamp_landed_cost_audit` stamps only the figure that actually changed.
+
+**Endpoints:** `POST /`, `GET /` (paged + filtered), `GET /export` (xlsx of the
+filtered set), `GET /{id}`, `GET /{id}/trucking-jobs`, `PUT /{id}`,
+`POST /{id}/submit`, `POST /{id}/reopen`, `DELETE /{id}`,
+`POST /undo-delete/{id}`, `GET /change-history/{id}`,
+`GET /change-history/{id}/{hid}`, `PUT /revert-update/{id}/{hid}`.
+
+## logistics — `/logistics`
+
+Export/local orders, restructured to header + children (the frontend redesign
+turned it from a flat order into a 5-step wizard: Order, **Packing**, Shipping,
+Expenditures, Status).
+
+**Tables:** `LogisticsConsignment` (header: department, order type, origin,
+customer, MO/batch, incoterm, shipping, the named expenditure columns +
+`container_detention`, status, `gate_out_date`, `sent_to_trucking`) →
+`LogisticsItem`, `LogisticsPackage`, `LogisticsContainer` children, plus
+`LogisticsStatusHistory` and `LogisticsChangeHistory`.
+
+FE-driven nested collections that are always written whole are stored as **JSON**
+rather than their own tables: per-item `rfd_history`, per-package `allocations`
+(cross-batch: `{item_id, source_order_id, quantity}`), and the header
+`remarks_log` feed. MO/batch numbering and cross-batch resolution are
+frontend-driven — the backend stores what it's given.
+
+Endpoints mirror imports (`POST /`, `GET /`, `GET /export`, `GET /{id}`,
+`GET /{id}/trucking-jobs`, `PUT`, `POST /{id}/submit`, `POST /{id}/reopen`,
+`DELETE`, undo-delete, change-history, revert). Closes/locks at **"Delivered"**.
+
+## trucking — `/trucking`
+
+One job → many trucks (header + vehicle children), the same header/lines pattern
+as imports.
+
+**Tables:** `TruckingConsignment` (movement type, source + `source_ref` +
+`taken_at` + `taken_snapshot` (JSON), execution/transport fields, freight +
+`detention`, tracking) → `TruckingVehicle` (per-truck fields + `package_refs` /
+`import_consignment_refs` as JSON) + `TruckingChangeHistory`. There is **no
+stored job-level status** — the tracking status is per-vehicle, and the job
+rollup is derived.
+
+Endpoints mirror imports, plus **`GET /open-requests`** (see cross-module).
+Closes/locks when **every vehicle is "Delivered"** (`helpers.is_closed`).
+
+## cross-module linkage (`cross_module.py`)
+
+The three modules are one flow; trucking work originates in the other two.
+
+- **`GET /trucking/open-requests`** — the trucking inbox: logistics orders with
+  `sent_to_trucking` + import consignments bought FOB, **minus** the ones a
+  trucking job already took (matched by `(source, source_ref)`). Each carries a
+  snapshot the "New Trucking Job" form pre-fills from.
+- **`GET /consignments/{id}/trucking-jobs`** and
+  **`GET /logistics/{id}/trucking-jobs`** — the reverse lookup (which jobs came
+  from this consignment/order).
+
+Record-level only; the per-vehicle `package_refs`/`import_consignment_refs` are
+stored but not yet resolved.
+
+## logs
+
+An activity-log middleware records who did what; an **admin live feed** streams
+new activity over a WebSocket.
+
+## dashboards (`app/dashboard/*`)
+
+Five read-only dashboards — **imports, logistics, purchases, inventory, whole
+(overview)** — each at `GET /dashboard/<name>`. All figures are derived at
+request time from the source tables; filter option lists are built dynamically
+from the whole table; multi-select filters are repeated query params.
+
+- imports/logistics read the operational tables; **purchases** and **inventory**
+  read the flat loaded stores tables (`purchases_data`, `stock`, `issuance`,
+  `store_requisition`) and return **rows + aggregates + option lists**.
+- Purchases derives an order **status** (Pending/Completed/Delayed) and overdue;
+  inventory derives **stock status**, **reorder level** (from store
+  requisitions), and **days-of-stock runway** (from issuance).
+- **All the formulas are in `calculations.md`.**
+
+## loading
+
+One-off Excel → DB migration loaders (pandas + raw `psycopg2`, not the ORM):
+stores tables and the imports sheet. Keyed grouping, name→id resolution, explicit
+ids + sequence bumping. `stores_schemas.py` defines the flat stores models
+(`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) that the purchases &
+inventory dashboards read.
 
 ---
 
-# Frontend conventions (established — match these)
+# Cross-cutting patterns
 
-## Visual language
+**Header + children create/update/revert.** create builds the header + child
+objects and saves in one flush. update diffs: new lines (no id), field-level
+changes on existing lines, and lines missing from the payload (soft-deleted) —
+recording each in the change history so it can be undone.
 
-Dense, flat and functional. Navy `#0F1B2D` with a brass `#B8873B` accent.
-No drop shadows, no heavily rounded cards, no decorative whitespace. Border
-radius is 4px throughout. Tabular numerals on every number, code and date.
+**Change history + field-level revert.** Every update writes one
+`*ChangeHistory` row whose `history` JSON holds the pre-change values (header
+`fields`, plus per-collection `new_*` / `deleted_*` / updated diffs). Revert
+(admin/manager, latest-first) writes the old values back, re-adds soft-deleted
+lines and soft-deletes added ones. The engine's `json_serializer` uses
+`default=str`, so Decimals/dates serialize into JSON as strings; `coerce_value`
+turns them back on revert.
 
-These are screens operators stare at all day. Information density beats elegance.
+**Draft vs submitted** (rule 8) and **the closed lock** — see the imports rules.
+Present in all three modules; server-controlled columns, opt-in submit.
 
-Colour is meaning, not decoration:
-- brass — needs attention or is user-editable emphasis
-- green `#1F7A5A` — complete, on time, paid
-- amber `#B4531A` — pending, approaching a deadline
-- red `#A32F2F` — late, unpaid, overdue
+**List filters** — each `GET /<module>/` applies every filter its list screen
+offers, in SQL, on the paged queryset; multi-select as repeated params → `IN`;
+masters filter by **id**, enums/statuses by stored value. The contract:
 
-## Existing screens — read these before building new ones
+- **Imports** `GET /consignments/`: `status[]`, `stage` (6 pipeline groups →
+  statuses), `branch_id[]`, `supplier_id[]`, `requisition_type[]` (via items),
+  `missing_only` (= draft), `etd_from`/`etd_to`, `include_closed` (default false
+  hides "Arrived at Works"), `include_deleted`, `q`, `page`, `page_size`.
+- **Logistics** `GET /logistics/`: `status[]`, `order_type[]`, `customer[]`,
+  `gate_out_from`/`gate_out_to`, `include_deleted`, `q`, `page`, `page_size`.
+- **Trucking** `GET /trucking/`: `movement_type[]`, `source[]`, `open_only`,
+  `pending_only` (= draft), `include_deleted`, `q`, `page`, `page_size`.
 
-In `templates/consignments/`:
+`include_deleted` (soft-deleted) ≠ `include_closed` (closed-status). Keep this in
+lockstep with the list screens — add a param here in the same change.
 
-- `consignment_list.html` — list, filters, six-stage pipeline strip, sortable
-  columns, ETA revision tags, slippage, free-days countdown, Excel and PDF export
-- `wizard_step1.html` — header fields plus stacked item panels with per-item
-  requisition details and pending badges
-- `wizard_step2_finance.html` — instrument with type-driven labels, per-item
-  pricing with live totals, PKR conversion with rate date and source
-
-New screens must match their structure, spacing and component vocabulary.
-When in doubt, copy the pattern from an existing file rather than inventing one.
-
-## Patterns to reuse, not reinvent
-
-**Pending information.** Any incomplete record shows exactly what is missing,
-by name, on hover. This appears as per-item badges on Step 1, a banner on Step 2,
-and a flag column on the list. It should be one shared partial, so a field added
-later surfaces everywhere automatically.
-
-**Conditional fields.** Driven by a single rules object per screen
-(requisition type on Step 1, instrument type on Step 2). Never scattered
-if-statements in the template.
-
-**Calculated values.** Displayed as read-only derived output, greyed, with the
-derivation stated. Partial data produces a provisional total marked with an
-asterisk, never a blank.
-
-**Carried-forward context.** Later wizard steps show a read-only strip of the
-key header fields from earlier steps, so the user always knows which consignment
-they are editing.
-
-**Exports.** Always export the **filtered** set, never the whole table.
-Excel carries every column; PDF carries a readable subset in landscape.
-Both are one Django view: `GET /consignments/export/?<same querystring>&format=xlsx|pdf`,
-sharing the list view's queryset function so filters cannot drift apart.
-
-**List filters (backend query params).** Each module's `GET /<module>/` list
-endpoint applies every filter its list screen offers, in SQL, on the paged
-queryset. Multi-select filters are repeated query params (`?status=A&status=B`)
-bound to a list and applied as `IN`. Masters filter by **id** (`branch_id`,
-`supplier_id`) — never by free-text name; enums/statuses filter by their stored
-value; the frontend maps its selections to those. The contract:
-
-- **Imports** `GET /consignments/`: `status[]`, `stage` (one of the six
-  pipeline groups → its statuses), `branch_id[]`, `supplier_id[]`,
-  `requisition_type[]` (via the item lines), `missing_only` (= `record_state`
-  is draft), `etd_from`/`etd_to`, `include_closed` (default false hides
-  "Arrived at works"), `include_deleted`, `q`, `page`, `page_size`.
-- **Logistics** `GET /logistics/`: `status[]`, `order_type[]`, `customer[]`
-  (free-text `customer_name`, no master), `gate_out_from`/`gate_out_to`,
-  `include_deleted`, `q`, `page`, `page_size`.
-- **Trucking** `GET /trucking/`: `movement_type[]`, `source[]`, `open_only`
-  (job has no vehicles or any vehicle not yet delivered — trucking has no
-  stored job status), `pending_only` (= `record_state` is draft),
-  `include_deleted`, `q`, `page`, `page_size`.
-
-`missing_only`/`pending_only` are approximated by `record_state`, not the full
-per-field completeness calc. `include_deleted` (soft-deleted rows) is distinct
-from `include_closed` (closed-status rows). Keep this list and the list
-screens' filters in lockstep — add a param here in the same change.
-
-**List view table header.** Do not re-add `position:sticky` to
-`consignment_list.html`'s table header. The table sits inside an
-`overflow-x:auto` container, and a sticky header there overlaps the first
-data row instead of staying pinned. This was tried and reverted.
-
-## Templates and static
-
-```
-templates/
-  base.html
-  partials/          HTMX fragments, prefixed with _
-  consignments/
-  accounts/
-static/
-  css/input.css      Tailwind source
-  js/app.js          Alpine components
-```
+**Exports.** Each module has `GET /<module>/export` taking the **same query
+params as its list** and running the list query with no page cap, so the export
+is exactly the filtered set. Built with `export_utils.xlsx_response` (openpyxl).
+Excel only; PDF is the frontend's client-side job.
 
 ---
 
-# Conventions
+# Imports data model rules (the domain spec)
 
-- `snake_case` fields, `PascalCase` models, singular model names
-- Every model carries `created_at`, `updated_at`, `created_by`
-- Nothing is ever hard-deleted. Every model carries a soft-delete flag so
-  closed and deleted records stay available to reports
-- Index every column used in a list filter: status, branch, supplier, ETA,
-  requisition type, consignment type
-- Use `select_related` and `prefetch_related` on the list view. N+1 queries are
-  the only realistic performance risk in this system
-- Business logic lives in models and forms, never in templates
-- Before every commit: `python manage.py makemigrations --check --dry-run`
-  and `python manage.py check`
+These are the authoritative business rules for the imports module. They are
+implemented as described above; kept here because they encode domain knowledge,
+not code.
+
+**1. Consignment (header) → ConsignmentItem (lines).** One consignment carries
+many items. Flattening this breaks finance and clearance. Header holds branch,
+supplier, origin, currency, consignment type, PO/requisition/required dates,
+incoterm, payment instrument+number+date, works, exchange rate + date + source,
+status, remarks, clearing agent, GD number, gate out, free days, demurrage,
+container detention. Line holds requisition type + reference/job/MO, item + code
++ specification, quantity, UoM, batch no, H.S. code, foreign unit price, ELC/ALC.
+
+**2. Requisition details belong to the ITEM.** Reference/Job/MO are properties of
+the demand, so requisition type sits on the line — one consignment can carry
+Store + Engineering items together (show the distinct set in list/reports). The
+conditional fields are one rules dict (`REQUISITION_REQUIRED`): Store→reference;
+Engineering→reference+job+MO; Others→description. Adding a type is a one-line change.
+
+**3. Money is Decimal.** See Conventions.
+
+**4. Calculated values are computed, never keyed in** — and the money totals are
+**stored** (recomputed on save) so a later rate change or edit can't restate a
+printed report: line total = qty × unit price; consignment `foreign_total` = Σ
+line totals; `pkr_total` = foreign_total × booked exchange rate; per-item
+variance = ALC − ELC (absolute + %). Transit time (ETA−ETD) and clearance time
+(gate-out − actual arrival) are shown but not stored. **Never** convert a stored
+foreign value at a live rate.
+
+**5. History tables, never text fields.** `EtaRevisionHistory` and
+`StatusUpdateHistory` drive the "1st ETA…2nd ETA…" line and stage-ageing;
+slippage = current ETA − first ETA ever promised.
+
+**6. Remarks are two fields.** `system_remarks` (generated from ETA+status
+history, read-only) and user `remarks` (free text) — displayed together, never
+one input.
+
+**7. Payments are a child table.** Partial payments are normal; instrument
+drives the number/date labels (LC→LC number/Retirement; Adv/DP/CAD→reference/Opening).
+
+**8. Draft vs submitted + the closed lock.** State is `record_state`
+(`'draft'`/`'submitted'`, `server_default 'draft'`), server-controlled. Save
+draft = the permissive create/`PUT`. **Submit** = `POST /{id}/submit`, runs the
+full rule set (`submission_errors`, mirroring the frontend) and flips to
+`'submitted'` only if complete, else `422` with the gaps. Rules are application
+checks, never DB constraints (drafts + submitted share one table). Submit rule
+set: branch_id, supplier_id, origin, currency present; ≥1 item; each item has
+name, code, quantity, UoM, requisition_type + its conditional fields; payment
+instrument+number, works, exchange rate, rate date, status present; eta ≥ etd.
+
+The **closed lock** is separate: a consignment closes when its status reaches
+"Arrived at Works"; `is_locked` (`server_default false`) is set on that update
+and afterwards **no role** may edit — update/submit return `423`. Only an
+**admin** reopens via `POST /{id}/reopen`. Submitting never locks; only closing
+does. Loaded rows import unlocked. Logistics closes at "Delivered", trucking when
+all vehicles are delivered.
+
+**9. Status list (ordered — do not reorder).** TT/LC in Process, Under
+Production, Ready Awaiting Sailing, In Transit, Arrived at Port, Under Custom
+Clearance, Under Examination, Under Assessment, Arrived at QFL, On Road, Arrived
+at Works. The list groups these into six stages (Pre-shipment, Production, In
+transit, Clearance, Inbound, Closed). "Arrived at Works" is closed and hidden
+from the list by default. **Enum values are Title Case and must match the frontend.**
+
+**10. Free text is banned for anything reported on** — masters instead (except
+`works`, which is deliberately free text on the consignment).
+
+**11. ELC and ALC are manual, per-item, never calculated.** Goods value, bank
+charges and demurrage are reference figures only, never summed into them. Record
+who entered each figure and when, **separately** (they're entered weeks apart).
+
+**12. Item master carries defaults; the line stores its own copy.** Changing the
+master later never rewrites past consignments.
+
+**13. Inline creation** — Supplier/Item/Port/ClearingAgent only, `verified=False`
+→ review queue. Branch/Works never inline.
+
+---
+
+# Frontend integration (imports, wired)
+
+The imports module is wired end-to-end (the pattern to follow for the others):
+
+- `lib/api/imports.ts` — one typed function per endpoint, unwrapping
+  `{status_code, detail, data, pagination?}`.
+- `lib/api/masters.ts` — fetches master lists and builds name→id maps (the
+  wizard picks masters by name; the backend wants ids).
+- `lib/api/importsMap.ts` — `apiToRow` / `apiToDraft` / `draftToPayload`, bridging
+  camelCase↔snake_case, names↔ids, and gating enum values against the backend
+  sets so an unmapped value is omitted, not 422'd.
+- `lib/api/useImports.ts` — React Query hooks; mutations invalidate the list + record.
+- List/detail/wizard are wired; the wizard creates on first save then `PUT`s,
+  and the final Submit calls `/submit`.
+
+Visual language (unchanged): dense, flat, navy `#0F1B2D` + brass `#B8873B`
+accent, 4px radius, tabular numerals. Colour = meaning — green complete/on-time,
+amber pending/approaching, red late/overdue.
+
+---
 
 # Working agreement
 
-Backend is written by an intern; frontend by the project owner. Neither invents
-a field name, URL name or status value alone — it is written here first, then
-implemented. If something needed is missing from this file, add it in the same
-commit as the code.
+Backend by an intern, frontend by the project owner. Neither invents a field
+name, URL name or status value alone — write it here first, then implement, and
+add it in the same change if it's missing.
 
-Branch, commit, push, open a pull request. `main` is never committed to directly.
+## When to stop and ask
 
-# When to stop and ask
-
-Business rules around imports, LCs, customs and duty are domain knowledge, not
-something to infer from context. If a rule is unclear or a requested change
-appears to contradict something written above, raise it rather than resolving it
-silently. A wrong assumption baked into the data model is expensive; a question
-is cheap.
+Business rules around imports, LCs, customs, duty, stock and purchasing are
+domain knowledge, not something to infer. If a rule is unclear or a requested
+change contradicts something above, raise it rather than resolving it silently.

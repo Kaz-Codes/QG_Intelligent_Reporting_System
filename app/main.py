@@ -33,6 +33,7 @@ from app.dashboard.imports.routes import router as imports_dashboard_router
 from app.dashboard.logistics.routes import router as logistics_dashboard_router
 from app.dashboard.whole.routes import router as overview_dashboard_router
 from app.dashboard.purchases.routes import router as purchases_dashboard_router
+from app.dashboard.inventory.routes import router as inventory_dashboard_router
 
 # The auth package has no populated __init__, so its two route files are
 # imported by hand to attach them to the auth router.
@@ -170,6 +171,7 @@ app.include_router(imports_dashboard_router)
 app.include_router(logistics_dashboard_router)
 app.include_router(overview_dashboard_router)
 app.include_router(purchases_dashboard_router)
+app.include_router(inventory_dashboard_router)
 
 
 @app.get("/")
