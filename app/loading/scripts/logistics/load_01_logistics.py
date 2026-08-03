@@ -38,16 +38,70 @@ DEFAULT_PACKING_STATUS = "Packing under manufacturing"
 # Matches String(100) on LogisticsItem.job_no.
 _JOB_NO_MAX = 100
 
-# The workbook's own vocabulary, tidied to one spelling. Anything not listed
-# is passed through as typed rather than being dropped.
-STATUS_MAP = {
+# The workbook's status vocabulary mapped onto the canonical enums. Anything
+# NOT listed (junk, stray dates, sizes typed into the status cell) falls back
+# to the default rather than being passed through — the status columns must
+# only ever hold enum values, or status filtering and the closed/stage logic
+# break. Some rollups are judgement calls (see the notes) and can be retuned.
+
+# Order status -> LogisticsStatus (Under Production, Under Packing,
+# Transportation, Under Shipping Arrangement, At QFL, At Port, On Water,
+# Delivered). 'Packed'/'Sailing'/'Gate Out' have no exact stage, so:
+#   Packed  -> Under Packing            (packing complete, nearest stage)
+#   Sailing -> On Water                 (on the sea leg)
+#   Gate Out-> Transportation           (left the works, being moved)
+ORDER_STATUS_MAP = {
     "delivered": "Delivered",
-    "sailing": "Sailing",
-    "at qfl": "At QFL",
+    "on water": "On Water",
+    "sailing": "On Water",
     "at port": "At Port",
-    "gate out": "Gate Out",
+    "at qfl": "At QFL",
+    "gate out": "Transportation",
+    "gateout": "Transportation",
+    "gate-out": "Transportation",
+    "transportation": "Transportation",
+    "under shipping arrangement": "Under Shipping Arrangement",
+    "shipping arrangement": "Under Shipping Arrangement",
+    "packed": "Under Packing",
+    "packed by air": "Under Packing",
+    "under packing": "Under Packing",
+    "un packed": "Under Packing",
+    "un-packed": "Under Packing",
+    "unpacked": "Under Packing",
+    "under final packing": "Under Packing",
+    "under final packing ": "Under Packing",
+    "final packing": "Under Packing",
+    "size pending": "Under Packing",
+    "plastic wrap": "Under Packing",
+    "under production": "Under Production",
+    "under manufacturing": "Under Production",
+    "manufacturing": "Under Production",
+    "production": "Under Production",
+    "pending": "Under Production",
+}
+
+# Package status -> PackingStatus (Packing under manufacturing, Under Packing,
+# Under Paint, Under Final Packing, Packed).
+PACKING_STATUS_MAP = {
     "packed": "Packed",
-    "pending": DEFAULT_STATUS,
+    "packed by air": "Packed",
+    "gate out": "Packed",
+    "gateout": "Packed",
+    "gate-out": "Packed",
+    "under final packing": "Under Final Packing",
+    "final packing": "Under Final Packing",
+    "plastic wrap": "Under Final Packing",
+    "under packing": "Under Packing",
+    "un packed": "Under Packing",
+    "un-packed": "Under Packing",
+    "unpacked": "Under Packing",
+    "size pending": "Under Packing",
+    "under paint": "Under Paint",
+    "paint": "Under Paint",
+    "under production": "Packing under manufacturing",
+    "under manufacturing": "Packing under manufacturing",
+    "manufacturing": "Packing under manufacturing",
+    "pending": "Packing under manufacturing",
 }
 
 # Each shipment row carries a COUNT per container type, not one row per
@@ -107,10 +161,19 @@ CONTAINER_COLUMNS_DB = [
 #--------------------------------------
 
 def map_status(value, default=DEFAULT_STATUS):
+    """Order status -> a canonical LogisticsStatus, default if unmapped."""
     s = clean_status(value)
     if not s:
         return default
-    return STATUS_MAP.get(s.strip().lower(), s.strip())
+    return ORDER_STATUS_MAP.get(s.strip().lower(), default)
+
+
+def map_packing_status(value, default=DEFAULT_PACKING_STATUS):
+    """Package status -> a canonical PackingStatus, default if unmapped."""
+    s = clean_status(value)
+    if not s:
+        return default
+    return PACKING_STATUS_MAP.get(s.strip().lower(), default)
 
 
 def map_order_type(value):
@@ -308,7 +371,7 @@ def _package_from(row, consignment_id):
         quoted,
         actual,
         clean_number(row.get("Gross Weight (Kgs)")),
-        map_status(status, DEFAULT_PACKING_STATUS),
+        map_packing_status(status),
         Json([]),                                    # allocations
         False,
     )

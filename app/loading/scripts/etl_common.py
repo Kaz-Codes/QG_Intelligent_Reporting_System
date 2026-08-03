@@ -88,6 +88,43 @@ def clean_date(value):
     return None if pd.isna(ts) else ts.date()
 
 
+# Excel keeps dates as a day count from 1899-12-30. When a column mixes real
+# dates with those raw numbers, pandas gives up and hands the number back
+# untouched — and pd.to_datetime would then read 46026 as 46026 NANOSECONDS,
+# quietly producing 1970-01-01 instead of a 2026 date.
+_EXCEL_EPOCH = "1899-12-30"
+_SERIAL_MIN = 20000   # 1954-10-03 — below this it is a quantity, not a date
+_SERIAL_MAX = 60000   # 2064-04-05 — above this it is an amount, not a date
+
+
+def clean_date_any(value):
+    """clean_date, but also decodes bare Excel day-serials (46026 -> 2026-01-05).
+
+    Use for any column the workbook stores as a mix of real dates and serials
+    (e.g. 'ETA Works / ETA Destination' on the shifting sheet). A number
+    outside the plausible serial window is treated as not-a-date rather than
+    being coerced into one.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)) and _SERIAL_MIN <= float(value) <= _SERIAL_MAX:
+        ts = pd.to_datetime(float(value), unit="D", origin=_EXCEL_EPOCH, errors="coerce")
+        return None if pd.isna(ts) else ts.date()
+
+    # A serial that arrived as text ("46026") is still a serial.
+    if isinstance(value, str):
+        s = value.strip()
+        if s.isdigit() and _SERIAL_MIN <= int(s) <= _SERIAL_MAX:
+            ts = pd.to_datetime(int(s), unit="D", origin=_EXCEL_EPOCH, errors="coerce")
+            return None if pd.isna(ts) else ts.date()
+
+    return clean_date(value)
+
+
 def parse_qty_uom(value):
     """'1 Nos.' -> (1.0, 'Nos.') ; 5 -> (5.0, None)."""
     if value is None or (isinstance(value, float) and pd.isna(value)):

@@ -249,28 +249,41 @@ new activity over a WebSocket.
 
 ## dashboards (`app/dashboard/*`)
 
-Five read-only dashboards — **imports, logistics, purchases, inventory, whole
-(overview)** — each at `GET /dashboard/<name>`. All figures are derived at
-request time from the source tables; filter option lists are built dynamically
-from the whole table; multi-select filters are repeated query params.
+Read-only dashboards. Every figure is derived at request time from the source
+tables; filter option lists are built dynamically from the whole table;
+multi-select filters are repeated query params; and each returns **aggregates +
+option lists only — no row lists** (the per-row "view data" table was dropped,
+keeping payloads in KBs).
 
-- imports/logistics read the operational tables; **purchases** and **inventory**
-  read the flat loaded stores tables (`purchases_data`, `stock`, `issuance`,
-  `store_requisition`) and return **aggregates + option lists only** (the
-  per-row "view data" table was dropped, so no row list is shipped — keeps the
-  payload in KBs).
-- Purchases derives an order **status** (Pending/Completed/Delayed) and overdue;
-  inventory derives **stock status**, **reorder level** (from store
-  requisitions), and **days-of-stock runway** (from issuance).
+- **imports** `GET /dashboard/imports` — operational consignments.
+- **logistics** — **three tab endpoints**, each its own data source + filters:
+  `GET /dashboard/logistics/shipments` (`LogisticsConsignment`), `/packing`
+  (`LogisticsPackage` + its order), and `/transport` (**`TruckingConsignment`** —
+  export trucking; `customer`/`city`/`province` resolved from the linked
+  logistics order via `source_ref`). The Documentation tab is **not** built —
+  its per-document status data was never loaded.
+- **purchases** `GET /dashboard/purchases` and **inventory**
+  `GET /dashboard/inventory` — the flat loaded stores tables (`purchases_data`,
+  `stock`, `issuance`, `store_requisition`). Purchases derives an order status
+  (Pending/Completed/Delayed) + overdue; inventory derives stock status,
+  **reorder level** (from store requisitions) and **days-of-stock runway** (from
+  issuance).
+- **whole** — cross-module overview.
 - **All the formulas are in `calculations.md`.**
 
 ## loading
 
 One-off Excel → DB migration loaders (pandas + raw `psycopg2`, not the ORM):
-stores tables and the imports sheet. Keyed grouping, name→id resolution, explicit
-ids + sequence bumping. `stores_schemas.py` defines the flat stores models
-(`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) that the purchases &
-inventory dashboards read.
+stores tables, the imports sheet, and the logistics workbook (merged from three
+sheets into orders + item/package/container children). Keyed grouping, name→id
+resolution, explicit ids + sequence bumping. Because the inserts are raw, any
+NOT-NULL column with only a Python-side default must be set explicitly, and
+enum-backed columns are **normalised onto the canonical enums** — e.g. the
+logistics loader maps the workbook's status vocabulary onto `LogisticsStatus` /
+`PackingStatus` and **defaults anything unmapped**, so junk (stray dates, sizes)
+never lands in a status column. `stores_schemas.py` defines the flat stores
+models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
+& inventory dashboards read.
 
 ---
 

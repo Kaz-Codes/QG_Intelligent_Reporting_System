@@ -6,8 +6,8 @@ rate booked on the record, never a live rate. Filter option lists are built
 dynamically from the whole table so a dropdown shows every value present, not
 just the ones on the current page.
 
-This file covers the **imports**, **purchases** and **inventory** dashboards.
-(The logistics and overview dashboards also exist; they follow the same shape.)
+This file covers the **imports**, **logistics**, **purchases** and **inventory**
+dashboards. (The overview dashboard also exists; it follows the same shape.)
 
 Each dashboard lives under `app/dashboard/<name>/` with the same four files:
 `calculations.py` (the formulas below), `helpers.py` (the queries),
@@ -155,3 +155,78 @@ still built internally, only to feed the aggregates).
 - `stock_status`/`reorder_status` are derived, so they're filtered in Python.
 - `last_restocked` was dropped — `stock` has no such date.
 - `specs` comes from the item master (`Item.default_specification`).
+
+---
+
+## Logistics — three tabs
+
+The logistics dashboard is **three independent endpoints**, one per frontend
+tab, each with its own data source, filters and dynamic option lists. All return
+aggregates + option lists only (no rows). The Documentation tab is not built —
+its per-document status data was never loaded.
+
+### Shipments — `GET /dashboard/logistics/shipments`  (source: `LogisticsConsignment`)
+
+Per order:
+- **`total_logistics_cost`** = Σ of the 13 named cost columns (`packing_cost`,
+  `transportation_charges`, `container_detention`, `insurance`,
+  `trucking_lhr_to_khi`, `fumigation_cost`, `lashing`, `qfl_charges`,
+  `qfl_container_movement`, `custom_clearance_charges`, `port_charges`,
+  `dhl_charges`, `sea_air_freight`).
+- **`cost_per_kg`** = `total_logistics_cost ÷ Σ item gross_weight` (null when no weight).
+- **`stage`** = roll-up of `current_status` → Pre-Shipment / In Transit /
+  Customs / Delivered (best-effort map; unmapped → Pre-Shipment).
+
+| KPI | Formula |
+|---|---|
+| `shipments_shown` | row count |
+| `delivered` | count where `current_status` = "Delivered" |
+| `not_yet_linked` | count with no `mo_no` (no export number yet) |
+| `total_cost` | Σ `total_logistics_cost` |
+| `avg_cost_per_kg` | mean of the per-order `cost_per_kg` |
+| `countries` | distinct `origin_country` |
+
+Charts: **status_split**, **cost_per_kg_by_country** (avg, top 8). Filters:
+`status[]`, `stage[]`, `shipping_line[]`, `country[]`, `customer[]`, ETD range
+(`port_in_date`), `search`.
+
+### Packing — `GET /dashboard/logistics/packing`  (source: `LogisticsPackage` + its order)
+
+Per package: **`rfd_delay_days`** = `(packing_date − packing_ready_date).days`
+(null if either is missing).
+
+| KPI | Formula |
+|---|---|
+| `packing_jobs_shown` | row count |
+| `packed` | count where package `status` = "Packed" |
+| `total_cost` | Σ `actual_packing_cost` |
+| `avg_rfd_delay_days` | mean of `rfd_delay_days` |
+| `categories` | distinct order `department` |
+
+Charts: **status_split**, **by_category** (order `department`),
+**by_business_type** (order `order_type`), **by_customer** (top 8). Filters:
+`status[]`, `works[]`, `product_category[]`, `business_type[]`, `customer[]`,
+packing-date range, `search` (order-level filters go through the relationship).
+
+### Transport — `GET /dashboard/logistics/transport`  (source: `TruckingConsignment`)
+
+Trucking has no stored job status, so:
+- **`status`** = roll-up over the vehicles: all delivered → **Delivered**; some →
+  **In Progress**; none → **Booked**.
+- **`freight_savings`** = `max(quoted_freight − actual_freight, 0)`.
+- **`customer` / `city` / `province`** are **not** on the trucking job — for a job
+  that came from a logistics order (`source = 'from-logistics'`, `source_ref` =
+  the order id) they are resolved from that order (a local logistics consignment
+  handed to trucking carries them). Manual / import-FOB jobs have none.
+
+| KPI | Formula |
+|---|---|
+| `jobs_shown` | row count |
+| `delivered` / `in_progress` | counts by derived status |
+| `total_freight` | Σ `actual_freight` |
+| `total_savings` | Σ `freight_savings` |
+
+Charts: **status_split**, **by_movement_type**, **by_transporter** (top 8),
+**by_payment_status**, **by_customer**, **by_province**. Filters: `status[]`
+(derived), `movement_type[]`, `source[]`, `payment_status[]`, `transporter[]`,
+`customer[]` (resolved), `province[]` (resolved), execution range, `search`.
