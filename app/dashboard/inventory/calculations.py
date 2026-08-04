@@ -49,10 +49,20 @@ def derive_reorder_status(available_qty, reorder_level):
 
 
 def days_of_stock(available_qty, avg_daily_issue):
-    # Runway = available stock / average daily consumption. None when there is
-    # no issuance history to estimate a consumption rate from.
-    if avg_daily_issue and avg_daily_issue > 0 and available_qty is not None:
-        return int(available_qty / avg_daily_issue)
+    # Runway = how many days the available stock lasts at the average daily
+    # consumption rate. None when:
+    #   * there is no issuance history to estimate a consumption rate from, or
+    #   * the item is already out of stock (available <= 0) — "days remaining" is
+    #     meaningless once you have run out, and those items would otherwise fill
+    #     the whole "lowest days of stock" chart with zeros and hide the items
+    #     that still have stock but little runway (they are the Out-of-Stock KPI).
+    #
+    # Rounded to one decimal, NOT floored with int(): an item that lasts half a
+    # day (available 3, using 5.5/day) is the most urgent of all, and int() would
+    # truncate it to 0 — throwing away exactly the signal this figure exists for.
+    if (avg_daily_issue and avg_daily_issue > 0
+            and available_qty is not None and available_qty > 0):
+        return round(float(available_qty / avg_daily_issue), 1)
     return None
 
 
@@ -70,8 +80,15 @@ def kpis(rows):
 
     out_of_stock = sum(1 for r in rows if r["stock_status"] == OUT_OF_STOCK)
     below_reorder = sum(1 for r in rows if r["stock_status"] == BELOW_REORDER)
-    items_shown = len(rows)
-    at_risk_pct = round(((out_of_stock + below_reorder) / items_shown) * 100) if items_shown else 0
+
+    # "Items Shown" counts only items that actually have stock available — an
+    # item with 0 available is not something you have, it is an Out-of-Stock
+    # line. The out-of-stock rows still feed the risk figures below (that is what
+    # the % At Risk is about), so at_risk_pct keeps the FULL row count as its
+    # denominator, not the available-only count.
+    total_items = len(rows)
+    items_shown = sum(1 for r in rows if _num(r["available_qty"]) > 0)
+    at_risk_pct = round(((out_of_stock + below_reorder) / total_items) * 100) if total_items else 0
 
     total_stock_value = sum((_num(r["stock_qty_amount"]) for r in rows), Decimal("0"))
     available_value = sum((_num(r["available_amount"]) for r in rows), Decimal("0"))

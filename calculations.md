@@ -124,8 +124,13 @@ planner's manual value).
 - **reorder_status** — `available_qty < reorder_level` → **Reorder Needed**, else **Adequate**.
 - **days_of_stock** (runway) = `available_qty ÷ avg daily issuance`, where avg
   daily issuance = Σ `Issuance.quantity` over the last `CONSUMPTION_WINDOW_DAYS`
-  (ending at the latest `from_date`) ÷ `CONSUMPTION_WINDOW_DAYS`; `null` when
-  there's no issuance history.
+  (ending at the latest `from_date`) ÷ `CONSUMPTION_WINDOW_DAYS`. Rounded to one
+  decimal (not floored — a half-day runway is the most urgent, and `int()` would
+  truncate it to 0). `null` when there's no issuance history **or the item is
+  already out of stock** (`available ≤ 0`) — a "days remaining" figure is
+  meaningless once you've run out, and those items would otherwise fill the
+  "lowest days of stock" chart with zeros and hide the ones still running down.
+  They are already counted as Out of Stock.
 
 ### KPIs
 | KPI | Formula |
@@ -133,9 +138,9 @@ planner's manual value).
 | `available_units` | Σ `available_qty` |
 | `total_stock_qty` | Σ `stock_qty` |
 | `on_hold` | Σ `hold_qty` |
-| `items_shown` | row count |
+| `items_shown` | count of rows with `available_qty > 0` (items you actually have — out-of-stock lines are excluded) |
 | `out_of_stock` / `below_reorder` | counts by derived status |
-| `at_risk_pct` | `(out_of_stock + below_reorder) / items_shown × 100` |
+| `at_risk_pct` | `(out_of_stock + below_reorder) / total rows × 100` (denominator is the **full** row count, not the available-only `items_shown`) |
 | `total_stock_value` | Σ `stock_qty_amount` |
 | `available_value` | Σ `available_amount` |
 
