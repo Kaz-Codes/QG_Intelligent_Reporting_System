@@ -15,7 +15,7 @@ name against this table.
 
 from pathlib import Path
 
-from app.loading.scripts.etl_common import read_sheet, clean_text, bulk_insert
+from app.loading.scripts.etl_common import read_and_concat, list_excel_files, clean_text, bulk_insert
 
 
 CURRENT_DIR = Path(__file__).resolve().parents[2]
@@ -23,11 +23,8 @@ DIRECTORY = CURRENT_DIR / "data" / "imports"
 
 # DIRECTORY = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
 
-# the real workbook, skipping any ~$ excel lock file
-EXCEL_FILE = next(
-    f for f in DIRECTORY.iterdir()
-    if f.suffix == ".xlsx" and not f.name.startswith("~$")
-)
+# Every workbook in the folder is loaded, not just the first.
+FILES = list_excel_files(DIRECTORY)
 
 PORT_COLUMNS = ["id", "name", "country", "port_type", "un_locode", "used_as", "is_active", "is_verified"]
 
@@ -64,7 +61,7 @@ def build_port_rows(df):
 
 
 def load_ports(conn):
-    df = read_sheet("Sheet1", EXCEL_FILE)
+    df = read_and_concat("Sheet1", FILES)
 
     rows, _ = build_port_rows(df)
 

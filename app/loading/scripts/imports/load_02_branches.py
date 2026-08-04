@@ -2,7 +2,7 @@
 
 import pandas as pd
 from app.loading.scripts.etl_common import (
-    read_sheet, clean_text, bulk_insert, clean_int
+    read_and_concat, list_excel_files, clean_text, bulk_insert, clean_int
 )
 from pathlib import Path
 
@@ -11,9 +11,8 @@ directory = CURRENT_DIR / "data" / "imports"
 
 # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\imports")
 
-files = list(directory.iterdir())
-
-EXCEL_FILE = files[0]
+# Every workbook in the folder is loaded, not just the first.
+files = list_excel_files(directory)
 
 #Order of columns matters here (must be same as order of ROWS list)
 BRANCH_COLUMNS = ["id", "name", "code", "city", "address","is_active", "is_verified"]
@@ -24,7 +23,7 @@ BRANCH_HEADERS = [
 ]
 
 def load_branches(conn):
-    df = read_sheet("Sheet1", EXCEL_FILE)
+    df = read_and_concat("Sheet1", files)
     df = df.drop_duplicates(subset=["works_id"])
     branch_rows = []
 

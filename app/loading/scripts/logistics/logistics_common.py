@@ -21,15 +21,19 @@ needing to read the previous loader's rows back out of the database.
 
 from pathlib import Path
 
-from app.loading.scripts.etl_common import clean_key, clean_text, read_sheet
+import pandas as pd
+
+from app.loading.scripts.etl_common import (
+    clean_key, clean_text, read_sheet, list_excel_files,
+)
 
 CURRENT_DIR = Path(__file__).resolve().parents[2]
 DIRECTORY = CURRENT_DIR / "data" / "logistics"
 
-WORKBOOK = next(
-    f for f in DIRECTORY.iterdir()
-    if f.suffix == ".xlsx" and not f.name.startswith("~$")
-)
+# Every workbook in the folder is loaded, not just the first. list_excel_files
+# is sorted, so read_logistics_sheet stacks the sheets in the SAME order every
+# time — which the packing sheet's position-based order ids depend on.
+WORKBOOKS = list_excel_files(DIRECTORY)
 
 # The sheets, and the column each one spells the export/batch number with.
 SHEET_SHIPMENT = "Shipment Master Database"
@@ -61,7 +65,12 @@ def row_key(row, sheet_name):
 
 
 def read_logistics_sheet(sheet_name):
-    return read_sheet(sheet_name, WORKBOOK)
+    # One sheet stacked across every workbook, in the fixed WORKBOOKS order, with
+    # a clean 0..N index. build_order_index() and the loaders both read through
+    # here, so the packing rows they see (and the positions the local order ids
+    # are keyed by) are always identical.
+    frames = [read_sheet(sheet_name, workbook) for workbook in WORKBOOKS]
+    return pd.concat(frames, ignore_index=True)
 
 
 def build_order_index():

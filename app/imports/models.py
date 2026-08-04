@@ -210,7 +210,7 @@ class Consignment(Base, TimestampMixin):
     )
     
     remarks: Mapped[Optional[str]] = mapped_column(
-        String(500),
+        String(2000),
         nullable=True
     )
 

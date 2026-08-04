@@ -1,4 +1,6 @@
 import re
+from pathlib import Path
+
 import pandas as pd
 from psycopg2.extras import execute_values
 
@@ -172,3 +174,35 @@ def read_sheet(sheet_name, file_path) -> pd.DataFrame:
     df = df.dropna(how="all")
     print(f"Read '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
     return df
+
+
+def list_excel_files(directory) -> list:
+    """Every Excel workbook in a folder, sorted by name, skipping Excel's own
+    ~$ lock files and anything that is not a workbook.
+
+    Loaders read ALL of these and concatenate them, so loading another period's
+    data is just a matter of dropping its file into the folder — no code change.
+    The sort makes the order deterministic, which matters where row identity is
+    derived from position (the logistics packing sheet).
+    """
+    directory = Path(directory)
+    files = sorted(
+        f for f in directory.iterdir()
+        if f.is_file()
+        and f.suffix.lower() in (".xlsx", ".xls")
+        and not f.name.startswith("~$")
+    )
+    if not files:
+        raise FileNotFoundError(f"No Excel files found in {directory}")
+    return files
+
+
+def read_and_concat(sheet_name, files) -> pd.DataFrame:
+    """Read the same sheet from every file and stack them into one DataFrame.
+
+    The index is reset so it is a clean 0..N range across all files (a loader
+    that keys off the row index must account for that; the simple column loaders
+    do not use the index at all).
+    """
+    frames = [read_sheet(sheet_name, f) for f in files]
+    return pd.concat(frames, ignore_index=True)

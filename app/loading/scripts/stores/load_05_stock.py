@@ -2,7 +2,7 @@
 
 import pandas as pd
 from app.loading.scripts.etl_common import (
-    read_sheet, clean_text, clean_number, bulk_insert
+    read_sheet, list_excel_files, clean_text, clean_number, bulk_insert
 )
 
 from pathlib import Path
@@ -11,9 +11,7 @@ CURRENT_DIR = Path(__file__).resolve().parents[2]
 directory = CURRENT_DIR / "data" / "stocks"
 # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\stocks")
 
-files = list(directory.iterdir())
-
-EXCEL_FILES = files
+EXCEL_FILES = list_excel_files(directory)
 
 #Order of columns matters here (must be same as order of ROWS list)
 STOCK_COLUMNS = ["item_code", "item_name", "branch", "hold_qty", "stock_qty", "stock_qty_amount",  "available_qty", "available_amount"]

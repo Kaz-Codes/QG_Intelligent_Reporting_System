@@ -2,7 +2,7 @@
 
 import pandas as pd
 from app.loading.scripts.etl_common import (
-    read_sheet, clean_text, clean_number, clean_date, bulk_insert
+    read_and_concat, list_excel_files, clean_text, clean_number, clean_date, bulk_insert
 )
 from pathlib import Path
 
@@ -10,9 +10,8 @@ CURRENT_DIR = Path(__file__).resolve().parents[2]
 directory = CURRENT_DIR / "data" / "store_requisitions"
 # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\store_requisitions")
 
-files = list(directory.iterdir())
-
-EXCEL_FILE = files[0]
+# Every workbook in the folder is loaded, not just the first.
+files = list_excel_files(directory)
 
 #Order of columns matters here (must be same as order of ROWS list)
 STORE_REQUISITION_COLUMNS = ["item_code", "item_name", "ref_no", "department", "branch", "prepare_date", "description", "required_by",  "req_quantity", "pur_quantity", "pending_quantity", "last_purchase", "previous_price", "required_date", "status", "sourced_by", "previous_supplier", "original_required_date", "stock_in_date"]
@@ -23,7 +22,7 @@ STORE_REQUISITION_HEADERS = [
 ]
 
 def load_store_requisitions(conn):
-    df = read_sheet("Sheet1", EXCEL_FILE)
+    df = read_and_concat("Sheet1", files)
     store_requisitions_rows = []
 
     for _, row in df.iterrows():

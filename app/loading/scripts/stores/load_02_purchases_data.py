@@ -3,7 +3,7 @@
 import pandas as pd
 pd.set_option("display.max_columns", None)
 from app.loading.scripts.etl_common import (
-    read_sheet, clean_text, clean_int, clean_date, bulk_insert
+    read_and_concat, list_excel_files, clean_text, clean_int, clean_date, bulk_insert
 )
 from pathlib import Path
 
@@ -12,17 +12,16 @@ directory = CURRENT_DIR / "data" / "purchases"
 
 # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\purchases")
 
-files = list(directory.iterdir())
-
-EXCEL_FILE = files[0]
+# Every workbook in the folder is loaded, not just the first.
+files = list_excel_files(directory)
 
 #Order of columns matters here (must be same as order of ROWS list)
 PURCHASES_COLUMNS = [
-    "ref_no", "qty", "branch", "amount", "ppc_store", "required_d", "purchase", "mop", "dc_no"  ,"bill_no", "sourcing_o", "item_code", "item_name", "specification", "supplier", "po_number"
+    "ref_no", "qty", "branch", "amount", "ppc_store", "required_d", "purchase", "mop", "dc_no"  ,"bill_no", "sourcing_o", "item_code", "item_name", "specification", "supplier", "po_number", "po_date"
 ]
 
 def load_purchases(conn):
-    df = read_sheet("Sheet1", EXCEL_FILE)
+    df = read_and_concat("Sheet1", files)
     purchases_rows = []
 
     for _, row in df.iterrows():
@@ -43,6 +42,7 @@ def load_purchases(conn):
             clean_text(row.get("Specificati")),
             clean_text(row.get("Supplier")),
             clean_text(row.get("PO Numbe")),
+            clean_date(row.get("PO Date")),
         ))
 
     bulk_insert(conn, "purchases_data", PURCHASES_COLUMNS, purchases_rows)

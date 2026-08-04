@@ -5,11 +5,14 @@
 
 import pandas as pd
 from app.loading.scripts.etl_common import (
-    read_sheet, clean_text, bulk_insert
+    read_sheet, list_excel_files, clean_text, bulk_insert
 )
 
 from pathlib import Path
 
+# Every folder contributes ALL of its workbooks — items are harvested from the
+# item database plus whatever item codes appear in purchases, stocks and store
+# requisitions but are missing from it.
 folders = ["items_database", "purchases", "stocks", "store_requisitions"]
 file_names = {}
 for folder in folders:
@@ -17,20 +20,8 @@ for folder in folders:
     directory = CURRENT_DIR / "data" / folder
 
     # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data") /folder
-    
-    files = list(directory.iterdir())
 
-    if folder == "items_database":
-        file_names["items_database"] = files
-    
-    if folder == "purchases":
-        file_names["purchases"] = files
-    
-    if folder == "stocks":
-        file_names["stocks"] = files
-    
-    if folder == "store_requisitions":
-        file_names["store_requisitions"] = files[0]
+    file_names[folder] = list_excel_files(directory)
 
 
 #Order of columns matters here (must be same as order of columns in sheet)
@@ -46,7 +37,8 @@ def load_items(conn):
     stock_df_list = [read_sheet("Sheet1", file) for file in file_names["stocks"]]
     stock_df = pd.concat(stock_df_list, ignore_index=True)
 
-    store_req_df = read_sheet("Sheet1", file_names["store_requisitions"])
+    store_req_df_list = [read_sheet("Sheet1", file) for file in file_names["store_requisitions"]]
+    store_req_df = pd.concat(store_req_df_list, ignore_index=True)
 
     item_codes_history = []
     items_rows = []

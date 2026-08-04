@@ -3,7 +3,7 @@
 import pandas as pd
 pd.set_option("display.max_columns", None)
 from app.loading.scripts.etl_common import (
-    read_sheet, clean_text, clean_int, clean_date, clean_number, bulk_insert
+    read_sheet, list_excel_files, clean_text, clean_int, clean_date, clean_number, bulk_insert
 )
 
 from pathlib import Path
@@ -13,9 +13,7 @@ directory = CURRENT_DIR / "data" / "issuances"
 
 # directory = Path(r"C:\Users\hp\Desktop\internship\erp-fastapi\app\loading\data\issuances")
 
-files = list(directory.iterdir())
-
-EXCEL_FILES = files
+EXCEL_FILES = list_excel_files(directory)
 
 #Order of columns matters here (must be same as order of ROWS list)
 ISSUANCE_COLUMNS = ["issuance_code", "item_code", "item_name", "Specification", "department", "branch", "issue_to_others",  "authorized_by", "issued_by", "received_by", "description", "ref_no", "demand_ref_no",       "quantity", "status", "from_date", "unit_price", "total_price", "job_number"]
