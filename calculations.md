@@ -76,11 +76,16 @@ and `search`.
 ### Charts
 - **status_split** — Pending / Completed / Delayed counts.
 - **value_by_supplier**, **value_by_branch** — Σ `amount`, top 8.
+- **overdue_buckets** — Delayed rows bucketed by `days_overdue` into the four
+  standard aging tiers (`0-30` / `31-60` / `61-90` / `90+ days`), in that fixed
+  order (empty tiers kept). Feeds the "Delayed Orders — Days Overdue" bar chart.
 - **monthly_value_trend** — Σ `amount` by month of `purchase` (falling back to `po_date`).
 
 ### Option lists
 Returns the aggregates above plus dynamic filter option lists: `statuses`,
-`suppliers`, `branches`, `item_categories`, `mops`, `sourcing_officers`. The
+`suppliers`, `branches`, `item_categories`, `mops`, `sourcing_officers`. These
+are built from cheap `SELECT DISTINCT` queries (**not** by loading the whole
+table into ORM objects — that was the multi-second floor on every request). The
 per-row table was dropped from the dashboard, so no row list is shipped — the
 payload stays a few KB.
 
@@ -143,9 +148,10 @@ planner's manual value).
 
 ### Option lists
 Returns the aggregates above plus dynamic filter option lists: `statuses`,
-`reorder_statuses`, `branches`, `items`, `item_categories`. The per-row table
-was dropped from the dashboard, so no row list is shipped (the derived rows are
-still built internally, only to feed the aggregates).
+`reorder_statuses`, `branches`, `items`, `item_categories` — built from cheap
+`SELECT DISTINCT` queries, not by loading the whole `stock` table. The per-row
+table was dropped from the dashboard, so no row list is shipped (the derived
+rows are still built internally, only to feed the aggregates).
 
 ### Tunable constants (`app/dashboard/inventory/helpers.py`)
 `CONSUMPTION_WINDOW_DAYS = 90`, `DEMAND_WINDOW_DAYS = 180`,

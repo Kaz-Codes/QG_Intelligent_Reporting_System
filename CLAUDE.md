@@ -70,7 +70,8 @@ endpoint, all hanging off a shared `router`, listed in `routes/__init__.py`).
 On startup: import every model module (so `Base.metadata` knows all tables) →
 `create_all` → seed the four roles and a default admin if absent → add CORS →
 `include_router` for every module (data-entry, masters, auth, logs, and the five
-dashboards).
+dashboards). **Startup does not load data** — that is the separate
+`python -m app.loading.scripts.load_all` CLI (see the loading module).
 
 Route files self-register by importing the shared `router` and decorating it;
 `routes/__init__.py` imports every route file so one `include_router` wires the
@@ -325,6 +326,17 @@ logistics loader maps the workbook's status vocabulary onto `LogisticsStatus` /
 never lands in a status column. `stores_schemas.py` defines the flat stores
 models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
 & inventory dashboards read.
+
+- **Each loader reads _every_ workbook in its folder** (`etl_common.list_excel_files`
+  + `read_and_concat`), skipping `~$` lock files — dropping another period's file
+  into the folder loads it too, no code change. Multiple workbooks in one folder
+  must share the same sheet structure.
+- **Loading is an explicit CLI, never an import side effect.** Run
+  **`python -m app.loading.scripts.load_all`** for a destructive full reload
+  (drop → `create_all` → load). It is **not** run on server start: doing so on
+  every start (and every `--reload`) silently doubled `purchases_data` (no natural
+  key, and the DROP list had `purchases` instead of `purchases_data`, so the
+  clear was a no-op). `app.main` only does `create_all` + seed on startup.
 
 ---
 

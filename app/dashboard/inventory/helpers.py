@@ -33,6 +33,32 @@ def fetch_stock(db):
 
 
 #-------------------------------------
+# FILTER OPTION LISTS (cheap DISTINCT queries)
+#
+# The dropdowns only need distinct values, so they are read with small DISTINCT
+# queries instead of materializing every stock row as an ORM object with its
+# item joined-loaded. (fetch_stock stays for anything that genuinely needs the
+# rows; the dashboard route no longer uses it just for the dropdowns.)
+#-------------------------------------
+
+def option_lists(db):
+    branches = sorted(v for (v,) in db.execute(select(Stock.branch).distinct()).all() if v)
+    items = sorted(v for (v,) in db.execute(select(Stock.item_name).distinct()).all() if v)
+    item_categories = sorted(
+        v for (v,) in db.execute(
+            select(Item.category)
+            .join(Stock, Stock.item_code == Item.item_code)
+            .distinct()
+        ).all() if v
+    )
+    return {
+        "branches": branches,
+        "items": items,
+        "item_categories": item_categories,
+    }
+
+
+#-------------------------------------
 # FETCH THE FILTERED STOCK ROWS
 #
 # branch / item / category are multi-select (IN). Category lives on the item

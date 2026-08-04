@@ -1,6 +1,6 @@
 from app.dashboard.purchases.calculations import (
     kpis, monthly_value_trend, status_split, value_by_branch, value_by_supplier,
-    derive_status, days_overdue,
+    overdue_buckets, derive_status, days_overdue,
 )
 
 
@@ -50,5 +50,6 @@ def serialize_purchases_dashboard(rows):
         "status_split": status_split(rows),
         "value_by_supplier": value_by_supplier(rows),
         "value_by_branch": value_by_branch(rows),
+        "overdue_buckets": overdue_buckets(rows),
         "monthly_value_trend": monthly_value_trend(rows),
     }

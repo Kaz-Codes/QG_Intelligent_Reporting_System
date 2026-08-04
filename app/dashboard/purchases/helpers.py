@@ -5,6 +5,35 @@ from app.masters.models import Item
 
 
 #-------------------------------------
+# FILTER OPTION LISTS (cheap DISTINCT queries)
+#
+# The dropdowns only need the distinct values, so they are read with five small
+# DISTINCT queries instead of materializing every purchase row as an ORM object
+# (131k+ objects with the item joined-loaded — that was the multi-second floor
+# on every dashboard request, before a single aggregate was even computed).
+#-------------------------------------
+
+def _distinct(db, column):
+    return sorted(v for (v,) in db.execute(select(column).distinct()).all() if v)
+
+
+def option_lists(db):
+    return {
+        "suppliers": _distinct(db, PurchasesData.supplier),
+        "branches": _distinct(db, PurchasesData.branch),
+        "sourcing_officers": _distinct(db, PurchasesData.sourcing_o),
+        "mops": _distinct(db, PurchasesData.mop),
+        "item_categories": sorted(
+            v for (v,) in db.execute(
+                select(Item.category)
+                .join(PurchasesData, PurchasesData.item_code == Item.item_code)
+                .distinct()
+            ).all() if v
+        ),
+    }
+
+
+#-------------------------------------
 # FETCH EVERY PURCHASE ROW
 #
 # Used to build the filter option lists (so the dropdowns show every value,

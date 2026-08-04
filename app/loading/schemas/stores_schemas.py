@@ -30,14 +30,17 @@ class Stock(Base):
         autoincrement=True
     )
 
+    # Indexed for the inventory dashboard's filters, DISTINCT dropdowns and the
+    # category join (built on recreate, like the purchases indexes above).
     item_code: Mapped[Optional[str]] = mapped_column(
         ForeignKey("items.item_code"),
-        nullable=True
+        nullable=True,
+        index=True
     )
 
-    item_name: Mapped[Optional[str]] = mapped_column(Text)
+    item_name: Mapped[Optional[str]] = mapped_column(Text, index=True)
 
-    branch: Mapped[Optional[str]] = mapped_column(Text)
+    branch: Mapped[Optional[str]] = mapped_column(Text, index=True)
 
     hold_qty: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 3)
@@ -82,8 +85,7 @@ class Issuance(Base):
     )
 
     issuance_code: Mapped[Optional[str]] = mapped_column(
-        Text,
-        unique=True
+        Text
     )
 
     item_code: Mapped[Optional[str]] = mapped_column(
@@ -214,9 +216,15 @@ class PurchasesData(Base):
         autoincrement=True
     )
 
+    # Indexed columns are the ones the purchases dashboard filters, groups or
+    # joins on (item_code for the category join + item filter, the rest for the
+    # list filters and the status derivation). The table is loaded, not written
+    # through the ORM, but create_all still builds these indexes when the loader
+    # recreates the table.
     item_code: Mapped[Optional[str]] = mapped_column(
         ForeignKey("items.item_code"),
-        nullable=True
+        nullable=True,
+        index=True
     )
 
     item_name: Mapped[Optional[str]] = mapped_column(Text)
@@ -231,7 +239,7 @@ class PurchasesData(Base):
 
     qty: Mapped[Optional[int]] = mapped_column()
 
-    branch: Mapped[Optional[str]] = mapped_column(Text)
+    branch: Mapped[Optional[str]] = mapped_column(Text, index=True)
 
     amount: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 3)
@@ -241,17 +249,17 @@ class PurchasesData(Base):
 
     required_d: Mapped[Optional[date]] = mapped_column(Date)
 
-    purchase: Mapped[Optional[date]] = mapped_column(Date)
+    purchase: Mapped[Optional[date]] = mapped_column(Date, index=True)
 
-    mop: Mapped[Optional[str]] = mapped_column(Text)
+    mop: Mapped[Optional[str]] = mapped_column(Text, index=True)
 
     dc_no: Mapped[Optional[str]] = mapped_column(Text)
 
     bill_no: Mapped[Optional[str]] = mapped_column(Text)
 
-    sourcing_o: Mapped[Optional[str]] = mapped_column(Text)
+    sourcing_o: Mapped[Optional[str]] = mapped_column(Text, index=True)
 
-    supplier: Mapped[Optional[str]] = mapped_column(Text)
+    supplier: Mapped[Optional[str]] = mapped_column(Text, index=True)
 
     item: Mapped[Optional["Item"]] = relationship(
         back_populates="purchases"

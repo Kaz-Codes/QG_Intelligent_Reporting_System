@@ -134,6 +134,40 @@ def status_split(rows):
     ]
 
 
+#-------------------------------------
+# DELAYED ORDERS — DAYS OVERDUE (aging buckets)
+#
+# The "Days Overdue" bar chart on the purchases dashboard. Every Delayed row is
+# bucketed by how many days late it was purchased, into the four standard aging
+# tiers the front end uses across the app. Returned in a fixed order (empty tiers
+# kept, so the bars stay in place), shaped to match the AgingBuckets component:
+# [{"bucket": "0-30 days", "orders": N}, ...].
+#-------------------------------------
+
+AGING_TIERS = ["0-30 days", "31-60 days", "61-90 days", "90+ days"]
+
+
+def _aging_tier(days):
+    if days <= 30:
+        return "0-30 days"
+    if days <= 60:
+        return "31-60 days"
+    if days <= 90:
+        return "61-90 days"
+    return "90+ days"
+
+
+def overdue_buckets(rows):
+    counts = {tier: 0 for tier in AGING_TIERS}
+    for row in rows:
+        overdue = days_overdue(row.purchase, row.required_d)
+        if overdue is None:
+            continue
+        counts[_aging_tier(overdue)] += 1
+
+    return [{"bucket": tier, "orders": counts[tier]} for tier in AGING_TIERS]
+
+
 def monthly_value_trend(rows):
     totals = {}
 

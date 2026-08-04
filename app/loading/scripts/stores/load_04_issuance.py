@@ -31,7 +31,7 @@ def load_issuances(conn):
         dataframes.append(read_sheet("Sheet1", file))
 
     df = pd.concat(dataframes, ignore_index=True)
-    df = df.drop_duplicates(subset=["IssuanceCode"], keep="first")
+    df = df.drop_duplicates(keep="first")
 
     for _, row in df.iterrows():
         row_tuple = ()

@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from app.database import Base, SessionLocal, engine
-from app.loading.scripts.load_all import call_load
 
 # Importing the model modules registers every table on Base.metadata, so
 # create_all below knows about all of them. Nothing is created until this
@@ -192,5 +191,7 @@ create_tables()
 seed_roles()
 seed_admin()
 
-# Load stores data
-call_load()
+# Loading the source workbooks is NOT done here — it is a destructive full
+# reload and must be run explicitly, not on every server start (which is what
+# duplicated purchases_data):
+#     python -m app.loading.scripts.load_all
