@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS
 from app.imports.helpers import fetch_consignment, verify_entry_ownership, submission_errors
 from app.imports.serializers import serialize_consignment
 
@@ -35,7 +36,7 @@ def submit_consignment(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager", "entry operator"], db)
+        user = authorize(user_payload, [CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS], db)
 
         consignment = fetch_consignment(db, consignment_id)
 

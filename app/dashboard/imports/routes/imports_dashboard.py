@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_IMPORTS_DASHBOARD
 from app.dashboard.imports.helpers import fetch_consignments, fetch_filtered_consigments
 from app.dashboard.imports.serializers import serialize_imports_dashboard
 from typing import Optional
@@ -30,7 +31,7 @@ def imports_dashboard(
 
         # Authorize user (Check whether user is allowed for this
         # action). Dashboards are read only, so every role sees them.
-        user = authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        user = authorize(user_payload, CAN_VIEW_IMPORTS_DASHBOARD, db)
 
         consignments = fetch_consignments(db)
         filtered_consignments = fetch_filtered_consigments(db, work, status, item_category, supplier, country, from_date, to_date, mode_of_shipment)

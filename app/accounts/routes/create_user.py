@@ -3,10 +3,10 @@ from app.accounts.schemas import UserSchema
 from app.database import SessionLocal
 from app.accounts.models import User
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from sqlalchemy import select
-from app.accounts.helpers import serialize_user
+from app.accounts.helpers import serialize_user, apply_account_access
 
 #-------------------------------------------
 # ADMIN CAN CREATE A NEW ACCOUNT
@@ -19,7 +19,7 @@ async def create_user(user_schema : UserSchema, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin"], db)
+        require_admin(request_user_data, db)
 
         # check whether username already exists
         user_exists = db.execute(
@@ -32,12 +32,12 @@ async def create_user(user_schema : UserSchema, request: Request):
                 detail = "Username already exists"
             )
 
-        # role on the schema is the role id itself, not an object
         user = User(
             username = user_schema.username,
             password = user_schema.password,
-            role_id = user_schema.role
         )
+        # Checkbox -> admin (no permissions), otherwise the chosen permissions.
+        apply_account_access(db, user, user_schema.is_admin, user_schema.permissions)
 
         db.add(user)
         db.commit()

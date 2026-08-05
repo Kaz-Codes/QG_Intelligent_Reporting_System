@@ -2,7 +2,7 @@ from app.accounts.routes.router import router
 from app.database import SessionLocal
 from app.accounts.models import User
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from app.accounts.helpers import check_existence, serialize_user
 
@@ -23,7 +23,7 @@ async def change_status(id : int, is_active: bool, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin"], db)
+        require_admin(request_user_data, db)
 
         user = check_existence(id, User, db)
         user.is_active = is_active

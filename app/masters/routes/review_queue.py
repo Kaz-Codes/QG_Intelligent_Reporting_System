@@ -2,6 +2,7 @@ from app.auth.authenticate_user import authenticate
 from app.database import SessionLocal
 from app.masters.helpers import used_counts
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_MASTER
 from app.masters.registry import MASTER_ORDER, MASTERS
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
@@ -31,7 +32,7 @@ async def review_queue(request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin", "manager", "entry operator", "viewer"], db)
+        authorize(request_user_data, CAN_VIEW_MASTER, db)
 
         queue = {}
         total = 0

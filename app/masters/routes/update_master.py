@@ -4,6 +4,7 @@ from app.masters.helpers import (
     check_unique, get_row, parse_payload, set_hs_codes, used_counts,
 )
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_EDIT_MASTER
 from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
@@ -29,7 +30,7 @@ async def update_master(master : str, row_id : int, payload : dict, request: Req
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin", "manager"], db)
+        authorize(request_user_data, CAN_EDIT_MASTER, db)
 
         config = get_master_config(master)
         model = config["model"]

@@ -3,7 +3,8 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.logistics.helpers import fetch_consignment
+from app.accounts.permissions import CAN_DELETE_LOGISTICS
+from app.logistics.helpers import fetch_consignment, verify_entry_ownership
 from app.logistics.serializers import serialize_consignment
 from datetime import datetime, timezone
 
@@ -22,7 +23,7 @@ def delete_consignment(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager"], db)
+        user = authorize(user_payload, CAN_DELETE_LOGISTICS, db)
 
         consignment = fetch_consignment(db, consignment_id)
 
@@ -31,6 +32,9 @@ def delete_consignment(
                 status_code=404,
                 detail="Order not found"
             )
+
+        # Non-admins may only delete their own records.
+        verify_entry_ownership(consignment, user, db)
 
         # Nothing is really deleted, only flagged
         consignment.is_deleted = True

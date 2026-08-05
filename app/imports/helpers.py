@@ -5,7 +5,6 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
 
-from app.accounts.models import Role
 from app.enums import Status
 from sqlalchemy import select
 from datetime import datetime, timezone, date
@@ -51,16 +50,11 @@ def coerce_value(model, field, value):
 
 
 def verify_entry_ownership(consignment, user, db):
-
-    role = db.execute(
-        select(Role).where(
-            Role.id == user.role_id
-        )
-    ).scalar_one_or_none()
-
-    if role and role.name in ("admin", "manager"):
+    # Admins may touch any record; everyone else only what they created. `db` is
+    # kept in the signature for call-site compatibility, though no longer needed.
+    if user.is_admin:
         return
-    
+
     if consignment.created_by_id != user.id:
         raise HTTPException(
             status_code=403,

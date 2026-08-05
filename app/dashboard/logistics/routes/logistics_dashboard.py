@@ -15,10 +15,9 @@ from app.dashboard.logistics.calculations import (
     shipment_stage, transport_status, SHIPMENT_STAGES, TRANSPORT_STATUSES,
     job_customer, job_province,
 )
+from app.accounts.permissions import CAN_VIEW_LOGISTICS_DASHBOARD
 from typing import Optional
 from datetime import date
-
-ROLES = ["admin", "manager", "viewer", "entry operator"]
 
 
 #=====================================================
@@ -40,7 +39,7 @@ def shipments_dashboard(
 
     db = SessionLocal()
     try:
-        authorize(authenticate(request), ROLES, db)
+        authorize(authenticate(request), CAN_VIEW_LOGISTICS_DASHBOARD, db)
 
         all_orders = fetch_orders(db)
         orders = fetch_filtered_orders(
@@ -106,7 +105,7 @@ def packing_dashboard(
 
     db = SessionLocal()
     try:
-        authorize(authenticate(request), ROLES, db)
+        authorize(authenticate(request), CAN_VIEW_LOGISTICS_DASHBOARD, db)
 
         all_packages = fetch_packages(db)
         packages = fetch_filtered_packages(
@@ -175,7 +174,7 @@ def transport_dashboard(
 
     db = SessionLocal()
     try:
-        authorize(authenticate(request), ROLES, db)
+        authorize(authenticate(request), CAN_VIEW_LOGISTICS_DASHBOARD, db)
 
         all_jobs = fetch_trucking(db)
         jobs = fetch_filtered_trucking(

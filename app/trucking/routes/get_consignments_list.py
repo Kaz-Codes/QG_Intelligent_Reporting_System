@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_TRUCKING
 from app.trucking.helpers import fetch_consignments_page
 from app.trucking.serializers import serialize_consignment
 from typing import Optional
@@ -30,7 +31,7 @@ def get_consignments_list(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        user = authorize(user_payload, CAN_VIEW_TRUCKING, db)
 
         # Keep the page and size sane
         if page < 1:

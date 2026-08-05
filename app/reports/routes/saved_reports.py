@@ -9,17 +9,12 @@ from app.reports.helpers import (
     list_saved, get_saved, create_saved, update_saved, delete_saved,
 )
 from app.reports.serializers import serialize_saved
-
-# Reading templates is open to everyone who can reach Reports; saving/editing/
-# deleting is an authoring action, so viewers (read-only) are excluded.
-READ_ROLES = ["admin", "manager", "viewer", "entry operator"]
-WRITE_ROLES = ["admin", "manager", "entry operator"]
+from app.accounts.permissions import CAN_MAKE_REPORTS
 
 
 def _can_modify(user, saved):
-    # Managers/admins may touch any template; an entry operator only their own.
-    role = user.role.name.strip().lower() if user.role else ""
-    if role in ("admin", "manager"):
+    # Admins may touch any template; everyone else only their own.
+    if user.is_admin:
         return True
     return saved.created_by_id == user.id
 
@@ -32,7 +27,7 @@ def _can_modify(user, saved):
 def list_saved_reports(request: Request):
     db = SessionLocal()
     try:
-        authorize(authenticate(request), READ_ROLES, db)
+        authorize(authenticate(request), CAN_MAKE_REPORTS, db)
         rows = [serialize_saved(s) for s in list_saved(db)]
         return {"status_code": 200, "detail": "Saved reports fetched", "data": rows}
     except HTTPException:
@@ -54,7 +49,7 @@ def list_saved_reports(request: Request):
 def create_saved_report(payload: SavedReportSchema, request: Request):
     db = SessionLocal()
     try:
-        user = authorize(authenticate(request), WRITE_ROLES, db)
+        user = authorize(authenticate(request), CAN_MAKE_REPORTS, db)
         saved = create_saved(db, payload, user)
         return {
             "status_code": 201,
@@ -80,7 +75,7 @@ def create_saved_report(payload: SavedReportSchema, request: Request):
 def get_saved_report(report_id: int, request: Request):
     db = SessionLocal()
     try:
-        authorize(authenticate(request), READ_ROLES, db)
+        authorize(authenticate(request), CAN_MAKE_REPORTS, db)
         saved = get_saved(db, report_id)
         if saved is None:
             raise HTTPException(status_code=404, detail="Saved report not found")
@@ -108,7 +103,7 @@ def get_saved_report(report_id: int, request: Request):
 def update_saved_report(report_id: int, payload: SavedReportSchema, request: Request):
     db = SessionLocal()
     try:
-        user = authorize(authenticate(request), WRITE_ROLES, db)
+        user = authorize(authenticate(request), CAN_MAKE_REPORTS, db)
         saved = get_saved(db, report_id)
         if saved is None:
             raise HTTPException(status_code=404, detail="Saved report not found")
@@ -139,7 +134,7 @@ def update_saved_report(report_id: int, payload: SavedReportSchema, request: Req
 def delete_saved_report(report_id: int, request: Request):
     db = SessionLocal()
     try:
-        user = authorize(authenticate(request), WRITE_ROLES, db)
+        user = authorize(authenticate(request), CAN_MAKE_REPORTS, db)
         saved = get_saved(db, report_id)
         if saved is None:
             raise HTTPException(status_code=404, detail="Saved report not found")

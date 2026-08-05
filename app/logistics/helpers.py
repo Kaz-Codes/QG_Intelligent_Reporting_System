@@ -10,7 +10,6 @@ from app.logistics.models import (
     LogisticsChangeHistory, LogisticsStatusHistory,
 )
 from app.logistics.serializers import serialize_many
-from app.accounts.models import Role
 from app.enums import LogisticsStatus
 
 
@@ -37,20 +36,12 @@ def coerce_value(model, field, value):
 
 
 #----------------------------------
-# AN ENTRY OPERATOR MAY ONLY TOUCH
-# ORDERS THEY CREATED. ADMIN AND
-# MANAGER PASS STRAIGHT THROUGH.
+# ADMINS MAY TOUCH ANY ORDER; EVERYONE
+# ELSE ONLY THE ONES THEY CREATED.
 #----------------------------------
 
 def verify_entry_ownership(consignment, user, db):
-
-    role = db.execute(
-        select(Role).where(
-            Role.id == user.role_id
-        )
-    ).scalar_one_or_none()
-
-    if role and role.name in ("admin", "manager"):
+    if user.is_admin:
         return
 
     if consignment.created_by_id != user.id:

@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException, Query
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_PURCHASES_DASHBOARD
 from app.dashboard.purchases.helpers import fetch_filtered_consignments, option_lists
 from app.dashboard.purchases.serializers import serialize_purchases_dashboard
 from app.dashboard.purchases.calculations import derive_status, PURCHASE_STATUSES
@@ -32,7 +33,7 @@ def purchases_dashboard(
         user_payload = authenticate(request)
 
         # Dashboards are read only, so every role sees them.
-        authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        authorize(user_payload, CAN_VIEW_PURCHASES_DASHBOARD, db)
 
         # Only the filtered set is materialized; the dropdown values come from
         # cheap DISTINCT queries, not from loading the whole table.

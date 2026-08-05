@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException, Query
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_INVENTORY_DASHBOARD
 from app.dashboard.inventory.helpers import fetch_filtered_stock, consumption_map, reorder_level_map, option_lists
 from app.dashboard.inventory.serializers import serialize_rows, serialize_inventory_dashboard
 from app.dashboard.inventory.calculations import STOCK_STATUSES, REORDER_STATUSES
@@ -28,7 +29,7 @@ def inventory_dashboard(
         user_payload = authenticate(request)
 
         # Dashboards are read only, so every role sees them.
-        authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        authorize(user_payload, CAN_VIEW_INVENTORY_DASHBOARD, db)
 
         consumption = consumption_map(db)
         reorder_levels = reorder_level_map(db)

@@ -12,8 +12,7 @@ from app.reports.helpers import (
     Filters, selected_types, type_included, conditions_for, fetch_all,
 )
 from app.reports.serializers import serialize_rows, ROW_KEYS
-
-ROLES = ["admin", "manager", "viewer", "entry operator"]
+from app.accounts.permissions import CAN_MAKE_REPORTS
 
 # A deliberate download can be large, but not unbounded — a mis-set filter must
 # not pull every table into memory. Rows past this are dropped (and flagged in
@@ -49,19 +48,23 @@ def reports_export(
     request: Request,
     types: Optional[list[str]] = Query(None),
     columns: Optional[list[str]] = Query(None),
-    item: Optional[str] = None,
-    supplier: Optional[str] = None,
-    branch: Optional[str] = None,
-    category: Optional[str] = None,
+    item: Optional[list[str]] = Query(None),
+    shaft: Optional[list[str]] = Query(None),
+    supplier: Optional[list[str]] = Query(None),
+    branch: Optional[list[str]] = Query(None),
+    category: Optional[list[str]] = Query(None),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     search: Optional[str] = None,
 ):
     db = SessionLocal()
     try:
-        authorize(authenticate(request), ROLES, db)
+        authorize(authenticate(request), CAN_MAKE_REPORTS, db)
 
-        filters = Filters(item, supplier, branch, category, date_from, date_to, search)
+        filters = Filters(
+            item=item, shaft=shaft, supplier=supplier, branch=branch,
+            category=category, date_from=date_from, date_to=date_to, search=search,
+        )
         types_wanted = selected_types(types)
 
         rows = []

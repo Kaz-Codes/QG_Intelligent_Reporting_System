@@ -4,6 +4,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_EDIT_IMPORTS
 from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, is_closed, stamp_landed_cost_audit, recompute_derived
 
 from app.imports.helpers import fetch_consignment
@@ -26,7 +27,7 @@ def update_consignment(
 
         # Authorize user (Check whether user is allowed for this 
         # action)
-        user = authorize(user_payload, ["admin", "manager", "entry operator"], db)
+        user = authorize(user_payload, CAN_EDIT_IMPORTS, db)
 
         consignment = fetch_consignment(db, consignment_id)
 

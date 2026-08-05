@@ -1,6 +1,9 @@
 from sqlalchemy import select
 from fastapi import HTTPException
 
+from app.accounts.models import Permission
+from app.accounts.permissions import ALL_PERMISSIONS_SET
+
 #-------------------------------------
 # CHECK EXISTENCE OF ANY RECORD
 #
@@ -38,9 +41,38 @@ def serialize_user(user):
         "id": user.id,
         "username": user.username,
         "password": user.password,
-        "role": {
-            "id": user.role.id,
-            "name": user.role.name
-        } if user.role else None,
+        "is_admin": user.is_admin,
+        "permissions": [p.name for p in user.permissions],
         "is_active": user.is_active
     }
+
+
+#-------------------------------------
+# ASSIGN AN ACCOUNT'S ADMIN FLAG + PERMISSIONS
+#
+# Shared by create and edit. An admin holds no permissions (is_admin passes
+# everything on its own), so the list is cleared for admins. For a normal
+# account the given names are validated against the catalogue — an unknown name
+# is a 400, not a silently dropped permission — and the matching Permission rows
+# replace whatever the user held before.
+#-------------------------------------
+
+def apply_account_access(db, user, is_admin, permission_names):
+    user.is_admin = is_admin
+
+    if is_admin:
+        user.permissions = []
+        return
+
+    names = list(dict.fromkeys(permission_names or []))  # de-dupe, keep order
+
+    unknown = [n for n in names if n not in ALL_PERMISSIONS_SET]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown permission(s): {', '.join(unknown)}"
+        )
+
+    user.permissions = db.execute(
+        select(Permission).where(Permission.name.in_(names))
+    ).scalars().all()

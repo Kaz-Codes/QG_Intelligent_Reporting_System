@@ -36,29 +36,49 @@ TYPE_ORDER = ["purchases", "imports", "inventory", "logistics"]
 # mirrors the front end: a logistics row has no branch, so filtering by branch
 # hides logistics. `search` is honoured by every type and is not listed here.
 FILTER_SUPPORT = {
-    "purchases": {"item", "supplier", "branch", "category", "date"},
-    "imports":   {"supplier", "branch", "category", "date"},
-    "inventory": {"item", "branch", "category"},
+    "purchases": {"item", "shaft", "supplier", "branch", "category", "date"},
+    "imports":   {"shaft", "supplier", "branch", "category", "date"},
+    "inventory": {"item", "shaft", "branch", "category"},
     "logistics": {"date"},
 }
 
 
+# The "shaft" filter is a curated, STATIC list of item names — the only shaft
+# items that appear in the data. These live in the imports item lines (not in the
+# purchases/stock tables), so `shaft` is its own filter matched against item
+# names across every item-carrying type (purchases, imports via its lines,
+# inventory) — NOT folded into `item`, which supports only purchases/inventory.
+SHAFT_ITEMS = [
+    "Forged Alloy Steel Round Bar",
+    "Forged Steel Hollow Drill Bars",
+    "Forged Steel Alloy Round Bar",
+    "Forged Steel Round Bar",
+]
+
+
 @dataclass
 class Filters:
-    item: Optional[str] = None
-    supplier: Optional[str] = None
-    branch: Optional[str] = None
-    category: Optional[str] = None
+    # The dropdown filters are multi-select (repeated query params) → matched
+    # with IN. An empty/None list means "not filtered". Date range and search
+    # stay single-valued.
+    item: Optional[list[str]] = None
+    shaft: Optional[list[str]] = None
+    supplier: Optional[list[str]] = None
+    branch: Optional[list[str]] = None
+    category: Optional[list[str]] = None
     date_from: Optional[date] = None
     date_to: Optional[date] = None
     search: Optional[str] = None
 
     def active_names(self):
         # The filters that narrow which TYPES apply (search is excluded — it
-        # narrows rows within a type, never a whole type).
+        # narrows rows within a type, never a whole type). Empty lists are
+        # falsy, so an unset multi-select does not count as active.
         names = set()
         if self.item:
             names.add("item")
+        if self.shaft:
+            names.add("shaft")
         if self.supplier:
             names.add("supplier")
         if self.branch:
@@ -96,13 +116,15 @@ def _like(term):
 def _purchases_conditions(f):
     conds = []
     if f.item:
-        conds.append(PurchasesData.item_name == f.item)
+        conds.append(PurchasesData.item_name.in_(f.item))
+    if f.shaft:
+        conds.append(PurchasesData.item_name.in_(f.shaft))
     if f.supplier:
-        conds.append(PurchasesData.supplier == f.supplier)
+        conds.append(PurchasesData.supplier.in_(f.supplier))
     if f.branch:
-        conds.append(PurchasesData.branch == f.branch)
+        conds.append(PurchasesData.branch.in_(f.branch))
     if f.category:
-        conds.append(PurchasesData.item.has(Item.category == f.category))
+        conds.append(PurchasesData.item.has(Item.category.in_(f.category)))
     if f.date_from:
         conds.append(PurchasesData.purchase >= f.date_from)
     if f.date_to:
@@ -121,14 +143,19 @@ def _purchases_conditions(f):
 
 def _imports_conditions(f):
     conds = [Consignment.is_deleted == False]  # noqa: E712
+    if f.shaft:
+        conds.append(Consignment.items.any(
+            (ConsignmentItem.is_deleted == False) &  # noqa: E712
+            ConsignmentItem.item_name.in_(f.shaft)
+        ))
     if f.supplier:
-        conds.append(Consignment.supplier.has(Supplier.name == f.supplier))
+        conds.append(Consignment.supplier.has(Supplier.name.in_(f.supplier)))
     if f.branch:
-        conds.append(Consignment.branch.has(Branch.name == f.branch))
+        conds.append(Consignment.branch.has(Branch.name.in_(f.branch)))
     if f.category:
         conds.append(Consignment.items.any(
             (ConsignmentItem.is_deleted == False) &  # noqa: E712
-            ConsignmentItem.item.has(Item.category == f.category)
+            ConsignmentItem.item.has(Item.category.in_(f.category))
         ))
     if f.date_from:
         conds.append(Consignment.requisition_date >= f.date_from)
@@ -148,11 +175,13 @@ def _imports_conditions(f):
 def _inventory_conditions(f):
     conds = []
     if f.item:
-        conds.append(Stock.item_name == f.item)
+        conds.append(Stock.item_name.in_(f.item))
+    if f.shaft:
+        conds.append(Stock.item_name.in_(f.shaft))
     if f.branch:
-        conds.append(Stock.branch == f.branch)
+        conds.append(Stock.branch.in_(f.branch))
     if f.category:
-        conds.append(Stock.item.has(Item.category == f.category))
+        conds.append(Stock.item.has(Item.category.in_(f.category)))
     if f.search:
         p = _like(f.search)
         conds.append(or_(
@@ -365,8 +394,13 @@ def build_options(db, types):
     if types:
         categories.update(_distinct(db, Item.category))
 
+    # Shafts are a static, curated list of item names — meaningful for the
+    # item-carrying types (purchases, imports, inventory).
+    shafts = SHAFT_ITEMS if ({"purchases", "imports", "inventory"} & set(types)) else []
+
     return {
         "items": sorted(items),
+        "shafts": list(shafts),
         "suppliers": sorted(suppliers),
         "branches": sorted(branches),
         "categories": sorted(categories),

@@ -2,6 +2,7 @@ from app.auth.authenticate_user import authenticate
 from app.database import SessionLocal
 from app.masters.helpers import used_counts
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_MASTER
 from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
@@ -37,7 +38,7 @@ async def list_masters(master : str,
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin", "manager", "entry operator", "viewer"], db)
+        authorize(request_user_data, CAN_VIEW_MASTER, db)
 
         config = get_master_config(master)
         model = config["model"]

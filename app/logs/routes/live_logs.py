@@ -1,6 +1,6 @@
 from app.auth.verify_token import verify_token
 from app.database import SessionLocal
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from app.logs.manager import manager
 from app.logs.routes.router import router
 from fastapi import WebSocket, WebSocketDisconnect
@@ -28,8 +28,8 @@ def _is_admin(token):
 
     try:
         payload = verify_token(token)
-        # authorize raises unless the caller is an active admin
-        authorize(payload, ["admin"], db)
+        # require_admin raises unless the caller is an active admin
+        require_admin(payload, db)
         return True
 
     except Exception:

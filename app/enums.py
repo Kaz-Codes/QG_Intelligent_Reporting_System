@@ -28,17 +28,6 @@ class Currency(str, Enum):
     AED = "AED"
 
 #--------------------------------
-# ROLES
-#--------------------------------
-
-class Role(str, Enum):
-    ADMIN="admin"
-    VIEWER="viewer"
-    MANAGER="manager"
-    ENTRY_OPERATOR="entry operator"
-
-
-#--------------------------------
 # UNIT OF MEASUREMENT
 #--------------------------------
 

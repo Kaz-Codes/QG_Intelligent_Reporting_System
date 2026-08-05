@@ -4,6 +4,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_EDIT_TRUCKING
 from app.trucking.helpers import (
     updated_fields, verify_entry_ownership, apply_updates, new_vehicles_to_add,
     updated_vehicles, delete_missing, add_in_consignment_change_history,
@@ -28,7 +29,7 @@ def update_consignment(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager", "entry operator"], db)
+        user = authorize(user_payload, CAN_EDIT_TRUCKING, db)
 
         consignment = fetch_consignment(db, consignment_id)
 

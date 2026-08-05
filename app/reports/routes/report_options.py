@@ -7,8 +7,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.reports.helpers import selected_types, build_options
-
-ROLES = ["admin", "manager", "viewer", "entry operator"]
+from app.accounts.permissions import CAN_MAKE_REPORTS
 
 
 #-----------------------------------------------------
@@ -26,7 +25,7 @@ def reports_options(
 ):
     db = SessionLocal()
     try:
-        authorize(authenticate(request), ROLES, db)
+        authorize(authenticate(request), CAN_MAKE_REPORTS, db)
 
         options = build_options(db, selected_types(types))
 

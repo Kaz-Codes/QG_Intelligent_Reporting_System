@@ -2,7 +2,7 @@ from app.trucking.routes.router import router
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from app.trucking.helpers import fetch_consignment
 from app.trucking.serializers import serialize_consignment
 
@@ -28,7 +28,7 @@ def reopen_consignment(
         user_payload = authenticate(request)
 
         # Only an admin may reopen a closed job
-        user = authorize(user_payload, ["admin"], db)
+        user = require_admin(user_payload, db)
 
         consignment = fetch_consignment(db, consignment_id)
 

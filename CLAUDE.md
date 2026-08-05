@@ -39,13 +39,13 @@ stack — do not reintroduce Django/templates.
 
 ```
 app/
-  main.py            FastAPI app: create_all, seed roles+admin, CORS, include routers
+  main.py            FastAPI app: create_all, seed permissions+admin, CORS, include routers
   database.py        engine (json_serializer = json.dumps(..., default=str)), SessionLocal, Base
   models_mixins.py   TimestampMixin (created_at/updated_at, server_default now())
   enums.py           every fixed list as a (str, Enum), stored in String columns
   export_utils.py    xlsx_response(filename, headers, rows) → StreamingResponse
   cross_module.py    trucking ⇆ logistics/imports linkage (open requests + reverse lookup)
-  accounts/          User, Role
+  accounts/          User (is_admin) + Permission (many-to-many) + the catalogue
   auth/              cookie login/logout, authenticate(), authorize()
   masters/           6 master lists (config-driven registry) + inline create + review queue
   imports/           consignments: header + item/payment children + history + revert
@@ -68,7 +68,7 @@ endpoint, all hanging off a shared `router`, listed in `routes/__init__.py`).
 ## App bootstrap (`main.py`)
 
 On startup: import every model module (so `Base.metadata` knows all tables) →
-`create_all` → seed the four roles and a default admin if absent → add CORS →
+`create_all` → seed the permission catalogue and a default admin (is_admin) if absent → add CORS →
 `include_router` for every module (data-entry, masters, auth, logs, and the five
 dashboards). **Startup does not load data** — that is the separate
 `python -m app.loading.scripts.load_all` CLI (see the loading module).
@@ -83,26 +83,39 @@ param path: `GET /export`, `GET /open-requests` etc. are imported **before**
 
 ## Auth & authorization
 
-- `POST /auth/login` verifies credentials and sets an httpOnly cookie; `POST /auth/logout` clears it.
+**There are no roles.** A user is either an **admin** (`User.is_admin`, which
+passes every check including account management) or a normal account holding an
+explicit set of **permissions**. Users ⇆ permissions is many-to-many
+(`user_permissions`). The permission catalogue is `app/accounts/permissions.py`
+(seeded at startup); reference the constants, never raw strings.
+
+- `POST /auth/login` verifies credentials and sets an httpOnly cookie; `POST /auth/logout` clears it. The token carries only the user id.
 - `authenticate(request)` reads the cookie and returns the user payload (401 if missing/invalid).
-- `authorize(user_payload, [roles], db)` loads the user, checks their role name is in the allowed set (403 otherwise), and returns the user.
-- **Entry-ownership**: `verify_entry_ownership` lets admin/manager touch any
-  record but restricts an entry operator to records they created.
-- Permissions are enforced **server-side** on every route. The frontend hiding
-  something is UX, never the security boundary.
+- `authorize(user_payload, permission, db)` — passes if the user **is_admin** OR holds `permission`; 403 otherwise. `permission` is one name **or a list** (any-of; e.g. Submit needs `can_add_*` OR `can_edit_*`). Returns the user.
+- `require_admin(user_payload, db)` — admin-only routes: **account management, the activity-log feed, and reopening a closed record**. No permission grants these.
+- **Entry-ownership**: `verify_entry_ownership` lets an **admin** touch any
+  record but restricts everyone else to records they created — applied to edit,
+  submit, delete, undo-delete and revert (view is not ownership-scoped).
+- Enforced **server-side** on every route. The frontend hiding something is UX, never the security boundary.
 
-### Roles
+### The permission catalogue
 
-| Role | Enter | Edit existing | Dashboards/Reports | Manage users |
-|---|---|---|---|---|
-| Admin | yes | yes | yes | yes |
-| Manager | yes | yes | yes | no |
-| Entry Operator | yes | own records only | yes | no |
-| Viewer | no | no | read-only | no |
+`can_{view,add,edit,delete}_{imports,logistics,trucking}_consignments` ·
+`can_view_{overview,imports,logistics,purchases,inventory}_dashboard` ·
+`can_{view,add,edit}_master` · `can_make_reports` · `can_use_assistant`.
 
-Viewers **can** see values, prices and PKR amounts — nothing financial is hidden
-by role. Dashboards are read-only and open to all four roles. Masters are
-managed by Manager/Admin.
+Mapping: create→`can_add_*`, list/get/export/history→`can_view_*`,
+update→`can_edit_*` (+own), delete/undo-delete→`can_delete_*` (+own),
+submit→`can_add_*|can_edit_*` (+own), reopen→admin-only. Masters read→
+`can_view_master`, inline-create→`can_add_master`, manage→`can_edit_master`.
+Reports (data/export/options + saved templates)→`can_make_reports` (saved
+edit/delete restricted to the owner or an admin). Viewing needs the matching
+`can_view_*` — a data-entry user also needs `can_view_master` for the dropdowns.
+
+Viewers of a record **can** see values, prices and PKR amounts — nothing
+financial is gated. The account-creation checkbox on the front end sets
+`is_admin`; otherwise the chosen permission names come in as `permissions[]`
+(`POST/PUT /users`).
 
 ---
 
@@ -133,8 +146,12 @@ managed by Manager/Admin.
 
 ## accounts
 
-Custom `User` (username, password hash, `role_id`) and `Role`. Roles + a default
-admin are seeded at startup.
+Custom `User` (username, **plaintext** password, `is_admin`) and `Permission`,
+joined many-to-many via `user_permissions`. The permission catalogue and a
+default admin (`is_admin=True`, no permissions needed) are seeded at startup.
+`apply_account_access(db, user, is_admin, names)` sets the flag / assigns the
+permission rows on create+edit (an unknown name is a 400). See **Auth &
+authorization** for the model.
 
 ## masters
 
@@ -285,8 +302,13 @@ it is **paginated**. Reuses the dashboard derivations (purchase status, stock
 status + reorder level, logistics cost/kg + stage) — a figure in a report
 matches the same figure on its dashboard.
 
-- **`GET /reports/data`** — `types[]` + the shared filters (`item`, `supplier`,
-  `branch`, `category`, `date_from`/`date_to`, `search`) + `page`/`page_size`.
+- **`GET /reports/data`** — `types[]` + the shared filters (`item[]`, `shaft[]`,
+  `supplier[]`, `branch[]`, `category[]` — **multi-select, repeated params → IN**;
+  plus single `date_from`/`date_to`, `search`) + `page`/`page_size`. **`shaft`** is
+  a static curated list of item names (`SHAFT_ITEMS`) — those items live in the
+  imports item lines, so shaft is its own filter matched on item name across
+  purchases, imports (via its lines) and inventory (`item` supports only
+  purchases/inventory).
   The result is the selected types **concatenated in a fixed order**
   (purchases→imports→inventory→logistics) and paged as one list; only the rows
   on the page are ever fetched (`plan_slices` maps the global offset/limit to a
@@ -303,9 +325,8 @@ matches the same figure on its dashboard.
   date range — chosen fresh each run; soft-deleted like everything). The list is
   **shared** (everyone who can reach Reports sees all templates), replacing the
   front end's localStorage. `GET/POST /reports/saved`, `GET/PUT/DELETE
-  /reports/saved/{id}`. Read is open to all four roles; create/edit/delete is an
-  authoring action (admin/manager/entry operator — viewers excluded), and an
-  entry operator may only touch their own.
+  /reports/saved/{id}`. All of reports is gated by `can_make_reports`; a saved
+  template may be edited/deleted only by its creator or an admin.
 - **Dropped for want of a backend source** (by decision): imports `customer` /
   `weight` / `shipping line` / `bank` / `documentation status`; inventory
   `last_restocked`; purchases `material`. Imports `ref` falls back to the LC
@@ -350,7 +371,7 @@ recording each in the change history so it can be undone.
 **Change history + field-level revert.** Every update writes one
 `*ChangeHistory` row whose `history` JSON holds the pre-change values (header
 `fields`, plus per-collection `new_*` / `deleted_*` / updated diffs). Revert
-(admin/manager, latest-first) writes the old values back, re-adds soft-deleted
+(`can_edit_*` + own-record, latest-first) writes the old values back, re-adds soft-deleted
 lines and soft-deletes added ones. The engine's `json_serializer` uses
 `default=str`, so Decimals/dates serialize into JSON as strings; `coerce_value`
 turns them back on revert.

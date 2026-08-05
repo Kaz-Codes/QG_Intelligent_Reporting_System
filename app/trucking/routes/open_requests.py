@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_TRUCKING
 from app.cross_module import derive_open_requests
 
 #-----------------------------------------------------
@@ -21,7 +22,7 @@ def open_requests(request : Request):
 
     try:
         user_payload = authenticate(request)
-        authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        authorize(user_payload, CAN_VIEW_TRUCKING, db)
 
         requests = derive_open_requests(db)
 

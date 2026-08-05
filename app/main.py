@@ -19,7 +19,8 @@ import app.logs.models
 import app.loading.schemas.stores_schemas
 import app.reports.models
 
-from app.accounts.models import Role, User
+from app.accounts.models import User, Permission
+from app.accounts.permissions import ALL_PERMISSIONS
 
 # Importing each routes package runs the route files, which is what hangs
 # the endpoints off their router. Then the router objects are included below.
@@ -56,24 +57,21 @@ load_dotenv()
 # there is somebody to log in as.
 #-----------------------------------------------------
 
-ROLES = ["admin", "manager", "entry operator", "viewer"]
-
-
 def create_tables():
     Base.metadata.create_all(bind=engine)
 
 
-def seed_roles():
+def seed_permissions():
+    # Upsert the permission catalogue: every name in ALL_PERMISSIONS that is not
+    # already a row is added. Idempotent, so it is safe on every start.
     db = SessionLocal()
 
     try:
-        for name in ROLES:
-            exists = db.execute(
-                select(Role).where(Role.name == name)
-            ).scalar_one_or_none()
+        existing = {name for (name,) in db.execute(select(Permission.name)).all()}
 
-            if not exists:
-                db.add(Role(name=name))
+        for name in ALL_PERMISSIONS:
+            if name not in existing:
+                db.add(Permission(name=name))
 
         db.commit()
 
@@ -102,20 +100,14 @@ def seed_admin():
         if admin_exists:
             return
 
-        admin_role = db.execute(
-            select(Role).where(Role.name == "admin")
-        ).scalar_one_or_none()
-
-        if admin_role is None:
-            return
-
-        # Password is stored as it is, the same way create_user stores it and
-        # login compares it.
+        # The default admin passes every check via is_admin — no permissions to
+        # assign. Password is stored as-is, the same way create_user stores it
+        # and login compares it.
         db.add(
             User(
                 username=admin_username,
                 password=admin_password,
-                role_id=admin_role.id,
+                is_admin=True,
                 is_active=True
             )
         )
@@ -188,7 +180,7 @@ def root():
 # loads, so a fresh database is ready the moment the server starts.
 
 create_tables()
-seed_roles()
+seed_permissions()
 seed_admin()
 
 # Loading the source workbooks is NOT done here — it is a destructive full

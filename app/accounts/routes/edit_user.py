@@ -3,10 +3,10 @@ from app.accounts.schemas import UserSchema
 from app.database import SessionLocal
 from app.accounts.models import User
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from sqlalchemy import select
-from app.accounts.helpers import check_existence, serialize_user
+from app.accounts.helpers import check_existence, serialize_user, apply_account_access
 
 #-------------------------------------------
 # ADMIN CAN EDIT THE DETAILS OF AN ALREADY
@@ -20,7 +20,7 @@ async def edit_user(id : int, user_schema : UserSchema, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin"], db)
+        require_admin(request_user_data, db)
 
         user = check_existence(id, User, db)
 
@@ -42,7 +42,7 @@ async def edit_user(id : int, user_schema : UserSchema, request: Request):
 
         user.username = user_schema.username
         user.password = user_schema.password
-        user.role_id = user_schema.role
+        apply_account_access(db, user, user_schema.is_admin, user_schema.permissions)
 
         db.commit()
         db.refresh(user)

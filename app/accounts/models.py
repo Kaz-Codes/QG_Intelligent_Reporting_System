@@ -1,65 +1,66 @@
 from app.database import Base
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Integer, Table, Column, ForeignKey, Boolean
+from sqlalchemy import String, Integer, Table, Column, ForeignKey, Boolean, text
 from app.models_mixins import TimestampMixin
 
 #-----------------------------------------------------
-# BRIDGE TABLE BTW ROLES AND PERMISSIONS (MANY-MANY)
+# ACCOUNTS + PERMISSIONS
+#
+# There are no roles. A user is either an admin (is_admin, which passes every
+# authorization check) or a normal account holding an explicit set of
+# permissions. Users and permissions are many-to-many: a user has many
+# permissions, and a permission is held by many users.
+#
+# The permission NAMES are the catalogue in app/accounts/permissions.py; they
+# are seeded into this table at startup.
 #-----------------------------------------------------
 
-role_permission = Table(
-    "roles_permissions",
+#--------------------------------
+# USER <-> PERMISSION BRIDGE (MANY-MANY)
+#--------------------------------
+
+user_permission = Table(
+    "user_permissions",
     Base.metadata,
     Column(
-        "role_id",
-        ForeignKey("roles.id"),
+        "user_id",
+        ForeignKey("users.id", ondelete="CASCADE"),
         primary_key=True,
         nullable=False
     ),
     Column(
         "permission_id",
-        ForeignKey("permissions.id"),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
         primary_key=True,
         nullable=False
     ),
 )
 
-#--------------------------------
-# ROLES AND PERMISSION TABLES
-#--------------------------------
 
-class Role(Base):
-    __tablename__ = "roles"
-    id : Mapped[int] = mapped_column(
-        Integer,
-        primary_key = True
-    )
-    name : Mapped[str] = mapped_column(
-        String(255),
-        nullable=False
-    )
-    permissions : Mapped[list["Permission"]] = relationship(
-        secondary = role_permission,
-        back_populates = "roles"
-    )
-    users : Mapped[list["User"]] = relationship(
-            back_populates = "role"
-    )
+#--------------------------------
+# PERMISSIONS TABLE
+#--------------------------------
 
 class Permission(Base):
     __tablename__ = "permissions"
-    id : Mapped[int] = mapped_column(
+
+    id: Mapped[int] = mapped_column(
         Integer,
-        primary_key = True
+        primary_key=True
     )
-    name : Mapped[str] = mapped_column(
+
+    name: Mapped[str] = mapped_column(
         String(255),
-        nullable=False
+        unique=True,
+        nullable=False,
+        index=True
     )
-    roles : Mapped[list["Role"]] = relationship(
-            secondary = role_permission,
-            back_populates = "permissions"
+
+    users: Mapped[list["User"]] = relationship(
+        secondary=user_permission,
+        back_populates="permissions"
     )
+
 
 #--------------------------------
 # USERS TABLE
@@ -67,34 +68,43 @@ class Permission(Base):
 
 class User(Base, TimestampMixin):
     __tablename__ = "users"
-    id : Mapped[int] = mapped_column(
+
+    id: Mapped[int] = mapped_column(
         Integer,
-        primary_key = True
+        primary_key=True
     )
 
-    username : Mapped[str] = mapped_column(
+    username: Mapped[str] = mapped_column(
         String(255),
-        unique = True,
-        nullable = False
+        unique=True,
+        nullable=False
     )
 
-    password : Mapped[str] = mapped_column(
+    password: Mapped[str] = mapped_column(
         String(255),
-        nullable = False
+        nullable=False
     )
 
-    role_id : Mapped[int] = mapped_column(
-        ForeignKey("roles.id"),
-        nullable = False
-    )
-
-    role : Mapped["Role"] = relationship(
-        back_populates = "users"
-    )
-
-    is_active : Mapped[bool] = mapped_column(
+    # An admin passes every authorization check, including account management.
+    # The account-creation checkbox on the front end sets this flag. server_
+    # default so rows written outside the ORM (should any be) come in as
+    # non-admin rather than NULL.
+    is_admin: Mapped[bool] = mapped_column(
         Boolean,
-        default = False,
-        nullable = False,
-        index = True
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+        index=True
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    permissions: Mapped[list["Permission"]] = relationship(
+        secondary=user_permission,
+        back_populates="users"
     )

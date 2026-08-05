@@ -4,6 +4,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_ADD_TRUCKING
 from app.trucking.helpers import (
     create_consignment_object, create_vehicle_object, fetch_consignment,
 )
@@ -24,7 +25,7 @@ def create_consignment(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager", "entry operator"], db)
+        user = authorize(user_payload, CAN_ADD_TRUCKING, db)
 
         # Create objects to add in database
         consignment = create_consignment_object(consignment_data, user)

@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_LOGISTICS
 from app.logistics.helpers import fetch_consignment_history, fetch_consignment
 from app.logistics.serializers import serialize_consignment_history
 
@@ -22,7 +23,7 @@ def get_consignment_history(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        user = authorize(user_payload, CAN_VIEW_LOGISTICS, db)
 
         consignment = fetch_consignment(db, consignment_id)
 

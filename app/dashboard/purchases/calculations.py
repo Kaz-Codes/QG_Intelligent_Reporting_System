@@ -50,7 +50,13 @@ def total_value(rows):
 #-------------------------------------
 
 def kpis(rows):
-    orders_count = len(rows)
+    orders = set()
+
+    for row in rows:
+        if row.po_number:
+            orders.add(row.po_number)
+
+    orders_count = len(orders)
     value = total_value(rows)
     avg_order_value = (value / orders_count) if orders_count else Decimal("0")
 

@@ -1,5 +1,6 @@
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_MASTER
 from app.database import SessionLocal
 from app.masters.helpers import search_items
 from app.masters.routes.router import router
@@ -31,7 +32,7 @@ def item_search(request: Request,
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin", "manager", "entry operator"], db)
+        authorize(request_user_data, CAN_VIEW_MASTER, db)
 
         # keep the number of suggestions sane
         if limit < 1 or limit > 50:

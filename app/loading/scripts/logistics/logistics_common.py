@@ -123,8 +123,7 @@ def admin_id(conn):
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id "
-            "WHERE lower(r.name) = 'admin' ORDER BY u.id LIMIT 1"
+            "SELECT id FROM users WHERE is_admin = true ORDER BY id LIMIT 1"
         )
         row = cur.fetchone()
     if not row:

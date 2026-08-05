@@ -12,8 +12,7 @@ from app.reports.helpers import (
     fetch_slice, plan_slices,
 )
 from app.reports.serializers import serialize_rows
-
-ROLES = ["admin", "manager", "viewer", "entry operator"]
+from app.accounts.permissions import CAN_MAKE_REPORTS
 
 
 #-----------------------------------------------------
@@ -30,10 +29,11 @@ ROLES = ["admin", "manager", "viewer", "entry operator"]
 def reports_data(
     request: Request,
     types: Optional[list[str]] = Query(None),
-    item: Optional[str] = None,
-    supplier: Optional[str] = None,
-    branch: Optional[str] = None,
-    category: Optional[str] = None,
+    item: Optional[list[str]] = Query(None),
+    shaft: Optional[list[str]] = Query(None),
+    supplier: Optional[list[str]] = Query(None),
+    branch: Optional[list[str]] = Query(None),
+    category: Optional[list[str]] = Query(None),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     search: Optional[str] = None,
@@ -42,14 +42,17 @@ def reports_data(
 ):
     db = SessionLocal()
     try:
-        authorize(authenticate(request), ROLES, db)
+        authorize(authenticate(request), CAN_MAKE_REPORTS, db)
 
         if page < 1:
             page = 1
         if page_size < 1 or page_size > 100:
             page_size = 25
 
-        filters = Filters(item, supplier, branch, category, date_from, date_to, search)
+        filters = Filters(
+            item=item, shaft=shaft, supplier=supplier, branch=branch,
+            category=category, date_from=date_from, date_to=date_to, search=search,
+        )
         types_wanted = selected_types(types)
 
         # Count each type once (cheap SQL COUNT); a type an active filter cannot

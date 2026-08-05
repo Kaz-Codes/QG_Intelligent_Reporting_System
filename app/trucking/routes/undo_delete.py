@@ -3,7 +3,8 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.trucking.helpers import fetch_consignment
+from app.accounts.permissions import CAN_DELETE_TRUCKING
+from app.trucking.helpers import fetch_consignment, verify_entry_ownership
 from app.trucking.serializers import serialize_consignment
 
 @router.post("/undo-delete/{consignment_id}")
@@ -21,7 +22,7 @@ def undo_delete(
 
         # Authorize user (Check whether user is allowed for this
         # action)
-        user = authorize(user_payload, ["admin", "manager"], db)
+        user = authorize(user_payload, CAN_DELETE_TRUCKING, db)
 
         consignment = fetch_consignment(db, consignment_id)
 
@@ -30,6 +31,9 @@ def undo_delete(
                 status_code=404,
                 detail="Trucking job not found"
             )
+
+        # Non-admins may only undo the deletion of their own records.
+        verify_entry_ownership(consignment, user, db)
 
         if not consignment.is_deleted:
             raise HTTPException(

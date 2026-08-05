@@ -2,7 +2,7 @@ from app.accounts.routes.router import router
 from app.database import SessionLocal
 from app.accounts.models import User
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -25,11 +25,11 @@ async def get_all_users(request: Request):
 
     try:
         request_user_data = authenticate(request)
-        authorize(request_user_data, ["admin"], db)
+        require_admin(request_user_data, db)
 
         users = db.execute(
             select(User)
-            .options(selectinload(User.role))
+            .options(selectinload(User.permissions))
             .order_by(User.username)
         ).scalars().all()
 

@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException, Query
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_LOGISTICS
 from app.logistics.helpers import fetch_consignments_page
 from app.export_utils import xlsx_response
 from typing import Optional
@@ -79,7 +80,7 @@ def export_consignments(
 
     try:
         user_payload = authenticate(request)
-        authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        authorize(user_payload, CAN_VIEW_LOGISTICS, db)
 
         consignments, _ = fetch_consignments_page(
             db, include_deleted, status, order_type, customer,

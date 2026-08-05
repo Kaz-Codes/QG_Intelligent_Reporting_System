@@ -2,7 +2,7 @@ from app.imports.routes.router import router
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
+from app.auth.authorize_user import require_admin
 from app.imports.helpers import fetch_consignment
 from app.imports.serializers import serialize_consignment
 
@@ -30,7 +30,7 @@ def reopen_consignment(
         user_payload = authenticate(request)
 
         # Authorize user (Only an admin may reopen a closed consignment)
-        user = authorize(user_payload, ["admin"], db)
+        user = require_admin(user_payload, db)
 
         consignment = fetch_consignment(db, consignment_id)
 

@@ -3,7 +3,8 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
-from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived
+from app.accounts.permissions import CAN_EDIT_IMPORTS
+from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived, verify_entry_ownership
 from app.imports.serializers import serialize_consignment
 from datetime import datetime, timezone
 
@@ -23,7 +24,7 @@ def revert_update(
 
         # Authorize user (Check whether user is allowed for this 
         # action)
-        user = authorize(user_payload, ["admin", "manager"], db)
+        user = authorize(user_payload, CAN_EDIT_IMPORTS, db)
 
         consignment = fetch_consignment(db, consignment_id)
 
@@ -32,6 +33,9 @@ def revert_update(
                 status_code=404,
                 detail="Consignment not found"
             )
+
+        # Non-admins may only revert changes on their own records.
+        verify_entry_ownership(consignment, user, db)
 
         consignment_history = fetch_consignment_history(db, consignment.id, change_history_id)
         latest_consignment_history = fetch_latest_consignment_history(db, consignment.id)

@@ -157,7 +157,7 @@ def top_items(rows, limit=8):
 
 
 def lowest_days_of_stock(rows, limit=8):
-    with_runway = [row for row in rows if row["days_of_stock"] is not None]
+    with_runway = [row for row in rows if row["days_of_stock"] is not None and row["days_of_stock"] > 0]
     with_runway.sort(key=lambda r: r["days_of_stock"])
     return [
         {"item": f'{row["item"]} ({row["branch"]})', "days_of_stock": row["days_of_stock"]}

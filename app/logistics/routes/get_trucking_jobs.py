@@ -3,6 +3,7 @@ from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
+from app.accounts.permissions import CAN_VIEW_LOGISTICS
 from app.cross_module import find_trucking_jobs
 from app.trucking.serializers import serialize_consignment as serialize_trucking
 
@@ -20,7 +21,7 @@ def get_trucking_jobs(request : Request, consignment_id : int):
 
     try:
         user_payload = authenticate(request)
-        authorize(user_payload, ["admin", "manager", "viewer", "entry operator"], db)
+        authorize(user_payload, CAN_VIEW_LOGISTICS, db)
 
         jobs = find_trucking_jobs(db, "from-logistics", consignment_id)
 
