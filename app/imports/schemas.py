@@ -24,6 +24,12 @@ class ConsignmentItemSchema(BaseModel):
     batch_no : Optional[str] = Field(None, max_length=100)
     requisition_type : Optional[RequisitionType] = None
     unit_price : Optional[Decimal] = Field(None, gt=0)
+    # Weight & dimensions — optional at draft (see model comment).
+    net_weight : Optional[Decimal] = Field(None, ge=0)
+    gross_weight : Optional[Decimal] = Field(None, ge=0)
+    length : Optional[Decimal] = Field(None, ge=0)
+    width : Optional[Decimal] = Field(None, ge=0)
+    height : Optional[Decimal] = Field(None, ge=0)
     elc : Optional[Decimal] = Field(None, ge=0)
     alc : Optional[Decimal] = Field(None, ge=0)
     reference_number : Optional[str] = Field(None, max_length=100)

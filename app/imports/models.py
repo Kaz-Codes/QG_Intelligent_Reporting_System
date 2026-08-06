@@ -437,6 +437,38 @@ class ConsignmentItem(Base, TimestampMixin):
         nullable=True
     )
 
+    #--- weight & dimensions ---
+    # Optional at draft; the imports team is expected to fill these before an
+    # FOB consignment is handed to trucking, since the truck load-out and
+    # freight rate depend on them. net_weight is the line's total for its
+    # whole quantity (not a per-unit figure) — mirrors LogisticsItem's
+    # gross_weight convention (Numeric(14,3), kg).
+    net_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    gross_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    # cm.
+    length: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2),
+        nullable=True
+    )
+
+    width: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2),
+        nullable=True
+    )
+
+    height: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2),
+        nullable=True
+    )
+
     # Landed cost is typed in by hand, in PKR. Nothing calculates it —
     # duty, freight and agent fees are not tracked in this system.
     elc: Mapped[Optional[Decimal]] = mapped_column(

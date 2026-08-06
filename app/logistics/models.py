@@ -545,7 +545,8 @@ class LogisticsContainer(Base, TimestampMixin):
 
     container_no: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable=True
+        nullable=True,
+        unique=True
     )
 
     container_type: Mapped[Optional[str]] = mapped_column(
