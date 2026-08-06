@@ -78,10 +78,18 @@ async def login(credentials: LoginSchema, response: Response):
 
         await manager.broadcast(user.id, serialize_log(log))
 
+        # is_admin and the permission names come back with the session so the
+        # front end can gate what it shows without a second call. This is UI
+        # convenience only — every route still authorizes server-side.
         return {
             "status": 200,
             "message": "Logged in",
-            "data": {"id": user.id, "username": user.username}
+            "data": {
+                "id": user.id,
+                "username": user.username,
+                "is_admin": user.is_admin,
+                "permissions": [p.name for p in user.permissions],
+            }
         }
 
     except HTTPException:

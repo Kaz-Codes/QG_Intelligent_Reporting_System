@@ -10,3 +10,10 @@ class UserSchema(BaseModel):
     # permission names listed (validated against the catalogue on save).
     is_admin: bool = False
     permissions: list[str] = Field(default_factory=list)
+
+    # Whether the account can log in. Defaults to True so an account created
+    # through the API is usable immediately — the column's own default is False,
+    # which would otherwise make every new account fail login with "Account is
+    # inactive". Deactivating is done by sending False here, or via
+    # PUT /users/{id}/status.
+    is_active: bool = True

@@ -42,6 +42,7 @@ async def edit_user(id : int, user_schema : UserSchema, request: Request):
 
         user.username = user_schema.username
         user.password = user_schema.password
+        user.is_active = user_schema.is_active
         apply_account_access(db, user, user_schema.is_admin, user_schema.permissions)
 
         db.commit()

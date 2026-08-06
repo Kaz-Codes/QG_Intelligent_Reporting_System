@@ -35,6 +35,7 @@ async def create_user(user_schema : UserSchema, request: Request):
         user = User(
             username = user_schema.username,
             password = user_schema.password,
+            is_active = user_schema.is_active,
         )
         # Checkbox -> admin (no permissions), otherwise the chosen permissions.
         apply_account_access(db, user, user_schema.is_admin, user_schema.permissions)
