@@ -11,8 +11,9 @@ import { SortableTable, type SortableColumn } from './components/SortableTable'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
 import { pkr, fx, dateShort, days as daysFmt, num } from './format'
 import { STAGE_GROUPS } from '@/lib/importsStages'
+import { CANCELLED_STATUS } from './schema'
 import {
-  listConsignments, fetchFilterOptions, exportConsignmentsExcel, downloadBlob,
+  listConsignments, fetchFilterOptions, exportConsignmentsExcel, downloadBlob, reopenConsignmentApi,
   type ConsignmentQuery,
 } from '@/lib/api/imports'
 import {
@@ -67,6 +68,7 @@ export function ImportsStatusList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [reopeningId, setReopeningId] = useState<number | null>(null)
 
   // --- dropdown options, from the data itself ---
   const [statusOptions, setStatusOptions] = useState<{ value: string; canonical: boolean }[]>([])
@@ -154,6 +156,19 @@ export function ImportsStatusList() {
   }, [query])
 
   useEffect(() => { void load() }, [load])
+
+  async function handleReopen(id: number) {
+    if (!window.confirm('Reopen this consignment? It will become editable again until closed once more.')) return
+    setReopeningId(id)
+    try {
+      await reopenConsignmentApi(id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen this consignment')
+    } finally {
+      setReopeningId(null)
+    }
+  }
 
   async function doExcel() {
     setExporting(true)
@@ -344,6 +359,30 @@ export function ImportsStatusList() {
       },
     },
     {
+      key: 'submitted', label: 'Submitted', width: 90,
+      sortValue: (r) => (r.recordState === 'submitted' ? 1 : 0),
+      render: (r) => (
+        r.recordState === 'submitted'
+          ? <Tag tone="neutral">Submitted</Tag>
+          : <Tag tone="warning">Draft</Tag>
+      ),
+    },
+    {
+      // Closed = truly locked (Arrived at Works + submitted) OR the other
+      // terminal status, Order Cancelled — mirrors the backend's
+      // is_truly_closed (helpers.py), so this matches whatever landed in the
+      // Closed stage, including old data that predates the lock/submit flow.
+      key: 'closed', label: 'Closed', width: 80,
+      sortValue: (r) => (r.isLocked || r.status === CANCELLED_STATUS ? 1 : 0),
+      render: (r) => (
+        r.isLocked
+          ? <Tag tone="neutral" title="Arrived at Works and submitted — an admin must reopen it before editing">Closed</Tag>
+          : r.status === CANCELLED_STATUS
+            ? <Tag tone="neutral" title="Order cancelled">Closed</Tag>
+            : <span className="text-muted">—</span>
+      ),
+    },
+    {
       key: 'actions', label: '', width: 180,
       render: (r) => (
         <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -361,6 +400,15 @@ export function ImportsStatusList() {
               className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
             >
               Edit
+            </button>
+          )}
+          {user?.isAdmin && r.isLocked && (
+            <button
+              onClick={() => void handleReopen(r.id)}
+              disabled={reopeningId === r.id}
+              className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
+            >
+              {reopeningId === r.id ? 'Reopening…' : 'Reopen'}
             </button>
           )}
           <button

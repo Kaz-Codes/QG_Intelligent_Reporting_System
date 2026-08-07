@@ -344,6 +344,13 @@ export async function submitConsignmentApi(id: number | string): Promise<ApiCons
   return res.data
 }
 
+/** POST /consignments/{id}/reopen — admin-only server-side (403 for anyone
+ *  else); clears is_locked so the consignment can be edited again. */
+export async function reopenConsignmentApi(id: number | string): Promise<ApiConsignment> {
+  const res = await apiFetch<DetailEnvelope>(`/consignments/${id}/reopen`, { method: 'POST' })
+  return res.data
+}
+
 /** Dropdown values built from what is actually stored — see the backend route
  *  for why this can't just be the enums. */
 export async function fetchFilterOptions() {

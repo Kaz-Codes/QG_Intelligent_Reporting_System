@@ -6,6 +6,7 @@ import type { z } from 'zod'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import { ApiError } from '@/lib/api/client'
@@ -17,7 +18,7 @@ import {
   draftToPayload, apiToDraft, syncItemBackendIds, syncPaymentBackendIds, type WizardMasters,
 } from '@/lib/api/importsMap'
 import {
-  consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS,
+  consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, CLOSED_STATUS,
   type ConsignmentDraft, type ConsignmentItem, type Payment,
 } from '../schema'
 import { MastersProvider, useMasters } from './MastersContext'
@@ -77,12 +78,20 @@ function ImportsStatusWizardInner() {
     mode: 'onBlur',
   })
 
+
   // --- loading the existing record (edit mode only) ---
   const [consignmentId, setConsignmentId] = useState<number | null>(id ? Number(id) : null)
   const [loadingRecord, setLoadingRecord] = useState(!!id)
   const [notFound, setNotFound] = useState(false)
   const [loadErrorMsg, setLoadErrorMsg] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
+  // The status/record_state this consignment was loaded with. The backend
+  // only actually closes a consignment when BOTH current_status is
+  // "Arrived at Works" AND record_state is "submitted" (helpers.is_closed) —
+  // so the confirmation needs both, not status alone. A new consignment has
+  // neither, so it never matches on its own.
+  const [originalStatus, setOriginalStatus] = useState('')
+  const [recordState, setRecordState] = useState('draft')
 
   const loadRecord = useCallback(() => {
     if (!id) return
@@ -93,6 +102,8 @@ function ImportsStatusWizardInner() {
       .then((c) => {
         setConsignmentId(c.id)
         setIsLocked(c.is_locked)
+        setOriginalStatus(c.current_status ?? '')
+        setRecordState(c.record_state ?? 'draft')
         methods.reset(apiToDraft(c))
       })
       .catch((err: unknown) => {
@@ -127,9 +138,43 @@ function ImportsStatusWizardInner() {
     return draftToPayload(methods.getValues() as ConsignmentDraft, wizardMasters)
   }
 
-  /** POST the first time, PUT after. Returns the record's real id on success,
-   *  or null (with saveErrorMsg set) on failure. */
-  async function saveDraft(): Promise<number | null> {
+  // --- confirm-before-closing (a real dialog, not window.confirm — same
+  // pattern as change history's RevertConfirmDialog) ---
+  // The action Back/Save and Next/Save/Submit were about to run, stashed
+  // while the dialog is open; null/undefined means the dialog is closed.
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+
+  /** "Arrived at Works" locks the consignment for everyone but an admin —
+   *  worth a confirmation, since it's not obviously reversible from the
+   *  wizard itself. A plain draft save never closes it, no matter what
+   *  status is set or whether the record is already submitted — only
+   *  submitting does (the backend's update route no longer locks at all;
+   *  see update_consignment.py). So this only fires for the Submit action. */
+  function willClose(isSubmitAction: boolean): boolean {
+    if (!isSubmitAction) return false
+    const closing = methods.getValues('status') === CLOSED_STATUS
+    const alreadyClosed = originalStatus === CLOSED_STATUS && recordState === 'submitted'
+    return closing && !alreadyClosed
+  }
+
+  /** Every button that can trigger a save routes its action through here, so
+   *  one that would close the consignment pauses for confirmation first. */
+  function runWithCloseConfirm(action: () => void, opts: { isSubmit?: boolean } = {}) {
+    if (willClose(!!opts.isSubmit)) setPendingAction(() => action)
+    else action()
+  }
+
+  function confirmClose() {
+    const action = pendingAction
+    setPendingAction(null)
+    action?.()
+  }
+
+  /** POST the first time, PUT after. Returns the saved record's id + whether
+   *  that save just closed it, or null (with saveErrorMsg set) on failure.
+   *  Confirmation (if needed) has already happened by the time this runs —
+   *  see runWithCloseConfirm. */
+  async function saveDraft(): Promise<{ id: number; isLocked: boolean } | null> {
     setSaving(true)
     setSaveErrorMsg(null)
     setSubmitErrors(null)
@@ -140,6 +185,9 @@ function ImportsStatusWizardInner() {
         : await createConsignment(payload)
 
       if (!consignmentId) setConsignmentId(response.id)
+      setOriginalStatus(response.current_status ?? '')
+      setRecordState(response.record_state ?? 'draft')
+      setIsLocked(response.is_locked)
 
       // Newly-created lines had no id when the request went out; attach the
       // ones the backend just assigned so the NEXT save updates them instead
@@ -153,7 +201,7 @@ function ImportsStatusWizardInner() {
       methods.setValue('items', syncItemBackendIds(currentItems, response.items), { shouldDirty: false })
       methods.setValue('payments', syncPaymentBackendIds(currentPayments, response.payments), { shouldDirty: false })
 
-      return response.id
+      return { id: response.id, isLocked: response.is_locked }
     } catch (err) {
       setSaveErrorMsg(err instanceof Error ? err.message : 'Could not save')
       return null
@@ -165,39 +213,54 @@ function ImportsStatusWizardInner() {
   /** The single navigation primitive — Back, "Save and Next", and clicking a
    *  step in the stepper all go through this, so a save always happens before
    *  the page moves (there's no other way to lose an edit any more). */
-  async function goToStep(nextStep: number) {
+  function goToStep(nextStep: number) {
     const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
     if (clamped === stepDef.step) return
+    runWithCloseConfirm(() => void doGoToStep(clamped))
+  }
 
-    const savedId = await saveDraft()
-    if (savedId === null) return // error is already shown; stay put
-
-    navigate(`/imports-status/${savedId}/edit/${clamped}`)
+  async function doGoToStep(clamped: number) {
+    const saved = await saveDraft()
+    if (saved === null) return // error is already shown; stay put
+    // A save that just closed the consignment leaves nothing further to
+    // edit — land on the read-only detail view instead of an edit route
+    // that would immediately bounce with "this consignment is closed".
+    navigate(saved.isLocked ? `/imports-status/${saved.id}` : `/imports-status/${saved.id}/edit/${clamped}`)
   }
 
   /** The last step's "Save" — same save, but nowhere further to go. */
-  async function handleSaveOnly() {
-    const savedId = await saveDraft()
-    if (savedId === null) return
-    setJustSaved(true)
-    setTimeout(() => setJustSaved(false), 2000)
-    if (isNew) navigate(`/imports-status/${savedId}/edit/${stepDef.step}`, { replace: true })
+  function handleSaveOnly() {
+    runWithCloseConfirm(() => void doHandleSaveOnly())
   }
 
-  /** Save, then run the strict server-side rule set. A 422 comes back with the
-   *  full list of what's missing (submission_errors, mirrored from the same
-   *  rules the draft schema's superRefine describes) — shown inline rather
-   *  than re-deriving the same list client-side and risking the two drifting
+  async function doHandleSaveOnly() {
+    const saved = await saveDraft()
+    if (saved === null) return
+    setJustSaved(true)
+    setTimeout(() => setJustSaved(false), 2000)
+    if (isNew) navigate(`/imports-status/${saved.id}/edit/${stepDef.step}`, { replace: true })
+  }
+
+  /** Save, then run the strict server-side rule set. Available on every step
+   *  (not just the last), but disabled until the draft actually satisfies
+   *  those rules — see canSubmit below. A 422 comes back with the full list
+   *  of what's missing (submission_errors, mirrored from the same rules the
+   *  draft schema's superRefine describes) — shown inline rather than
+   *  re-deriving the same list client-side and risking the two drifting
    *  apart. */
-  async function handleSubmit() {
-    const savedId = await saveDraft()
-    if (savedId === null) return
+  function handleSubmit() {
+    runWithCloseConfirm(() => void doHandleSubmit(), { isSubmit: true })
+  }
+
+  async function doHandleSubmit() {
+    const saved = await saveDraft()
+    if (saved === null) return
 
     setSubmitting(true)
     setSubmitErrors(null)
     try {
-      await submitConsignmentApi(savedId)
-      navigate(`/imports-status/${savedId}`)
+      await submitConsignmentApi(saved.id)
+      navigate(`/imports-status/${saved.id}`)
     } catch (err) {
       if (err instanceof ApiError) {
         const parsed = parseSubmitErrors(err.detail)
@@ -305,25 +368,39 @@ function ImportsStatusWizardInner() {
                 <div className="flex items-center gap-3">
                   {justSaved && <span className="text-xs text-[var(--color-healthy)]">Saved</span>}
                   {isLastStep ? (
-                    <>
-                      <Button type="button" variant="outline" disabled={busy} onClick={handleSaveOnly}>
-                        {saving ? 'Saving…' : 'Save'}
-                      </Button>
-                      <Button type="button" disabled={busy} onClick={handleSubmit}>
-                        {submitting ? 'Submitting…' : 'Submit'}
-                      </Button>
-                    </>
+                    <Button type="button" variant="outline" disabled={busy} onClick={handleSaveOnly}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </Button>
                   ) : (
-                    <Button type="button" disabled={busy} onClick={() => goToStep(stepDef.step + 1)}>
+                    <Button type="button" variant="outline" disabled={busy} onClick={() => goToStep(stepDef.step + 1)}>
                       {saving ? 'Saving…' : 'Save and Next'}
                     </Button>
                   )}
+                  <Button type="button" disabled={busy} onClick={handleSubmit}>
+                    {submitting ? 'Submitting…' : 'Submit'}
+                  </Button>
                 </div>
               </div>
             </form>
           </FormProvider>
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={!!pendingAction}
+        title="Close this consignment?"
+        description={
+          <>
+            Setting status to <span className="font-medium text-ink">"Arrived at Works"</span> closes this
+            consignment. Once closed, no one but an admin can edit it (an admin can reopen it later).
+          </>
+        }
+        confirmLabel="Yes, save and close it"
+        confirmingLabel="Saving…"
+        confirming={busy}
+        onConfirm={confirmClose}
+        onCancel={() => setPendingAction(null)}
+      />
     </div>
   )
 }

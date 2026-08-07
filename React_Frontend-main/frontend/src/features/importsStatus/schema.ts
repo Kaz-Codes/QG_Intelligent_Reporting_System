@@ -46,8 +46,14 @@ export const CONSIGNMENT_STATUSES = [
 ] as const
 export type ConsignmentStatus = (typeof CONSIGNMENT_STATUSES)[number]
 
-/** "Arrived at Works" closes a consignment — hidden from the list by default. */
+/** "Arrived at Works" closes a consignment (once submitted) — hidden from the
+ *  list by default. */
 export const CLOSED_STATUS: ConsignmentStatus = 'Arrived at Works'
+
+/** The other terminal status. It has no lock of its own (nothing to reopen),
+ *  but it's treated the same as a truly-closed "Arrived at Works" record for
+ *  the Closed stage/column — see helpers.py's is_truly_closed on the backend. */
+export const CANCELLED_STATUS: ConsignmentStatus = 'Order Cancelled'
 
 export const REQUISITION_TYPES = ['store', 'engineering', 'others'] as const
 export type RequisitionType = (typeof REQUISITION_TYPES)[number]

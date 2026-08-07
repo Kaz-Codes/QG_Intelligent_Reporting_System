@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from app.imports.models import Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_, not_
 from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
@@ -164,6 +164,9 @@ def fetch_consignment(db, consignment_id):
 # item line, so it is filtered through a sub query on the items.
 #-------------------------------------
 
+ORDER_CANCELLED_VALUE = Status.ORDER_CANCELLED.value
+
+
 def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
                             branch_id, supplier_id, requisition_type,
                             missing_only, etd_from, etd_to, q, page, page_size):
@@ -174,21 +177,38 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     if not include_deleted:
         conditions.append(Consignment.is_deleted == False)
 
+    # "Closed" here means actually closed — "Arrived at works" AND submitted
+    # (is_locked; see helpers.is_closed), not merely sitting at that status.
+    # An unsubmitted "Arrived at works" record hasn't closed yet and stays
+    # out of this bucket. "Order Cancelled" has no lock concept but is the
+    # other terminal state, so it's always treated as closed here.
+    is_truly_closed = or_(
+        and_(Consignment.current_status == CLOSED_STATUS_VALUE, Consignment.is_locked == True),
+        Consignment.current_status == ORDER_CANCELLED_VALUE,
+    )
+
     # A stage is a group of statuses (the six-stage pipeline strip); it narrows
-    # to that group's statuses.
+    # to that group's statuses. The Closed stage specifically means truly
+    # closed records, not just any record sitting at a terminal status.
     if stage and stage != "all":
-        stage_statuses = STAGE_GROUPS.get(stage)
-        if stage_statuses:
-            conditions.append(Consignment.current_status.in_(stage_statuses))
+        if stage == "Closed":
+            conditions.append(is_truly_closed)
+        else:
+            stage_statuses = STAGE_GROUPS.get(stage)
+            if stage_statuses:
+                conditions.append(Consignment.current_status.in_(stage_statuses))
 
     if status:
         conditions.append(Consignment.current_status.in_(status))
 
-    # "Arrived at works" is closed and hidden by default, unless the caller
-    # asks to include it, is looking at the Closed stage, or explicitly filters
-    # to that status. Mirrors the list view's own rule.
-    if not include_closed and stage != "Closed" and not (status and CLOSED_STATUS_VALUE in status):
-        conditions.append(Consignment.current_status != CLOSED_STATUS_VALUE)
+    # Closed records are hidden by default, unless the caller asks to include
+    # them, is looking at the Closed stage, or explicitly filters to that
+    # status. Mirrors the list view's own rule.
+    if (
+        not include_closed and stage != "Closed"
+        and not (status and (CLOSED_STATUS_VALUE in status or ORDER_CANCELLED_VALUE in status))
+    ):
+        conditions.append(not_(is_truly_closed))
 
     if branch_id:
         conditions.append(Consignment.branch_id.in_(branch_id))
@@ -604,18 +624,19 @@ def add_in_eta_revision_history(updation_dict, consignment, user, db):
 def add_in_status_change_history(updation_dict, consignment, user, db):
     if updation_dict.get("current_status"):
 
-        if updation_dict.get("effective_date") is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Effective date is required"
-            )
-        
+        # effective_date is only in updation_dict when it differs from what's
+        # already stored — on same-day status changes the frontend's "today"
+        # matches the existing value and gets dropped from the diff, so this
+        # falls back to today rather than refusing the update (mirrors
+        # logistics' add_in_status_change_history).
+        effective_date = updation_dict.get("effective_date", {}).get("new_value") or date.today()
+
         status_change = StatusUpdateHistory(
             consignment_id = consignment.id,
             previous_status = updation_dict.get("current_status", {}).get("old_value"),
             new_status = updation_dict.get("current_status", {}).get("new_value"),
             remarks = updation_dict.get("remarks", {}).get("new_value"),
-            effective_date = updation_dict.get("effective_date", {}).get("new_value"),
+            effective_date = effective_date,
             user_id = user.id
         )
 
@@ -711,13 +732,18 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 #---------------------------------------
 # THE CLOSED LOCK
 #
-# A consignment closes when its status reaches "Arrived at works". While
-# closed it cannot be edited by anyone until an admin reopens it. The check
-# lives here so the one status value that means "closed" is written once.
+# A consignment closes when its status reaches "Arrived at works" AND it has
+# been submitted — a draft sitting at "Arrived at works" is not yet closed,
+# since it hasn't passed the full rule set in submission_errors. While closed
+# it cannot be edited by anyone until an admin reopens it. The check lives
+# here so the one condition that means "closed" is written once.
 #---------------------------------------
 
 def is_closed(consignment):
-    return consignment.current_status == Status.ARRIVED_AT_WORKS.value
+    return (
+        consignment.current_status == Status.ARRIVED_AT_WORKS.value
+        and consignment.record_state == "submitted"
+    )
 
 
 #---------------------------------------

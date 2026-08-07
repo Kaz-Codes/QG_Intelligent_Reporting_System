@@ -91,7 +91,30 @@ CONSIGNMENT_COLUMNS = [
     # is_deleted is NOT NULL with only a Python-side default, so a raw insert
     # has to set it — the ORM default never runs here.
     "is_deleted",
+    # Both have server_defaults, so a raw insert *could* omit them — but a
+    # historical row that already reached a terminal status is finished work,
+    # not a draft someone abandoned mid-entry. See terminal_flags below.
+    "record_state", "is_locked",
 ]
+
+# The two terminal statuses. A sheet row that already carries one of these
+# describes a consignment that is over, so it loads as submitted rather than
+# as a draft — otherwise the Closed stage fills up with rows the Submitted
+# column calls drafts, which is a contradiction.
+#
+# Only ARRIVED_AT_WORKS also locks (helpers.is_closed = that status AND
+# submitted). ORDER_CANCELLED is terminal but was never "closed" in the lock
+# sense — there is nothing for an admin to reopen — so it loads unlocked, the
+# same as a cancelled order entered through the app.
+TERMINAL_STATUSES = {
+    Status.ARRIVED_AT_WORKS.value: ("submitted", True),
+    Status.ORDER_CANCELLED.value: ("submitted", False),
+}
+
+
+def terminal_flags(status):
+    """(record_state, is_locked) for a loaded consignment at `status`."""
+    return TERMINAL_STATUSES.get(status, ("draft", False))
 
 ITEM_COLUMNS = [
     "consignment_id", "item_id", "item_code", "item_name", "specification",
@@ -201,6 +224,9 @@ def build_rows(df, port_map, item_map, created_by_id):
         chain = _eta_chain(rows)
         eta = chain[-1] if chain else None
 
+        status = map_status(_first(rows, "Current Status", clean_status))
+        record_state, is_locked = terminal_flags(status)
+
         consignment_rows.append((
             consignment_id,
             _first(rows, "works_id", clean_int),          # branch_id
@@ -220,7 +246,7 @@ def build_rows(df, port_map, item_map, created_by_id):
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Ret Dt.", clean_date),
             _first(rows, "Exchange Rate", clean_number),
-            map_status(_first(rows, "Current Status", clean_status)),
+            status,
             _first(rows, "Remarks", clean_text),
             _first(rows, "GD No", clean_text),
             _first(rows, "GD File", clean_date),
@@ -228,6 +254,8 @@ def build_rows(df, port_map, item_map, created_by_id):
             _first(rows, "Gate-out", clean_date),
             created_by_id,
             False,                                         # is_deleted
+            record_state,
+            is_locked,
         ))
 
         # one item line per row in the group
@@ -330,7 +358,11 @@ def load_consignments(conn):
     _bump_sequence(conn, "eta_revision_history")
 
     linked = sum(1 for r in item_rows if r[1] is not None)
-    print(f"Consignments : inserted {len(consignment_rows)} rows")
+    # record_state / is_locked are the last two columns of CONSIGNMENT_COLUMNS.
+    submitted = sum(1 for r in consignment_rows if r[-2] == "submitted")
+    locked = sum(1 for r in consignment_rows if r[-1])
+    print(f"Consignments : inserted {len(consignment_rows)} rows "
+          f"({submitted} at a terminal status loaded as submitted, {locked} of them closed)")
     print(f"Consignment items : inserted {len(item_rows)} rows "
           f"({linked} linked to an item, {len(item_rows) - linked} without a master match)")
     print(f"ETA revisions : inserted {len(eta_rows)} rows")

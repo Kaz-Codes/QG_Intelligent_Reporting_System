@@ -6,13 +6,13 @@ import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
 import { pkr, fx, dateShort, days as daysFmt, num, etaChain } from './format'
-import { getConsignment } from '@/lib/api/imports'
+import { getConsignment, reopenConsignmentApi, submitConsignmentApi } from '@/lib/api/imports'
 import { ApiError } from '@/lib/api/client'
 import {
   apiToRow, slippageDays, daysAtPort, freeDaysLeft, requiredDelayDays,
   type ImportsListRow,
 } from '@/lib/api/importsMap'
-import { WIZARD_STEPS } from './schema'
+import { WIZARD_STEPS, CANCELLED_STATUS } from './schema'
 
 /**
  * Imports Status — detail view, wired to the live backend.
@@ -37,6 +37,8 @@ export function ImportsStatusDetail() {
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [reopening, setReopening] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -59,7 +61,40 @@ export function ImportsStatusDetail() {
 
   useEffect(() => { void load() }, [load])
 
+  async function handleReopen() {
+    if (!row) return
+    if (!window.confirm('Reopen this consignment? It will become editable again until closed once more.')) return
+    setReopening(true)
+    try {
+      await reopenConsignmentApi(row.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen this consignment')
+    } finally {
+      setReopening(false)
+    }
+  }
+
+  async function handleSubmit() {
+    if (!row) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      await submitConsignmentApi(row.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not submit this consignment')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const editable = (can(user, 'editAny', 'imports') || can(user, 'editOwnDraft', 'imports')) && !row?.isLocked
+  // Same permission as edit — submit is create-or-edit-and-own, per CLAUDE.md.
+  // Disabled (not hidden) when requirements aren't met yet, so the reason is
+  // visible via the tooltip rather than the button just not being there.
+  const submittable = editable && !!row && row.recordState !== 'submitted'
+  const submitBlocked = !!row && row.missing.length > 0
 
   if (loading) {
     return (
@@ -128,12 +163,33 @@ export function ImportsStatusDetail() {
         />
         <div className="flex items-center gap-3">
           <StatusPill status={row.status} canonical={row.statusCanonical} />
-          {row.isLocked && (
-            <Tag tone="neutral" title="Closed — an admin must reopen it before it can be edited">
+          <Tag tone={row.recordState === 'submitted' ? 'neutral' : 'warning'}>
+            {row.recordState === 'submitted' ? 'Submitted' : 'Draft'}
+          </Tag>
+          {(row.isLocked || row.status === CANCELLED_STATUS) && (
+            <Tag
+              tone="neutral"
+              title={row.isLocked ? 'Arrived at Works and submitted — an admin must reopen it before it can be edited' : 'Order cancelled'}
+            >
               Closed
             </Tag>
           )}
+          {row.isLocked && user?.isAdmin && (
+            <Button variant="outline" onClick={() => void handleReopen()} disabled={reopening}>
+              {reopening ? 'Reopening…' : 'Reopen'}
+            </Button>
+          )}
           <Button variant="outline" onClick={() => window.print()}>Export PDF</Button>
+          {submittable && (
+            <Button
+              variant="outline"
+              onClick={() => void handleSubmit()}
+              disabled={submitting || submitBlocked}
+              title={submitBlocked ? `Missing: ${row.missing.join(', ')}` : undefined}
+            >
+              {submitting ? 'Submitting…' : 'Submit'}
+            </Button>
+          )}
           {editable && (
             <Button asChild>
               <a href="#" onClick={(e) => { e.preventDefault(); navigate(`/imports-status/${row.systemId}/edit/consignment`) }}>
