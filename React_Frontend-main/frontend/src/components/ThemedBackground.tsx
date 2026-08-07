@@ -73,7 +73,16 @@ interface ModulePhotoSet {
 // behind the content — the numbers are the thing being read, the photo is
 // only setting the mood. Login is deliberately untouched: it has no data on
 // top of it, so its photo can stay at full strength.
-const DENSE_SCRIM = { light: 0.74, dark: 0.68 }
+//
+// The light figure is set by CONTRAST, not taste. `muted` (#5A6478) on a
+// Card (bg-surface/40) over the darkest 1% of these photos measures:
+//     scrim 0.74 -> 4.24:1  (fails WCAG AA body text)
+//     scrim 0.82 -> 4.73:1  (passes)
+// so 0.82 is the lowest wash at which secondary text stays legible over
+// every module photo. Don't lower it without re-measuring. Dark mode is not
+// the same problem — `muted` (#9AA3B8) against the brightest 1% already
+// measures 6.25:1 at 0.68 — so it stays where it was.
+const DENSE_SCRIM = { light: 0.82, dark: 0.68 }
 const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
 
 /** Modules with a real photo instead of the icon+aurora treatment.
@@ -81,7 +90,11 @@ const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
  * module the same "photo behind glass cards" look Dashboard and
  * Logistics have. */
 const MODULE_PHOTOS: Partial<Record<PageKey | 'login', ModulePhotoSet>> = {
-  dashboard: { light: dashboardLight, dark: dashboardDark, scrim: { light: 0.46, dark: 0.52 }, dull: true },
+  // Dashboard used to run a much lighter scrim (0.46/0.52) from when it was a
+  // single sparse overview. It now hosts every module's dashboard as a tab, so
+  // it is the most card-dense page in the app and belongs on the same dense
+  // scrim as the rest — at 0.46 its secondary text measured 3.04:1.
+  dashboard: { light: dashboardLight, dark: dashboardDark, scrim: DENSE_SCRIM, dull: true },
   logistics: { light: logisticsLight, dark: logisticsDark, scrim: DENSE_SCRIM, dull: true },
   imports: { light: importsLight, dark: importsDark, scrim: DENSE_SCRIM, dull: true },
   purchases: { light: purchasesLight, dark: purchasesDark, scrim: DENSE_SCRIM, dull: true },

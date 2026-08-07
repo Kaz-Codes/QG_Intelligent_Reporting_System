@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { LiveDataState } from '@/components/LiveDataState'
 import { FilterBar } from '@/components/FilterBar'
 import { MultiSelectFilter } from '@/components/MultiSelectFilter'
 import { DateRangeFilter } from '@/components/DateRangeFilter'
@@ -9,14 +9,12 @@ import { KpiCard } from '@/components/KpiCard'
 import { HeroStat } from '@/components/HeroStat'
 import { InsightsCard } from '@/components/InsightsCard'
 import { ChartCard } from '@/components/ChartCard'
-import { Card, CardContent } from '@/components/ui/card'
 import { CategoryBar } from '@/components/charts/CategoryBar'
 import { Donut } from '@/components/charts/Donut'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { AgingBuckets } from '@/components/charts/AgingBuckets'
 import { money } from '@/lib/format'
 import { usePurchasesDashboard } from '@/lib/api/usePurchasesDashboard'
-import { ApiError } from '@/lib/api/auth'
 
 const INSIGHT_TABS = [
   { value: 'branch', label: 'Branch' },
@@ -69,24 +67,7 @@ export function Purchases() {
         </div>
       </Disclosure>
 
-      {isLoading && (
-        <Card>
-          <CardContent className="p-8 text-center text-sm text-muted">Loading live data…</CardContent>
-        </Card>
-      )}
-
-      {isError && (
-        <Card>
-          <CardContent className="flex items-start gap-2 p-5 text-sm text-risk">
-            <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-            <span>
-              {error instanceof ApiError && error.status === 401
-                ? 'Signed in, but not with an account the backend recognizes yet — only the seeded admin account has live access right now.'
-                : 'Could not reach the backend — is it running?'}
-            </span>
-          </CardContent>
-        </Card>
-      )}
+      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
       {data && kpis && (
         <>

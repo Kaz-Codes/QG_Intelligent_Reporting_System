@@ -1,18 +1,16 @@
-import { ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { LiveDataState } from '@/components/LiveDataState'
 import { FilterBar } from '@/components/FilterBar'
 import { SingleSelectFilter } from '@/components/SingleSelectFilter'
 import { DateRangeFilter } from '@/components/DateRangeFilter'
 import { KpiCard } from '@/components/KpiCard'
 import { HeroStat } from '@/components/HeroStat'
 import { ChartCard } from '@/components/ChartCard'
-import { Card, CardContent } from '@/components/ui/card'
 import { Donut } from '@/components/charts/Donut'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { money } from '@/lib/format'
 import { useState } from 'react'
 import { useImportsDashboard } from '@/lib/api/useImportsDashboard'
-import { ApiError } from '@/lib/api/auth'
 import type { ValueRow } from '@/lib/api/importsDashboard'
 
 // Backed by the real database (app/dashboard/imports). The backend's filters
@@ -58,24 +56,7 @@ export function Imports() {
         <SingleSelectFilter label="Status" options={data?.status ?? []} value={status} onChange={setStatus} />
       </FilterBar>
 
-      {isLoading && (
-        <Card>
-          <CardContent className="p-8 text-center text-sm text-muted">Loading live data…</CardContent>
-        </Card>
-      )}
-
-      {isError && (
-        <Card>
-          <CardContent className="flex items-start gap-2 p-5 text-sm text-risk">
-            <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-            <span>
-              {error instanceof ApiError && error.status === 401
-                ? 'Signed in, but not with an account the backend recognizes yet — only the seeded admin account has live access right now.'
-                : 'Could not reach the backend — is it running?'}
-            </span>
-          </CardContent>
-        </Card>
-      )}
+      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
       {data && (
         <>

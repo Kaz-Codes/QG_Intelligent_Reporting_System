@@ -117,6 +117,55 @@ export interface ApiConsignment {
   is_locked: boolean
   is_deleted: boolean
   created_by: string | null
+  created_by_id: number | null
+  created_at: string | null
+}
+
+/**
+ * One change-history row from GET /consignments/change-history/{id}.
+ *
+ * `history` is the pre-change snapshot the update route wrote — the OLD
+ * values, keyed the same way the backend stores them:
+ *
+ *   fields          { column: { old_value, new_value } }  header columns
+ *   items/payments  [ { column: { old_value, new_value }, ..., id } ]
+ *   new_*           [ fully serialized row ]  — added by this change
+ *   deleted_*       [ fully serialized row ]  — removed by this change
+ *
+ * Turning that into the card's section/collection shape is importsChangeHistoryMap.ts's job.
+ */
+export interface ApiFieldChange {
+  old_value: unknown
+  new_value: unknown
+}
+
+/** A child-row diff: per-column {old,new} plus a bare numeric `id` naming the
+ *  row. The id is deliberately NOT a change object — see apply_updates. */
+export type ApiChildChange = Record<string, ApiFieldChange | number | undefined> & { id?: number }
+
+export interface ApiChangeHistoryPayload {
+  fields?: Record<string, ApiFieldChange>
+  items?: ApiChildChange[]
+  payments?: ApiChildChange[]
+  new_items?: Record<string, unknown>[]
+  new_payments?: Record<string, unknown>[]
+  deleted_items?: Record<string, unknown>[]
+  deleted_payments?: Record<string, unknown>[]
+}
+
+export interface ApiChangeHistoryEntry {
+  id: number
+  consignment_id: number
+  change_type: string
+  history: ApiChangeHistoryPayload
+  changed_by_id: number | null
+  changed_by: string | null
+  changed_at: string | null
+  is_reverted: boolean
+  reverted_by_id: number | null
+  reverted_by: string | null
+  reverted_at: string | null
+  is_revert: boolean
 }
 
 export interface Pagination {
@@ -341,6 +390,46 @@ export async function updateConsignmentApi(id: number | string, payload: Consign
  *  ApiError.message is a JSON string; parse it with parseSubmitErrors(). */
 export async function submitConsignmentApi(id: number | string): Promise<ApiConsignment> {
   const res = await apiFetch<DetailEnvelope>(`/consignments/${id}/submit`, { method: 'POST' })
+  return res.data
+}
+
+/**
+ * GET /consignments/change-history/{id} — one page of change entries,
+ * newest first.
+ *
+ * `includeReverted` defaults to TRUE here even though the backend defaults it
+ * to false: the history screen greys reverted entries out rather than hiding
+ * them, and hiding them would also break the LIFO rule the UI enforces (it
+ * has to see a reverted entry to know it is not the revertable one).
+ */
+export async function getConsignmentChangeHistory(
+  id: number | string,
+  { page = 1, pageSize = 5, includeReverted = true }: {
+    page?: number; pageSize?: number; includeReverted?: boolean
+  } = {},
+) {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+    include_reverted: String(includeReverted),
+  })
+  const res = await apiFetch<{
+    status_code: number
+    detail: string
+    data: ApiChangeHistoryEntry[]
+    pagination: Pagination
+  }>(`/consignments/change-history/${id}?${params}`)
+  return { entries: res.data, pagination: res.pagination }
+}
+
+/** PUT /consignments/revert-update/{id}/{historyId} — undoes one change.
+ *  400s unless it is the newest not-yet-reverted entry (the backend's LIFO
+ *  rule); the UI only ever offers the button on that entry. */
+export async function revertConsignmentUpdate(id: number | string, historyId: number | string) {
+  const res = await apiFetch<DetailEnvelope>(
+    `/consignments/revert-update/${id}/${historyId}`,
+    { method: 'PUT' },
+  )
   return res.data
 }
 

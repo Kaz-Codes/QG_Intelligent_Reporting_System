@@ -1,12 +1,12 @@
 /**
- * Change-history types + mock-data engine shared by all three status modules
- * (Imports / Logistics / Trucking).
+ * Change-history types shared by all three status modules
+ * (Imports / Logistics / Trucking), plus the mock engine the two that are not
+ * yet wired still run on.
  *
- * FRONTEND-ONLY for now — nothing here calls a backend. The shape is deliberately
- * modelled on the real endpoints that already exist for imports
- * (GET /consignments/change-history/{id}, PUT /consignments/revert-update/{id}/{hid})
- * and mirror one-for-one in logistics/trucking, so wiring this up later is a
- * mapper swap, not a redesign:
+ * IMPORTS IS WIRED to the real endpoints
+ * (GET /consignments/change-history/{id}, PUT /consignments/revert-update/{id}/{hid});
+ * see lib/api/importsChangeHistoryMap.ts for the mapper, which is the worked
+ * example logistics/trucking should follow. The translation it performs:
  *
  *   backend `history.fields`            -> entry.sections[].fields
  *   backend `history.items` (updated)   -> entry.collections[].updated
@@ -14,10 +14,9 @@
  *   backend `history.deleted_items`     -> entry.collections[].removed
  *   is_reverted / reverted_by / reverted_at / is_revert -> same names, camelCased
  *
- * The one real backend rule this mock also enforces client-side: only the
- * newest NOT-reverted entry for a record can be reverted (LIFO undo) — see
- * `isRevertable` below. Everything else (who *may* click it) is a permission
- * check the caller supplies from roleAccess.
+ * LOGISTICS AND TRUCKING are still mock: buildMockHistory below, fed by
+ * lib/{logistics,trucking}ChangeHistory.ts. Those endpoints already exist and
+ * mirror imports one-for-one, so wiring them is a mapper swap, not a redesign.
  */
 
 export interface FieldDiff {
@@ -88,6 +87,11 @@ export function hasVisibleChanges(entry: ChangeHistoryEntry): boolean {
  * newest, not-yet-reverted entry for a record may be reverted; reverting any
  * other one 400s server-side. Mirrored here so the mock UI never offers a
  * button that (once wired) would fail.
+ *
+ * Only sound over the WHOLE list. The wired imports screen is paginated, so it
+ * asks the backend which entry is revertable instead of using this — the
+ * newest active entry can sit on a later page when everything on this one has
+ * been reverted.
  */
 export function isRevertable(entries: ChangeHistoryEntry[], entry: ChangeHistoryEntry): boolean {
   if (entry.isReverted) return false

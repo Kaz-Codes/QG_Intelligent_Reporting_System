@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { LiveDataState } from '@/components/LiveDataState'
 import { FilterBar } from '@/components/FilterBar'
 import { MultiSelectFilter } from '@/components/MultiSelectFilter'
 import { KpiCard } from '@/components/KpiCard'
@@ -13,7 +13,6 @@ import { Donut } from '@/components/charts/Donut'
 import { useTheme } from '@/theme/ThemeContext'
 import { useDebounced } from '@/lib/useDebounced'
 import { useInventoryDashboard } from '@/lib/api/useInventoryDashboard'
-import { ApiError } from '@/lib/api/auth'
 
 const INSIGHT_TABS = [
   { value: 'branch', label: 'Items by Branch' },
@@ -83,24 +82,7 @@ export function Inventory() {
         <MultiSelectFilter label="Reorder Status" options={data?.reorderStatuses ?? []} value={reorderStatus} onChange={setReorderStatus} />
       </FilterBar>
 
-      {isLoading && (
-        <Card>
-          <CardContent className="p-8 text-center text-sm text-muted">Loading live data…</CardContent>
-        </Card>
-      )}
-
-      {isError && (
-        <Card>
-          <CardContent className="flex items-start gap-2 p-5 text-sm text-risk">
-            <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-            <span>
-              {error instanceof ApiError && error.status === 401
-                ? 'Signed in, but not with an account the backend recognizes yet — only the seeded admin account has live access right now.'
-                : 'Could not reach the backend — is it running?'}
-            </span>
-          </CardContent>
-        </Card>
-      )}
+      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
       {data && kpis && (
         <>

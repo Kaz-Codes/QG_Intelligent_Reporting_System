@@ -161,13 +161,14 @@ export function Dashboard() {
       {tab === 'overview' && <>
       {/* Hero band — sits over the page-wide photo (ThemedBackground) like
           every other panel, just with more breathing room for the greeting
-          and a few live stats. Even more transparent than the (already
-          lowered) Panel default in light mode: this band has the least
-          text/texture over it of any card on the page and covers the
-          widest, most "photo-forward" strip, so it can afford to show more
-          of the image through it than a chart-heavy card can. Dark mode
-          keeps the Panel default /75. */}
-      <Panel className="bg-surface/15 dark:bg-surface/28 p-6 lg:p-8">
+          and a few live stats.
+          It used to override the Panel default down to /15 · /28 on the
+          argument that it carries less text than a chart card. Measured, that
+          did not hold: its own subtitle and stat captions are `muted`, which
+          came out at 3.04:1 over the darker parts of the photo. It now
+          inherits the shared Card opacity like every other panel, which is
+          what the contrast figures in ThemedBackground assume. */}
+      <Panel className="p-6 lg:p-8">
         <div className="flex min-h-[200px] flex-col justify-between gap-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -176,7 +177,7 @@ export function Dashboard() {
                 Executive Dashboard
               </span>
               <h1 className="font-display text-3xl font-extrabold leading-tight tracking-tight text-navy lg:text-4xl">
-                {greeting()}{firstName ? `, ${firstName}` : ''} 👋
+                {greeting()}{firstName ? `, ${firstName}` : ''}
               </h1>
               <p className="mt-1 max-w-md text-sm text-muted">Here's how the supply chain is performing today.</p>
             </div>
@@ -242,7 +243,9 @@ export function Dashboard() {
               const Icon = ALERT_ICON[a.level]
               const fg = alertColor[a.level]
               return (
-                <div key={i} className={`flex items-start gap-3 rounded-lg px-1.5 py-2.5 transition-colors hover:bg-canvas-alt ${i !== 0 ? 'border-t border-line' : ''}`}>
+                // No hover tint here: these rows aren't clickable, and a
+                // hover response is a promise of an action that doesn't exist.
+                <div key={i} className={`flex items-start gap-3 rounded-lg px-1.5 py-2.5 ${i !== 0 ? 'border-t border-line' : ''}`}>
                   <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
                     style={{ backgroundColor: `${fg}1A`, color: fg }}>
                     <Icon size={14} />

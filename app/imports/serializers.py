@@ -94,6 +94,7 @@ def serialize_consignment(consignment, db):
 
         "created_by" : consignment.created_by.username if consignment.created_by else None,
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,
+        "created_at" : consignment.created_at,
 
         "origin" : consignment.origin,
         "po_date" : consignment.po_date,
@@ -191,6 +192,9 @@ def serialize_consignment_history(consignment_history):
         "history":consignment_history.history,
         "changed_by_id":consignment_history.changed_by_id,
         "changed_by":consignment_history.changed_by.username if consignment_history.changed_by else None,
+        # When the change was made (TimestampMixin). The history screen orders
+        # and dates every card by this, so it has to go out with the row.
+        "changed_at":consignment_history.created_at,
 
         "is_reverted":consignment_history.is_reverted,
         "reverted_by_id":consignment_history.reverted_by_id,
