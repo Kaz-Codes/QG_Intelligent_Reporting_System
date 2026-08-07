@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { stageOf } from '@/lib/importsStatusData'
+import { stageOf } from '@/lib/importsStages'
 
 /**
  * Shared presentational atoms for Imports Status.
@@ -28,7 +28,27 @@ const STAGE_STYLE: Record<string, { bg: string; fg: string; bd: string }> = {
   Closed: { bg: 'var(--color-healthy-bg)', fg: 'var(--color-healthy)', bd: 'var(--color-healthy)' },
 }
 
-export function StatusPill({ status }: { status: string }) {
+/**
+ * `canonical: false` marks a status that isn't one of the eleven in the
+ * pipeline — imported (Excel) rows carry sheet-only values like "Order
+ * Cancelled" or "Under De-Stuffing". Those are shown in a neutral grey rather
+ * than borrowing a stage colour, because stageOf() would otherwise file them
+ * under Pre-shipment and imply a pipeline position they don't have.
+ */
+export function StatusPill({ status, canonical = true }: { status: string; canonical?: boolean }) {
+  if (!status) return <span className="text-muted">—</span>
+
+  if (!canonical) {
+    return (
+      <span
+        title="Status carried over from the imported sheet — not one of the tracked pipeline stages"
+        className="inline-block cursor-help rounded-full border border-line bg-canvas-alt px-2.5 py-0.5 text-xs font-medium whitespace-nowrap text-muted"
+      >
+        {status}
+      </span>
+    )
+  }
+
   const s = STAGE_STYLE[stageOf(status)] ?? STAGE_STYLE['Pre-shipment']
   return (
     <span
@@ -78,8 +98,13 @@ export function Tag({
   )
 }
 
-export function PaymentDot({ state }: { state: 'paid' | 'partial' | 'unpaid' }) {
+/** 'unknown' is grey on purpose: imported rows have no payment lines at all, so
+ *  claiming "unpaid" (red) would assert something the data doesn't say. */
+export function PaymentDot({ state }: { state: 'paid' | 'partial' | 'unpaid' | 'unknown' }) {
   const color =
-    state === 'paid' ? 'var(--color-healthy)' : state === 'partial' ? 'var(--color-watch)' : 'var(--color-risk)'
+    state === 'paid' ? 'var(--color-healthy)'
+    : state === 'partial' ? 'var(--color-watch)'
+    : state === 'unpaid' ? 'var(--color-risk)'
+    : 'var(--color-muted, #9CA3AF)'
   return <span className="mr-1.5 inline-block h-[7px] w-[7px] rounded-full align-middle" style={{ backgroundColor: color }} />
 }

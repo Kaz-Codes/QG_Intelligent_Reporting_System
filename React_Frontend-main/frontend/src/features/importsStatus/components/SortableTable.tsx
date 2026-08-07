@@ -33,10 +33,26 @@ interface Props<T> {
   maxHeight?: number
   /** Rows per page. Omit or 0 to disable pagination (show all). */
   pageSize?: number
+  /**
+   * Hand pagination to the caller — for a list whose rows come from the server
+   * one page at a time. `rows` is then just the current page, and the footer
+   * below drives the caller instead of slicing locally. Without this the table
+   * pages whatever it was given, which would be a SECOND pager on top of the
+   * server's.
+   */
+  serverPagination?: {
+    page: number
+    pageCount: number
+    totalRows: number
+    pageSize: number
+    onPageChange: (page: number) => void
+    loading?: boolean
+  }
 }
 
 export function SortableTable<T>({
   columns, rows, flagged, onRowClick, initialSort, empty, maxHeight = 560, pageSize = 10,
+  serverPagination,
 }: Props<T>) {
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(initialSort ?? null)
   const [page, setPage] = useState(1)
@@ -53,12 +69,29 @@ export function SortableTable<T>({
     })
   })()
 
-  // Pagination (pageSize = 0 disables). Page clamps when the row set shrinks.
-  const paginate = pageSize > 0
-  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize))
-  const safePage = paginate ? Math.min(page, pageCount) : 1
-  if (paginate && safePage !== page) setPage(safePage)
-  const visible = paginate ? sorted.slice((safePage - 1) * pageSize, safePage * pageSize) : sorted
+  // Server-paged: show exactly what we were handed (sorted within the page)
+  // and let the footer call back. Otherwise page locally; pageSize = 0
+  // disables. The local page clamps when the row set shrinks.
+  const serverPaged = !!serverPagination
+  const paginate = serverPaged || pageSize > 0
+  const pageCount = serverPaged
+    ? Math.max(1, serverPagination.pageCount)
+    : Math.max(1, Math.ceil(sorted.length / pageSize))
+  const safePage = serverPaged ? serverPagination.page : (paginate ? Math.min(page, pageCount) : 1)
+  if (!serverPaged && paginate && safePage !== page) setPage(safePage)
+  const visible = serverPaged
+    ? sorted
+    : (paginate ? sorted.slice((safePage - 1) * pageSize, safePage * pageSize) : sorted)
+
+  const totalRows = serverPaged ? serverPagination.totalRows : sorted.length
+  const rowsPerPage = serverPaged ? serverPagination.pageSize : pageSize
+  const goToPage = serverPaged ? serverPagination.onPageChange : setPage
+  const pagerDisabled = serverPaged ? !!serverPagination.loading : false
+  const showPager = serverPaged ? pageCount > 1 : (paginate && sorted.length > pageSize)
+  const firstOnPage = totalRows === 0 ? 0 : (safePage - 1) * rowsPerPage + 1
+  const lastOnPage = serverPaged
+    ? Math.min((safePage - 1) * rowsPerPage + visible.length, totalRows)
+    : Math.min(safePage * rowsPerPage, totalRows)
 
   const toggle = (key: string) => {
     const col = columns.find((c) => c.key === key)
@@ -128,16 +161,16 @@ export function SortableTable<T>({
           ))}
         </tbody>
       </table>
-      {paginate && sorted.length > pageSize && (
+      {showPager && (
         <div className="flex items-center justify-between gap-3 border-t border-line px-3 py-2 text-sm text-muted">
           <span className="tabular-nums">
-            {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, sorted.length)} of {sorted.length}
+            {firstOnPage}–{lastOnPage} of {totalRows}
           </span>
           <div className="flex items-center gap-1">
-            <button onClick={() => setPage(safePage - 1)} disabled={safePage <= 1}
+            <button onClick={() => goToPage(safePage - 1)} disabled={safePage <= 1 || pagerDisabled}
               className="rounded border border-line px-2.5 py-1 text-xs hover:border-muted disabled:opacity-40">Prev</button>
             <span className="px-2 text-xs tabular-nums">Page {safePage} of {pageCount}</span>
-            <button onClick={() => setPage(safePage + 1)} disabled={safePage >= pageCount}
+            <button onClick={() => goToPage(safePage + 1)} disabled={safePage >= pageCount || pagerDisabled}
               className="rounded border border-line px-2.5 py-1 text-xs hover:border-muted disabled:opacity-40">Next</button>
           </div>
         </div>

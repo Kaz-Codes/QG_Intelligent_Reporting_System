@@ -86,9 +86,17 @@ class Status(str, Enum):
     UNDER_CUSTOM_CLEARANCE = "Under Custom Clearance"
     UNDER_EXAMINATION = "Under Examination"
     UNDER_ASSESSMENT = "Under Assessment"
+    # Unstuffing the container, after assessment and before the goods move on.
+    # Came from the imported sheets; added here because it is a real stage with
+    # no equivalent among the others, not a spelling of one.
+    UNDER_DE_STUFFING = "Under De-Stuffing"
     ARRIVED_AT_QFL = "Arrived at QFL"
     ON_ROAD = "On Road"
     ARRIVED_AT_WORKS = "Arrived at Works"
+    # A terminal state that is NOT an arrival: the import never completes. Last
+    # in the list because it is an exit, not a later stage. Note this does not
+    # lock a record — only "Arrived at Works" does (see helpers.is_closed).
+    ORDER_CANCELLED = "Order Cancelled"
 
 
 #--------------------------------

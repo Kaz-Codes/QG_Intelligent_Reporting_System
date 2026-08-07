@@ -11,12 +11,15 @@ import { UserManagement } from '@/pages/UserManagement'
 import { ImportsStatusList } from '@/features/importsStatus/ImportsStatusList'
 import { ImportsStatusDetail } from '@/features/importsStatus/ImportsStatusDetail'
 import { ImportsStatusWizard } from '@/features/importsStatus/wizard/ImportsStatusWizard'
+import { ImportsChangeHistory } from '@/features/importsStatus/ImportsChangeHistory'
 import { LogisticsStatusList } from '@/features/logisticsStatus/LogisticsStatusList'
 import LogisticsStatusDetail from '@/features/logisticsStatus/LogisticsStatusDetail'
 import { LogisticsStatusWizard } from '@/features/logisticsStatus/wizard/LogisticsStatusWizard'
+import { LogisticsChangeHistory } from '@/features/logisticsStatus/LogisticsChangeHistory'
 import { TruckingStatusList } from '@/features/truckingStatus/TruckingStatusList'
 import { TruckingStatusDetail } from '@/features/truckingStatus/TruckingStatusDetail'
 import { TruckingStatusWizard } from '@/features/truckingStatus/wizard/TruckingStatusWizard'
+import { TruckingChangeHistory } from '@/features/truckingStatus/TruckingChangeHistory'
 
 function App() {
   return (
@@ -38,6 +41,7 @@ function App() {
                 <Route index element={<ImportsStatusList />} />
                 <Route path="new" element={<ImportsStatusWizard />} />
                 <Route path=":id" element={<ImportsStatusDetail />} />
+                <Route path=":id/history" element={<ImportsChangeHistory />} />
                 <Route path=":id/edit/:step" element={<ImportsStatusWizard />} />
               </Route>
 
@@ -45,6 +49,7 @@ function App() {
                 <Route index element={<LogisticsStatusList />} />
                 <Route path="new" element={<LogisticsStatusWizard />} />
                 <Route path=":id" element={<LogisticsStatusDetail />} />
+                <Route path=":id/history" element={<LogisticsChangeHistory />} />
                 <Route path=":id/edit/:step" element={<LogisticsStatusWizard />} />
               </Route>
 
@@ -52,6 +57,7 @@ function App() {
                 <Route index element={<TruckingStatusList />} />
                 <Route path="new" element={<TruckingStatusWizard />} />
                 <Route path=":id" element={<TruckingStatusDetail />} />
+                <Route path=":id/history" element={<TruckingChangeHistory />} />
                 <Route path=":id/edit/:step" element={<TruckingStatusWizard />} />
               </Route>
             </Route>

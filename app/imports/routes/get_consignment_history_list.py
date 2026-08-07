@@ -12,7 +12,9 @@ from typing import Optional
 def get_consignment_history_list(
     request : Request,
     consignment_id : int,
-    include_reverted : Optional[bool] = False
+    include_reverted : Optional[bool] = False,
+    page : int = 1,
+    page_size : int = 20
     ):
 
     db = SessionLocal()
@@ -22,7 +24,7 @@ def get_consignment_history_list(
         # Authenticate user (whether user is logged in or not)
         user_payload = authenticate(request)
 
-        # Authorize user (Check whether user is allowed for this 
+        # Authorize user (Check whether user is allowed for this
         # action)
         user = authorize(user_payload, CAN_VIEW_IMPORTS, db)
 
@@ -33,18 +35,33 @@ def get_consignment_history_list(
                 status_code=404,
                 detail="Consignment not found"
             )
-        
-        consignment_history = fetch_all_consignment_history(db, include_reverted, consignment.id)
 
-        # Serializeing all consignment histories
+        # Keep the page and size sane, same bounds as the consignments list.
+        if page < 1:
+            page = 1
+
+        if page_size < 1 or page_size > 100:
+            page_size = 20
+
+        consignment_history, total = fetch_all_consignment_history(
+            db, include_reverted, consignment.id, page, page_size
+        )
+
+        # Serializeing this page of consignment histories
         serialized_consignment_history = [
             serialize_consignment_history(history) for history in consignment_history
         ]
-      
+
         return {
             "status_code":200,
             "detail":"Consignment history fetched",
-            "data":serialized_consignment_history
+            "data":serialized_consignment_history,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size if total else 0
+            }
         }
 
     except HTTPException:

@@ -1,9 +1,18 @@
 import { useFormContext, useWatch } from 'react-hook-form'
 import { type ConsignmentDraft, SHIPMENT_MODES, transitDays } from '../../schema'
 import { Field, Input, Select, Callout, CarriedContext, PendingBanner } from './fields'
+import { useMasters } from '../MastersContext'
+import type { PortOption } from '@/lib/api/masters'
 
-const SEA_PORTS = ['Shanghai', 'Ningbo', 'Hamburg', 'Karachi (KICT)', 'Port Qasim']
-const AIR_PORTS = ['Shanghai Pudong', 'Frankfurt', 'Lahore (Allama Iqbal)']
+/** Which master port_type a shipment mode's ports are filtered to. Land and
+ *  courier moves aren't tracked by a dedicated port_type on the master (only
+ *  Sea/Air/Dry/Land exist) — 'Land' is the closest fit. */
+const PORT_TYPE_FOR_MODE: Record<string, PortOption['port_type']> = {
+  'Sea freight FCL': 'Sea',
+  'Sea freight LCL': 'Sea',
+  'Air freight': 'Air',
+  'Land/courier': 'Land',
+}
 
 /**
  * Step 3 — Shipping.
@@ -20,8 +29,12 @@ export function Step3Shipping() {
   const etd = watch('etd')
   const eta = watch('eta')
   const revisions = watch('etaRevisions') ?? []
+  const { ports: allPorts, loading: mastersLoading } = useMasters()
 
-  const ports = mode === 'Air' ? AIR_PORTS : mode === 'Sea' ? SEA_PORTS : [...SEA_PORTS, ...AIR_PORTS]
+  const wantedType = mode ? PORT_TYPE_FOR_MODE[mode] : undefined
+  const byType = wantedType ? allPorts.filter((p) => p.port_type === wantedType) : allPorts
+  const loadingPorts = byType.filter((p) => p.used_as === 'Loading' || p.used_as === 'Both')
+  const deliveryPorts = byType.filter((p) => p.used_as === 'Delivery' || p.used_as === 'Both')
   const transit = transitDays({ etd, eta })
 
   return (
@@ -45,16 +58,16 @@ export function Step3Shipping() {
           </Field>
 
           <Field label="Port of loading" hint={mode ? undefined : 'Choose a mode to filter ports'}>
-            <Select {...register('portOfLoading')} disabled={!mode}>
+            <Select {...register('portOfLoading')} disabled={!mode || mastersLoading}>
               <option value="">{mode ? 'Select…' : 'Select mode first'}</option>
-              {ports.map((p) => <option key={p}>{p}</option>)}
+              {loadingPorts.map((p) => <option key={p.id}>{p.name}</option>)}
             </Select>
           </Field>
 
           <Field label="Port of delivery">
-            <Select {...register('portOfDelivery')} disabled={!mode}>
+            <Select {...register('portOfDelivery')} disabled={!mode || mastersLoading}>
               <option value="">{mode ? 'Select…' : 'Select mode first'}</option>
-              {ports.map((p) => <option key={p}>{p}</option>)}
+              {deliveryPorts.map((p) => <option key={p.id}>{p.name}</option>)}
             </Select>
           </Field>
 

@@ -1,6 +1,6 @@
 import { useFormContext, useWatch } from 'react-hook-form'
 import {
-  type ConsignmentDraft, PAYMENT_INSTRUMENTS, INSTRUMENT_WORDING,
+  type ConsignmentDraft, PAYMENT_INSTRUMENTS, INSTRUMENT_WORDING, RATE_SOURCES,
   foreignTotal, localTotal, lineTotal,
 } from '../../schema'
 import { Field, Input, Select, Callout, CarriedContext } from './fields'
@@ -125,8 +125,11 @@ export function Step2Finance() {
             <Input type="date" {...register('rateDate')} />
           </Field>
 
-          <Field label="Rate source" span hint="e.g. bank TT rate, SBP">
-            <Input {...register('rateSource')} autoComplete="off" />
+          <Field label="Rate source" span hint="Where the booked rate came from — needed to reconcile against a bank advice later">
+            <Select {...register('rateSource')}>
+              <option value="">Select…</option>
+              {RATE_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </Select>
           </Field>
         </div>
       </section>

@@ -3,3 +3,6 @@ fastapi
 uvicorn
 python-dotenv
 pandas
+wsproto
+openpyxl
+xlrd

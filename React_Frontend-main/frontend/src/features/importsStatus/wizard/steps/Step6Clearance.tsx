@@ -3,6 +3,7 @@ import {
   type ConsignmentDraft, clearanceBasis, clearanceDays, arrivedAtPortDate,
 } from '../../schema'
 import { Field, Input, Callout, CarriedContext, PendingBanner } from './fields'
+import { useMasters } from '../MastersContext'
 
 /**
  * Step 6 — Clearance.
@@ -20,6 +21,7 @@ export function Step6Clearance() {
   const eta = watch('eta')
   const freeDays = watch('freeDays')
   const gateOutDate = watch('gateOutDate')
+  const { agents } = useMasters()
 
   const draft = { statusHistory, eta, gateOutDate } as Pick<ConsignmentDraft, 'statusHistory' | 'eta' | 'gateOutDate'>
   const basis = clearanceBasis(draft)
@@ -43,12 +45,10 @@ export function Step6Clearance() {
           Clearance
         </h3>
         <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Clearing agent" span hint="From clearing-agent master">
+          <Field label="Clearing agent" span hint="From clearing-agent master — a name that doesn’t match yet is kept, but won’t link until it’s added there">
             <Input {...register('clearingAgent')} list="dl-agents" autoComplete="off" placeholder="Search…" />
             <datalist id="dl-agents">
-              <option>Prime Cargo Services</option>
-              <option>Indus Clearing Co.</option>
-              <option>Sea Link Logistics</option>
+              {agents.map((a) => <option key={a.id} value={a.name} />)}
             </datalist>
           </Field>
 

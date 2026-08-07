@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { FilterBar } from '@/components/FilterBar'
@@ -8,62 +8,178 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import { SortableTable, type SortableColumn } from './components/SortableTable'
-import { exportListExcel, exportListPdf, type ListColumn } from '@/lib/listExport'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
 import { pkr, fx, dateShort, days as daysFmt, num } from './format'
+import { STAGE_GROUPS } from '@/lib/importsStages'
 import {
-  getConsignments, stageCounts, pkrValue, slippageDays, freeDaysLeft, requiredDelayDays,
-  branchList, statusList, supplierList, requisitionList,
-  type ConsignmentRow, type ConsignmentFilters, type StageKey,
-} from '@/lib/importsStatusData'
+  listConsignments, fetchFilterOptions, exportConsignmentsExcel, downloadBlob,
+  type ConsignmentQuery,
+} from '@/lib/api/imports'
+import {
+  apiToRow, slippageDays, requiredDelayDays, freeDaysLeft,
+  type ImportsListRow,
+} from '@/lib/api/importsMap'
 
 /**
- * Imports Status — list view.
+ * Imports Status — list view, wired to the live backend.
  *
- * The centre of gravity of the whole feature: the screen people watch all day.
- * A pipeline strip rolls 11 statuses into 6 scannable stages (and doubles as a
- * filter); the table adds slippage, a free-days countdown and a named
- * "information pending" flag on top of the plain fields. Completed consignments
- * are hidden by default. Both exports run on the *filtered* set.
+ * Every filter runs SERVER-side: the pipeline strip, the four multi-selects,
+ * the two checkboxes, the ETD range and the search box are all query params on
+ * GET /consignments/, and Export Excel re-runs the same query with no page cap
+ * so the download is exactly the filtered set. Sorting is client-side over the
+ * loaded page, which is what SortableTable already does.
+ *
+ * Rows come back newest-first (the backend orders by id desc).
+ *
+ * Filter dropdowns are fetched from /consignments/filter-options rather than
+ * hard-coded, because the imported (Excel) rows carry values the enums don't
+ * have — offering only the canonical eleven statuses would make those rows
+ * unfilterable. See lib/api/importsMap.ts for the rest of that reconciliation.
  */
+
+const PAGE_SIZE = 50
+
+const STAGE_KEYS = ['all', ...STAGE_GROUPS.map((g) => g.key)] as const
+type StageKey = (typeof STAGE_KEYS)[number]
+
 export function ImportsStatusList() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  const [filters, setFilters] = useState<ConsignmentFilters>({})
+  // --- filter state (drives the query) ---
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [stage, setStage] = useState<StageKey>('all')
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [branchFilter, setBranchFilter] = useState<string[]>([])
+  const [supplierFilter, setSupplierFilter] = useState<string[]>([])
+  const [requisitionFilter, setRequisitionFilter] = useState<string[]>([])
   const [includeClosed, setIncludeClosed] = useState(false)
   const [missingOnly, setMissingOnly] = useState(false)
+  const [etdFrom, setEtdFrom] = useState('')
+  const [etdTo, setEtdTo] = useState('')
+  const [page, setPage] = useState(1)
 
-  const rows = useMemo(
-    () => getConsignments({ ...filters, stage, includeClosed, missingOnly }),
-    [filters, stage, includeClosed, missingOnly],
+  // --- data ---
+  const [rows, setRows] = useState<ImportsListRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+
+  // --- dropdown options, from the data itself ---
+  const [statusOptions, setStatusOptions] = useState<{ value: string; canonical: boolean }[]>([])
+  const [branchOptions, setBranchOptions] = useState<{ id: number; name: string }[]>([])
+  const [supplierOptions, setSupplierOptions] = useState<{ id: number; name: string }[]>([])
+  const [requisitionOptions, setRequisitionOptions] = useState<string[]>([])
+
+  // Typing shouldn't fire a request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  const [optionsError, setOptionsError] = useState<string | null>(null)
+
+  const loadOptions = useCallback(() => {
+    setOptionsError(null)
+    fetchFilterOptions()
+      .then((options) => {
+        setStatusOptions(options.statuses ?? [])
+        setBranchOptions(options.branches ?? [])
+        setSupplierOptions(options.suppliers ?? [])
+        setRequisitionOptions(options.requisition_types ?? [])
+      })
+      .catch((err) => {
+        // Never swallow this: a silent failure here shows four empty dropdowns
+        // with no hint that anything went wrong.
+        setOptionsError(err instanceof Error ? err.message : 'Could not load filter options')
+      })
+  }, [])
+
+  useEffect(() => { loadOptions() }, [loadOptions])
+
+  // The multi-selects show names; the API filters branch/supplier by id.
+  const branchIds = useMemo(
+    () => branchOptions.filter((b) => branchFilter.includes(b.name)).map((b) => b.id),
+    [branchOptions, branchFilter],
   )
-  const stages = useMemo(() => stageCounts(includeClosed), [includeClosed])
+  const supplierIds = useMemo(
+    () => supplierOptions.filter((s) => supplierFilter.includes(s.name)).map((s) => s.id),
+    [supplierOptions, supplierFilter],
+  )
 
-  const stageOptions = stages.map((s) => ({
-    value: s.key,
-    label: s.key === 'all' ? (includeClosed ? 'All' : 'All open') : s.key,
-    badge: s.count,
-  }))
+  const query: ConsignmentQuery = useMemo(() => ({
+    page,
+    pageSize: PAGE_SIZE,
+    stage,
+    status: statusFilter,
+    branchId: branchIds,
+    supplierId: supplierIds,
+    requisitionType: requisitionFilter,
+    includeClosed,
+    missingOnly,
+    etdFrom: etdFrom || undefined,
+    etdTo: etdTo || undefined,
+    search: debouncedSearch,
+  }), [page, stage, statusFilter, branchIds, supplierIds, requisitionFilter,
+       includeClosed, missingOnly, etdFrom, etdTo, debouncedSearch])
 
-  const columns: SortableColumn<ConsignmentRow>[] = [
+  // Any filter change puts us back on page 1 — staying on page 7 of a result
+  // set that now has 2 pages would show an empty table.
+  const firstRender = useRef(true)
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return }
+    setPage(1)
+  }, [stage, statusFilter, branchIds, supplierIds, requisitionFilter,
+      includeClosed, missingOnly, etdFrom, etdTo, debouncedSearch])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { rows: apiRows, pagination } = await listConsignments(query)
+      setRows(apiRows.map(apiToRow))
+      setTotal(pagination?.total ?? apiRows.length)
+      setTotalPages(pagination?.total_pages ?? 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load consignments')
+      setRows([])
+      setTotal(0)
+      setTotalPages(0)
+    } finally {
+      setLoading(false)
+    }
+  }, [query])
+
+  useEffect(() => { void load() }, [load])
+
+  async function doExcel() {
+    setExporting(true)
+    try {
+      const blob = await exportConsignmentsExcel(query)
+      downloadBlob(blob, `consignments_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not export')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const columns: SortableColumn<ImportsListRow>[] = [
     {
       key: 'systemId', label: 'ID / Reference', width: 150,
-      sortValue: (r) => r.systemId,
-      render: (r) => {
-        const first = r.items[0]
-        const ref = first?.referenceNo || (r.requisitionSummary && `${r.requisitionSummary} — no reference`)
-        return (
-          <div>
-            <div className="font-semibold tabular-nums">{r.systemId}</div>
-            <div className="text-[11px] text-muted">{ref || '—'}</div>
-          </div>
-        )
-      },
+      sortValue: (r) => r.id,
+      render: (r) => (
+        <div>
+          <div className="font-semibold tabular-nums">{r.systemId}</div>
+          <div className="text-[11px] text-muted">{r.instrumentNo || r.items[0]?.referenceNo || '—'}</div>
+        </div>
+      ),
     },
     {
-      key: 'payment', label: 'Payment', width: 130,
+      key: 'payment', label: 'Payment', width: 150,
       sortValue: (r) => r.paymentState,
       render: (r) => (
         <span className="whitespace-nowrap text-[13px]">
@@ -94,14 +210,16 @@ export function ImportsStatusList() {
     },
     {
       key: 'items', label: 'Items', width: 170,
+      sortValue: (r) => r.items[0]?.itemName ?? '',
       render: (r) => {
         const first = r.items[0]
         const more = r.items.length - 1
+        if (!first) return <span className="text-muted">—</span>
         return (
           <div>
-            <div>{first?.itemName}</div>
+            <div>{first.itemName || '—'}</div>
             <div className="text-[11px] text-muted tabular-nums">
-              {num(first?.quantity ?? 0)} {first?.uom}
+              {first.quantity !== null ? `${num(first.quantity)} ${first.uom}` : 'qty not recorded'}
               {more > 0 && ` · +${more} more`}
             </div>
           </div>
@@ -109,11 +227,11 @@ export function ImportsStatusList() {
       },
     },
     {
-      key: 'status', label: 'Status', width: 170,
-      sortValue: (r) => statusList.indexOf(r.status),
+      key: 'status', label: 'Status', width: 180,
+      sortValue: (r) => r.status,
       render: (r) => (
         <div className="space-y-1">
-          <StatusPill status={r.status} />
+          <StatusPill status={r.status} canonical={r.statusCanonical} />
           {r.missing.length > 0 && (
             <div>
               <Tag tone="warning" title={`Missing: ${r.missing.join(', ')}`}>
@@ -156,10 +274,10 @@ export function ImportsStatusList() {
       render: (r) => (
         <div className="tabular-nums">
           {dateShort(r.eta)}
-          {r.etaHistory.length > 0 && (
+          {r.etaHistory.length > 1 && (
             <div className="mt-0.5">
-              <Tag tone="warning" title={`Revised ${r.etaHistory.length} time(s)`}>
-                ETA ×{r.etaHistory.length}
+              <Tag tone="warning" title={`Revised ${r.etaHistory.length - 1} time(s)`}>
+                ETA ×{r.etaHistory.length - 1}
               </Tag>
             </div>
           )}
@@ -179,20 +297,31 @@ export function ImportsStatusList() {
     },
     {
       key: 'value', label: 'Value', width: 110, align: 'right',
-      sortValue: (r) => r.foreignValue,
-      render: (r) => <span className="tabular-nums whitespace-nowrap">{fx(r.foreignValue, r.currency)}</span>,
+      sortValue: (r) => r.foreignValue ?? -1,
+      render: (r) => (
+        r.foreignValue !== null
+          ? <span className="tabular-nums whitespace-nowrap">{fx(r.foreignValue, r.currency)}</span>
+          : <span className="text-muted" title="No priced item line">—</span>
+      ),
     },
     {
       key: 'pkr', label: 'Value (PKR)', width: 130, align: 'right',
-      sortValue: (r) => pkrValue(r),
-      render: (r) => (
-        <div className="tabular-nums">
-          {pkr(pkrValue(r))}
-          <div className="text-[11px] text-muted" title={`Rate booked ${dateShort(r.rateDate)}`}>
-            @ {r.exchangeRate.toFixed(2)} · {dateShort(r.rateDate)}
+      sortValue: (r) => r.pkrValue ?? -1,
+      render: (r) => {
+        if (r.pkrValue === null) {
+          return <span className="text-muted" title="Needs a value and a booked exchange rate">—</span>
+        }
+        return (
+          <div className="tabular-nums">
+            {pkr(r.pkrValue)}
+            {r.exchangeRate !== null && (
+              <div className="text-[11px] text-muted" title={r.rateDate ? `Rate booked ${dateShort(r.rateDate)}` : 'Rate date not recorded'}>
+                @ {r.exchangeRate.toFixed(2)}{r.rateDate ? ` · ${dateShort(r.rateDate)}` : ''}
+              </div>
+            )}
           </div>
-        </div>
-      ),
+        )
+      },
     },
     {
       key: 'reference', label: 'Reference', width: 130,
@@ -205,6 +334,7 @@ export function ImportsStatusList() {
     },
     {
       key: 'clearance', label: 'Clearance', width: 120,
+      sortValue: (r) => freeDaysLeft(r) ?? 9999,
       render: (r) => {
         if (r.gateOut) return <span className="tabular-nums text-[13px]">Out {dateShort(r.gateOut)}</span>
         const left = freeDaysLeft(r)
@@ -214,64 +344,48 @@ export function ImportsStatusList() {
       },
     },
     {
-      key: 'actions', label: '', width: 120,
+      key: 'actions', label: '', width: 180,
       render: (r) => (
         <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
           <button
-            onClick={() => navigate(`/imports-status/${r.systemId}`)}
+            onClick={() => navigate(`/imports-status/${r.id}`)}
             className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
           >
             Open
           </button>
-          {can(user, 'editAny') && (
+          {can(user, 'editAny', 'imports') && (
             <button
-              onClick={() => navigate(`/imports-status/${r.systemId}/edit/consignment`)}
-              className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+              onClick={() => navigate(`/imports-status/${r.id}/edit/consignment`)}
+              disabled={r.isLocked}
+              title={r.isLocked ? 'Closed — an admin must reopen it before editing' : undefined}
+              className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
             >
               Edit
             </button>
           )}
+          <button
+            onClick={() => navigate(`/imports-status/${r.id}/history`)}
+            title="View change history"
+            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+          >
+            History
+          </button>
         </div>
       ),
     },
   ]
 
-  /* exports run on the current filtered set — the single most-wanted behaviour */
-  const exportColumns: ListColumn<ConsignmentRow>[] = [
-    { header: 'Consignment ID', value: (r) => r.systemId },
-    { header: 'Reference', value: (r) => r.instrumentNo ?? '' },
-    { header: 'Branch', value: (r) => r.branch },
-    { header: 'Supplier', value: (r) => r.supplier },
-    { header: 'Origin', value: (r) => r.origin },
-    { header: 'Requisition', value: (r) => r.requisitionSummary },
-    { header: 'Status', value: (r) => r.status },
-    { header: 'ETD', value: (r) => r.etd ?? '' },
-    { header: 'ETA', value: (r) => r.eta ?? '' },
-    { header: 'ETA revisions', value: (r) => r.etaHistory.length },
-    { header: 'Slippage (days)', value: (r) => slippageDays(r) ?? '' },
-    { header: 'Required delay (days)', value: (r) => requiredDelayDays(r) ?? '' },
-    { header: 'Currency', value: (r) => r.currency },
-    { header: 'Value (foreign)', value: (r) => r.foreignValue },
-    { header: 'Exchange rate', value: (r) => r.exchangeRate },
-    { header: 'Rate date', value: (r) => r.rateDate },
-    { header: 'Value (PKR)', value: (r) => Math.round(pkrValue(r)) },
-    { header: 'Payment', value: (r) => r.paymentLabel },
-    { header: 'Clearing agent', value: (r) => r.clearingAgent ?? '' },
-    { header: 'Gate out', value: (r) => r.gateOut ?? '' },
-    { header: 'Missing fields', value: (r) => r.missing.join('; ') },
-  ]
-  const stamp = () => new Date().toISOString().slice(0, 10)
-  const doExcel = () => exportListExcel(rows, exportColumns, `consignments_${stamp()}.xlsx`, 'Consignments')
-  const doPdf = () => exportListPdf(rows, exportColumns, `consignments_${stamp()}.pdf`, 'Consignments')
+  const shown = loading ? 'Loading…' : `${total} total${totalPages > 1 ? ` · page ${page} of ${totalPages}` : ''}`
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeader title="Consignments" subtitle={`${rows.length} shown`} module="importsStatus" />
+        <PageHeader title="Consignments" subtitle={shown} module="importsStatus" />
         <div className="flex gap-2">
-          <Button variant="outline" onClick={doExcel}>Export Excel</Button>
-          <Button variant="outline" onClick={doPdf}>Export PDF</Button>
-          {can(user, 'enter') && (
+          <Button variant="outline" onClick={() => void doExcel()} disabled={exporting || total === 0}>
+            {exporting ? 'Exporting…' : 'Export Excel'}
+          </Button>
+          {can(user, 'enter', 'imports') && (
             <Button asChild>
               <Link to="/imports-status/new">New consignment</Link>
             </Button>
@@ -279,23 +393,49 @@ export function ImportsStatusList() {
         </div>
       </div>
 
+      {/* The stage strip filters server-side. Counts aren't shown per stage:
+          they'd need a separate aggregate call, and a wrong count is worse
+          than none. */}
       <SegmentedControl
-        options={stageOptions.map((s) => ({ value: s.value, label: `${s.label} (${s.badge})` }))}
+        options={STAGE_KEYS.map((key) => ({
+          value: key,
+          label: key === 'all' ? (includeClosed ? 'All' : 'All open') : key,
+        }))}
         value={stage}
         onChange={(v) => setStage(v as StageKey)}
       />
 
       <FilterBar
         search={{
-          value: filters.search ?? '',
-          onChange: (search) => setFilters((f) => ({ ...f, search })),
-          placeholder: 'ID, LC/DP reference, supplier, item…',
+          value: search,
+          onChange: setSearch,
+          placeholder: 'ID, LC/DP reference, supplier, branch, item…',
         }}
       >
-        <MultiSelectFilter label="Branch" options={branchList} value={filters.branch ?? []} onChange={(branch) => setFilters((f) => ({ ...f, branch }))} />
-        <MultiSelectFilter label="Status" options={statusList} value={filters.status ?? []} onChange={(status) => setFilters((f) => ({ ...f, status }))} />
-        <MultiSelectFilter label="Requisition" options={requisitionList} value={filters.requisition ?? []} onChange={(requisition) => setFilters((f) => ({ ...f, requisition }))} />
-        <MultiSelectFilter label="Supplier" options={supplierList} value={filters.supplier ?? []} onChange={(supplier) => setFilters((f) => ({ ...f, supplier }))} />
+        <MultiSelectFilter
+          label="Branch"
+          options={branchOptions.map((b) => b.name)}
+          value={branchFilter}
+          onChange={setBranchFilter}
+        />
+        <MultiSelectFilter
+          label="Status"
+          options={statusOptions.map((s) => s.value)}
+          value={statusFilter}
+          onChange={setStatusFilter}
+        />
+        <MultiSelectFilter
+          label="Requisition"
+          options={requisitionOptions}
+          value={requisitionFilter}
+          onChange={setRequisitionFilter}
+        />
+        <MultiSelectFilter
+          label="Supplier"
+          options={supplierOptions.map((s) => s.name)}
+          value={supplierFilter}
+          onChange={setSupplierFilter}
+        />
         <label className="flex items-center gap-2 text-sm text-ink">
           <input type="checkbox" checked={missingOnly} onChange={(e) => setMissingOnly(e.target.checked)} />
           Missing information only
@@ -308,8 +448,8 @@ export function ImportsStatusList() {
           <label className="text-xs text-muted">ETD from</label>
           <input
             type="date"
-            value={filters.etdFrom ?? ''}
-            onChange={(e) => setFilters((f) => ({ ...f, etdFrom: e.target.value || undefined }))}
+            value={etdFrom}
+            onChange={(e) => setEtdFrom(e.target.value)}
             className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink"
           />
         </div>
@@ -317,23 +457,56 @@ export function ImportsStatusList() {
           <label className="text-xs text-muted">ETD to</label>
           <input
             type="date"
-            value={filters.etdTo ?? ''}
-            onChange={(e) => setFilters((f) => ({ ...f, etdTo: e.target.value || undefined }))}
+            value={etdTo}
+            onChange={(e) => setEtdTo(e.target.value)}
             className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink"
           />
         </div>
       </FilterBar>
 
+      {optionsError && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>Filter options couldn’t be loaded — {optionsError}</span>
+          <button type="button" onClick={loadOptions} className="underline">Retry</button>
+        </div>
+      )}
+
+      {!optionsError && requisitionOptions.length === 0 && (
+        <p className="rounded-lg bg-[var(--color-watch-bg)] px-3 py-2 text-sm text-[var(--color-watch)]">
+          No consignment records a requisition type yet — the imported sheets have no such column, so the
+          Requisition filter only matches records entered through the ERP.
+        </p>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{error}</span>
+          <button type="button" onClick={() => void load()} className="underline">Retry</button>
+        </div>
+      )}
+
+      {/* Rows are server-paged, so the table's own footer drives the fetch
+          rather than slicing again — one pager, not two. */}
       <SortableTable
         columns={columns}
         rows={rows}
         flagged={(r) => r.missing.length > 0}
-        onRowClick={(r) => navigate(`/imports-status/${r.systemId}`)}
+        onRowClick={(r) => navigate(`/imports-status/${r.id}`)}
         initialSort={{ key: 'systemId', dir: 'desc' }}
+        serverPagination={{
+          page,
+          pageCount: totalPages,
+          totalRows: total,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
+          loading,
+        }}
         empty={
           <div>
-            <div className="mb-1 font-semibold text-ink">No consignments match these filters</div>
-            Clear a filter or widen the search to see results.
+            <div className="mb-1 font-semibold text-ink">
+              {loading ? 'Loading consignments…' : 'No consignments match these filters'}
+            </div>
+            {!loading && 'Clear a filter or widen the search to see results.'}
           </div>
         }
       />

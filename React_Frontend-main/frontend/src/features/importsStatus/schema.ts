@@ -34,9 +34,15 @@ export const CONSIGNMENT_STATUSES = [
   'Under Custom Clearance',
   'Under Examination',
   'Under Assessment',
+  /** Unstuffing the container, after assessment and before the goods move on. */
+  'Under De-Stuffing',
   'Arrived at QFL',
   'On Road',
   'Arrived at Works',
+  /** Terminal, but NOT an arrival — the import never completes. Last because
+   *  it is an exit, not a later stage. Unlike 'Arrived at Works' it does not
+   *  lock the record. */
+  'Order Cancelled',
 ] as const
 export type ConsignmentStatus = (typeof CONSIGNMENT_STATUSES)[number]
 
@@ -55,14 +61,25 @@ export const INCOTERMS = ['FOB', 'CIF', 'CFR', 'EXW', 'DAP'] as const
 export const PAYMENT_INSTRUMENTS = ['LC', 'Adv', 'DP', 'CAD'] as const
 export type PaymentInstrument = (typeof PAYMENT_INSTRUMENTS)[number]
 
-export const SHIPMENT_MODES = ['Sea', 'Air'] as const
+// Matches app.enums.ModeOfShipment exactly (backend Optional[ModeOfShipment] —
+// values must be one of these four verbatim or a save 422s). Widened from a
+// generic 'Sea'/'Air' pair, which the backend has no equivalent for.
+export const SHIPMENT_MODES = ['Sea freight FCL', 'Sea freight LCL', 'Air freight', 'Land/courier'] as const
 export const PAYMENT_STATUSES = ['Paid', 'Unpaid'] as const
 
+// Matches app.enums.RateSource exactly — where the booked exchange rate came
+// from, needed to reconcile against a bank advice later. Was free text; a
+// fixed vocabulary here so a save can't 422 on an untyped value.
+export const RATE_SOURCES = ['Bank LC opening rate', 'Bank TT rate', 'SBP inter bank', 'Contract/agreed rate'] as const
+
+// Matches app.enums.UnitOfMeasurement exactly. 'Ton (MT)' -> 'Ton', the two
+// 'Sq./Cu. Metre' casings -> 'Sq./Cu. metre', and 'Millilitre' dropped — the
+// backend enum has no equivalent for it.
 export const UNITS_OF_MEASURE = [
   'Pcs', 'Set', 'Pair', 'Roll', 'Box', 'Carton', 'Drum', 'Pallet',
-  'Kg', 'Gram', 'Ton (MT)', 'Lb',
+  'Kg', 'Gram', 'Ton', 'Lb',
   'Metre', 'Centimetre', 'Foot', 'Inch',
-  'Sq. Metre', 'Cu. Metre', 'Litre', 'Millilitre',
+  'Sq. metre', 'Cu. metre', 'Litre',
 ] as const
 
 /** Which extra fields each requisition type reveals. Defined once — the form,
@@ -98,6 +115,12 @@ const optionalText = z.string().optional().or(z.literal(''))
  */
 export const consignmentItemSchema = z.object({
   id: z.string(),
+  /** The real backend row id, once this line has been saved — undefined for a
+   *  line the user just added in the wizard and never yet round-tripped.
+   *  draftToPayload (lib/api/importsMap.ts) sends this as the line's `id` so
+   *  the update route's diff engine treats it as "still exists" rather than
+   *  as a new insert; omitted entirely for a genuinely new line. */
+  backendId: z.number().optional(),
 
   // requisition (per item)
   requisitionType: z.enum(REQUISITION_TYPES).optional(),
@@ -250,6 +273,8 @@ export const shippingStepSchema = z.object({
  */
 export const paymentSchema = z.object({
   id: z.string(),
+  /** The real backend row id, once saved — see consignmentItemSchema.backendId. */
+  backendId: z.number().optional(),
   date: optionalDate,
   value: optionalNumber,
   exchangeRate: optionalNumber,
@@ -402,6 +427,7 @@ export const consignmentSubmitSchema = consignmentDraftSchema.superRefine((v, ct
 
 export const emptyItem = (id: string): ConsignmentItem => ({
   id,
+  backendId: undefined,
   requisitionType: undefined,
   referenceNo: '', jobNo: '', moNo: '', othersDescription: '',
   itemId: '', itemName: '', itemCode: '', specification: '',
@@ -411,7 +437,7 @@ export const emptyItem = (id: string): ConsignmentItem => ({
 })
 
 export const emptyPayment = (id: string): Payment => ({
-  id, date: '', value: undefined, exchangeRate: undefined,
+  id, backendId: undefined, date: '', value: undefined, exchangeRate: undefined,
   status: 'Unpaid', reference: '', bankCharges: undefined,
 })
 

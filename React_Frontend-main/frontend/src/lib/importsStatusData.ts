@@ -1,3 +1,4 @@
+import { STAGE_GROUPS, stageOf, type StageKey } from './importsStages'
 import {
   CONSIGNMENT_STATUSES,
   CLOSED_STATUS,
@@ -259,19 +260,11 @@ export const freeDaysLeft = (r: ConsignmentRow) => {
   return at === null || r.freeDays === null ? null : r.freeDays - at
 }
 
-/* -- stage grouping: 11 statuses roll into 6 scannable stages -------- */
-export const STAGE_GROUPS = [
-  { key: 'Pre-shipment', statuses: ['TT/LC in Process'] },
-  { key: 'Production', statuses: ['Under Production', 'Ready Awaiting Sailing'] },
-  { key: 'In transit', statuses: ['In Transit'] },
-  { key: 'Clearance', statuses: ['Arrived at Port', 'Under Custom Clearance', 'Under Examination', 'Under Assessment'] },
-  { key: 'Inbound', statuses: ['Arrived at QFL', 'On Road'] },
-  { key: 'Closed', statuses: ['Arrived at Works'] },
-] as const
-export type StageKey = (typeof STAGE_GROUPS)[number]['key'] | 'all'
-
-export const stageOf = (status: string): StageKey =>
-  STAGE_GROUPS.find((g) => (g.statuses as readonly string[]).includes(status))?.key ?? 'Pre-shipment'
+/* -- stage grouping: 11 statuses roll into 6 scannable stages --------
+   Moved to lib/importsStages.ts (pure logic, no mock data) so the live list
+   screen can use it without pulling this module in. Re-exported here for the
+   screens still reading mock rows. */
+export { STAGE_GROUPS, stageOf, type StageKey }
 
 export function stageCounts(includeClosed: boolean): { key: StageKey; count: number }[] {
   const openTotal = ALL.filter((r) => includeClosed || r.status !== CLOSED_STATUS).length

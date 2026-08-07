@@ -39,6 +39,37 @@ def _is_admin(token):
         db.close()
 
 
+#-------------------------------------------
+# EVERY USER'S ACTIONS, LIVE (ADMIN ONLY)
+#
+# The same feed, not narrowed to one person —
+# what the User Management screen watches so an
+# admin sees activity as it happens, whoever
+# caused it. Declared BEFORE the /ws/{user_id}
+# route so the literal path is matched first.
+#-------------------------------------------
+
+@router.websocket("/ws")
+async def live_logs_all(websocket: WebSocket):
+    token = websocket.cookies.get("access_token")
+
+    if not _is_admin(token):
+        await websocket.close(code=1008)
+        return
+
+    await manager.connect_global(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+
+    except WebSocketDisconnect:
+        manager.disconnect_global(websocket)
+
+    except Exception:
+        manager.disconnect_global(websocket)
+
+
 @router.websocket("/ws/{user_id}")
 async def live_logs(websocket: WebSocket, user_id: int):
     token = websocket.cookies.get("access_token")

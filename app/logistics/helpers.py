@@ -174,23 +174,36 @@ def fetch_consignments_page(db, include_deleted, status, order_type,
 # FETCH ALL CHANGE HISTORY OF AN ORDER
 #----------------------------------------
 
-def fetch_all_consignment_history(db, include_reverted, consignment_id):
-    query = select(LogisticsChangeHistory)
+#----------------------------------------
+# ONE PAGE OF CHANGE HISTORY, NEWEST FIRST
+#
+# Mirrors fetch_consignments_page's shape: filter conditions built once and
+# reused for both the count and the page itself, so they can never disagree.
+# id.desc() is a secondary key after created_at so paging stays deterministic
+# even when two rows share a timestamp.
+#----------------------------------------
+
+def fetch_all_consignment_history(db, include_reverted, consignment_id, page=1, page_size=20):
+    conditions = [LogisticsChangeHistory.consignment_id == consignment_id]
 
     if not include_reverted:
-        query = query.where(
-            LogisticsChangeHistory.is_reverted == False
-        )
+        conditions.append(LogisticsChangeHistory.is_reverted == False)
 
-    query = query.where(
-        LogisticsChangeHistory.consignment_id == consignment_id
-    ).options(
+    total = db.execute(
+        select(func.count(LogisticsChangeHistory.id)).where(*conditions)
+    ).scalar()
+
+    query = select(LogisticsChangeHistory).where(*conditions).options(
         joinedload(LogisticsChangeHistory.consignment),
         joinedload(LogisticsChangeHistory.changed_by),
         joinedload(LogisticsChangeHistory.reverted_by)
-    ).order_by(LogisticsChangeHistory.created_at.desc())
+    ).order_by(
+        LogisticsChangeHistory.created_at.desc(), LogisticsChangeHistory.id.desc()
+    ).limit(page_size).offset((page - 1) * page_size)
 
-    return db.execute(query).scalars().all()
+    rows = db.execute(query).scalars().all()
+
+    return rows, total
 
 
 #----------------------------------------

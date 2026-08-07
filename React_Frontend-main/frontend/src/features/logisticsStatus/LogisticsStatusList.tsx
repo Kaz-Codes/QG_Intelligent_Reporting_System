@@ -299,6 +299,13 @@ export function LogisticsStatusList() {
                             Edit
                           </button>
                         )}
+                        <button
+                          onClick={() => navigate(`/logistics-status/${o.systemId}/history`)}
+                          title="View change history"
+                          className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+                        >
+                          History
+                        </button>
                       </div>
                     </td>
                   </tr>

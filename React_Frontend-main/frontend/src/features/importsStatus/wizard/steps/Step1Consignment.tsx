@@ -5,8 +5,8 @@ import {
   emptyItem, itemPendingFields, requiredVsEtaDelay,
 } from '../../schema'
 import { Field, Input, Select } from './fields'
+import { useMasters } from '../MastersContext'
 
-const BRANCHES = ['Qadcast', 'Qadri Brothers Unit 2', 'Qadri Engineering', 'Qadbros Engineering']
 const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED']
 const ORIGINS = ['China', 'Germany', 'Italy', 'Japan', 'Korea, Republic of', 'Sweden', 'Türkiye', 'United States']
 
@@ -32,6 +32,7 @@ export function Step1Consignment() {
   const { fields, append, remove } = useFieldArray({ control, name: 'items' })
   const items = watch('items')
   const requiredDelay = requiredVsEtaDelay({ requiredDate: watch('requiredDate'), eta: watch('eta') })
+  const { branches, suppliers, loading: mastersLoading } = useMasters()
 
   return (
     <div className="space-y-5">
@@ -41,19 +42,23 @@ export function Step1Consignment() {
           Consignment details — applies to the whole shipment
         </h3>
         <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Branch" htmlFor="branch" required error={errors.branch?.message}>
-            <Select id="branch" {...register('branch')}>
+          <Field
+            label="Branch" htmlFor="branch" required error={errors.branch?.message}
+            hint={mastersLoading ? 'Loading branches…' : undefined}
+          >
+            <Select id="branch" {...register('branch')} disabled={mastersLoading}>
               <option value="">Select…</option>
-              {BRANCHES.map((b) => <option key={b}>{b}</option>)}
+              {branches.map((b) => <option key={b.id}>{b.name}</option>)}
             </Select>
           </Field>
 
-          <Field label="Supplier" htmlFor="supplier" required error={errors.supplier?.message} hint="From supplier master">
+          <Field
+            label="Supplier" htmlFor="supplier" required error={errors.supplier?.message}
+            hint={mastersLoading ? 'Loading suppliers…' : 'From supplier master — a name that doesn’t match yet is kept, but won’t link until it’s added there'}
+          >
             <Input id="supplier" list="dl-suppliers" {...register('supplier')} placeholder="Start typing…" autoComplete="off" />
             <datalist id="dl-suppliers">
-              <option>Wuxi Kaiyuan Machinery Co., Ltd</option>
-              <option>SKF Sverige AB</option>
-              <option>Siemens AG</option>
+              {suppliers.map((s) => <option key={s.id} value={s.name} />)}
             </datalist>
           </Field>
 

@@ -66,6 +66,14 @@ def build_system_remarks(consignment):
 # THAT CAN BE SENT IN RESPONSE
 #---------------------------------------
 
+def _submission_errors(consignment):
+    # Deferred import: app.imports.helpers imports this module for
+    # serialize_many, so importing it at module level would be a cycle.
+    from app.imports.helpers import submission_errors
+
+    return submission_errors(consignment)
+
+
 def serialize_consignment(consignment, db):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
@@ -88,6 +96,7 @@ def serialize_consignment(consignment, db):
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,
 
         "origin" : consignment.origin,
+        "po_date" : consignment.po_date,
         "requisition_date" : consignment.requisition_date,
         "required_date" : consignment.required_date,
         "currency" : consignment.currency,
@@ -116,6 +125,14 @@ def serialize_consignment(consignment, db):
         "gate_out_date" : consignment.gate_out_date,
         "demurrage_or_detention_paid" : consignment.demurrage_or_detention_paid,
         "container_detention" : consignment.container_detention,
+
+        # The named gaps that stop this consignment being submitted — the same
+        # rule set /submit enforces, so the list's "N fields missing" tag and a
+        # failed submit can never disagree. Imported (Excel) rows are all still
+        # 'draft' and legitimately incomplete, so this is usually non-empty for
+        # them. Imported inside the function: helpers imports this module, so a
+        # module-level import would be circular.
+        "missing_fields" : _submission_errors(consignment),
 
         "record_state" : consignment.record_state,
         "is_locked" : consignment.is_locked,

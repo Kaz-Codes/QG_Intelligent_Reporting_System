@@ -155,6 +155,10 @@ export function MultiSelectFilter({ label, options, value, onChange }: Props) {
             pos.openUp ? 'origin-bottom' : 'origin-top',
           )}
         >
+          {options.length === 0 && (
+            // An empty menu with no explanation reads as a broken dropdown.
+            <p className="px-3 py-2 text-sm text-muted">No values available</p>
+          )}
           {options.map((option) => (
             <label
               key={option}

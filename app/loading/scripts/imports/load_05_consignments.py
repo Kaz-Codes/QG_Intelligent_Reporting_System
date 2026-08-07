@@ -24,10 +24,13 @@ falls to load time.
 
 from pathlib import Path
 
+from app.enums import Status
 from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_status, clean_int,
     clean_number, clean_date, bulk_insert,
 )
+
+STATUS_VALUES = [s.value for s in Status]
 
 CURRENT_DIR = Path(__file__).resolve().parents[2]
 DIRECTORY = CURRENT_DIR / "data" / "imports"
@@ -39,7 +42,42 @@ FILES = list_excel_files(DIRECTORY)
 
 DEFAULT_STATUS = "TT/LC in Process"
 
+# The sheet's status vocabulary mapped onto the canonical Status enum.
+#
+# Only spellings of a stage that already exists are mapped here; a sheet value
+# that is a REAL stage with no equivalent (Under De-Stuffing, Order Cancelled)
+# was added to the enum instead, so it passes through untouched. Anything still
+# unrecognised falls back to DEFAULT_STATUS rather than being stored verbatim —
+# that is what previously let values the rest of the system cannot handle into
+# the status column.
+STATUS_MAP = {
+    "lc in process": "TT/LC in Process",
+    "t/t in process": "TT/LC in Process",
+    "tt in process": "TT/LC in Process",
+    # Costing precedes the instrument being opened, so it sits at the same
+    # pre-shipment stage rather than getting one of its own.
+    "costing in process": "TT/LC in Process",
+}
+
 CURRENCY_MAP = {"$": "USD", "US$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY", "RMB": "CNY"}
+
+
+def map_status(value):
+    """Sheet status -> a canonical Status value, never anything else."""
+    s = clean_status(value)
+    if not s:
+        return DEFAULT_STATUS
+
+    key = s.strip().lower()
+    if key in STATUS_MAP:
+        return STATUS_MAP[key]
+
+    # Already canonical (case-insensitively)? Keep the canonical spelling.
+    for canonical in STATUS_VALUES:
+        if key == canonical.lower():
+            return canonical
+
+    return DEFAULT_STATUS
 
 CONSIGNMENT_COLUMNS = [
     "id", "branch_id", "supplier_id", "clearing_agent_id",
@@ -182,7 +220,7 @@ def build_rows(df, port_map, item_map, created_by_id):
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Ret Dt.", clean_date),
             _first(rows, "Exchange Rate", clean_number),
-            _first(rows, "Current Status", clean_status) or DEFAULT_STATUS,
+            map_status(_first(rows, "Current Status", clean_status)),
             _first(rows, "Remarks", clean_text),
             _first(rows, "GD No", clean_text),
             _first(rows, "GD File", clean_date),

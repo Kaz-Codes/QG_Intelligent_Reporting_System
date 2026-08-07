@@ -6,6 +6,7 @@ from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
 
 from app.enums import Status
+from app.masters.models import Branch, Supplier
 from sqlalchemy import select
 from datetime import datetime, timezone, date
 from sqlalchemy.inspection import inspect
@@ -28,9 +29,12 @@ STAGE_GROUPS = {
         Status.UNDER_CUSTOM_CLEARANCE.value,
         Status.UNDER_EXAMINATION.value,
         Status.UNDER_ASSESSMENT.value,
+        Status.UNDER_DE_STUFFING.value,
     ],
     "Inbound": [Status.ARRIVED_AT_QFL.value, Status.ON_ROAD.value],
-    "Closed": [Status.ARRIVED_AT_WORKS.value],
+    # Both terminal states live here so the strip can reach a cancelled order.
+    # Only ARRIVED_AT_WORKS locks a record, though — see is_closed below.
+    "Closed": [Status.ARRIVED_AT_WORKS.value, Status.ORDER_CANCELLED.value],
 }
 
 CLOSED_STATUS_VALUE = Status.ARRIVED_AT_WORKS.value
@@ -212,15 +216,37 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     if etd_to:
         conditions.append(Consignment.etd <= etd_to)
 
+    # Free-text search across everything the list screen shows as identifying:
+    # the id, the instrument/GD numbers, origin, the two master names, and the
+    # item lines (name / code / reference). Matching only the header fields
+    # made searching for a supplier or an item — the two most obvious things to
+    # type — silently return nothing.
     if q:
-        pattern = "%" + q.strip() + "%"
-        conditions.append(
-            or_(
-                Consignment.origin.ilike(pattern),
-                Consignment.gd_number.ilike(pattern),
-                Consignment.instrument_number.ilike(pattern)
-            )
-        )
+        needle = q.strip()
+        pattern = "%" + needle + "%"
+
+        searches = [
+            Consignment.origin.ilike(pattern),
+            Consignment.gd_number.ilike(pattern),
+            Consignment.instrument_number.ilike(pattern),
+            Consignment.works.ilike(pattern),
+            Consignment.supplier.has(Supplier.name.ilike(pattern)),
+            Consignment.branch.has(Branch.name.ilike(pattern)),
+            Consignment.items.any(
+                (ConsignmentItem.is_deleted == False) &  # noqa: E712
+                or_(
+                    ConsignmentItem.item_name.ilike(pattern),
+                    ConsignmentItem.item_code.ilike(pattern),
+                    ConsignmentItem.reference_number.ilike(pattern),
+                )
+            ),
+        ]
+
+        # Typing a bare number is looking for that consignment id.
+        if needle.isdigit():
+            searches.append(Consignment.id == int(needle))
+
+        conditions.append(or_(*searches))
 
     # how many match, for the page count
     total = db.execute(
@@ -251,29 +277,36 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     return rows, total
 
 
-#----------------------------------------------
-# FETCH ALL CONSIGNMENTS HISTORY OF A SPECIFIC
-# CONSIGNMENT FROM DB
-#----------------------------------------------
+#----------------------------------------
+# ONE PAGE OF CHANGE HISTORY, NEWEST FIRST
+#
+# Mirrors fetch_consignments_page's shape: filter conditions built once and
+# reused for both the count and the page itself, so they can never disagree.
+# Ordered by id (not just created_at) so paging is deterministic even when two
+# rows share a timestamp — created_at alone was not a stable sort key.
+#----------------------------------------
 
-def fetch_all_consignment_history(db, include_reverted, consignment_id):
-    query = select(ConsignmentChangeHistory)
+def fetch_all_consignment_history(db, include_reverted, consignment_id, page=1, page_size=20):
+    conditions = [ConsignmentChangeHistory.consignment_id == consignment_id]
 
     if not include_reverted:
-        query = query.where(
-            ConsignmentChangeHistory.is_reverted == False
-        )
-        
-    query = query.where(
-        ConsignmentChangeHistory.consignment_id == consignment_id
-    ).options(
+        conditions.append(ConsignmentChangeHistory.is_reverted == False)
+
+    total = db.execute(
+        select(func.count(ConsignmentChangeHistory.id)).where(*conditions)
+    ).scalar()
+
+    query = select(ConsignmentChangeHistory).where(*conditions).options(
         joinedload(ConsignmentChangeHistory.consignment),
         joinedload(ConsignmentChangeHistory.changed_by),
         joinedload(ConsignmentChangeHistory.reverted_by)
-    )
-    
+    ).order_by(
+        ConsignmentChangeHistory.id.desc()
+    ).limit(page_size).offset((page - 1) * page_size)
 
-    return db.execute(query).scalars().all()
+    rows = db.execute(query).scalars().all()
+
+    return rows, total
 
 def fetch_latest_consignment_history(db, consignment_id):
     query = select(ConsignmentChangeHistory).where(
