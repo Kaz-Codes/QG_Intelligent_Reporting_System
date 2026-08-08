@@ -7,11 +7,13 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Numeric,
+    String,
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.enums import ItemRank
 
 if TYPE_CHECKING:
     from app.masters.models import Item
@@ -64,6 +66,21 @@ class Stock(Base):
 
     reorder_level: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(18, 2)
+    )
+
+    # ABC rank for this item AT THIS BRANCH. A/B come from the "AB Items"
+    # workbook, which ranks per branch — one item can be an A line at one
+    # branch and a B line at another, so this cannot live on the `items`
+    # master (no branch there). Anything the workbook does not list is a C
+    # line, which is why the loader defaults it rather than leaving it null.
+    # server_default too: the loaders insert with raw psycopg2, where a
+    # Python-side default never runs.
+    rank: Mapped[str] = mapped_column(
+        String(1),
+        default=ItemRank.C.value,
+        server_default=ItemRank.C.value,
+        nullable=False,
+        index=True
     )
 
     item: Mapped[Optional["Item"]] = relationship(

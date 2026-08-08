@@ -326,3 +326,22 @@ class VehicleTrackingStatus(str, Enum):
     LOADING = "Loading"
     ON_ROAD = "On road"
     DELIVERED = "Delivered"
+
+
+#--------------------------------
+# STOCK: ABC RANK
+#
+# The ABC classification of a stocked item. A and B come from the "AB Items"
+# workbook, which ranks per BRANCH — the same item can be an A line at one
+# branch and a B line at another, because the ranking is driven by that
+# branch's own stock and issuance. That is why the rank lives on `stock`
+# (item + branch) and not on the `items` master, which has no branch.
+#
+# C is the default rather than a value anyone records: the workbook only
+# lists A and B items, so anything it does not mention is a C line.
+#--------------------------------
+
+class ItemRank(str, Enum):
+    A = "A"
+    B = "B"
+    C = "C"

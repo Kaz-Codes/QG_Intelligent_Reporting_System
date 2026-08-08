@@ -7,18 +7,18 @@ import type { PageKey } from '@/theme/tokens'
 import { MODULE_ACCENTS, BRAND, VIOLET, GOLD } from '@/theme/tokens'
 import { useTheme } from '@/theme/ThemeContext'
 import { cn } from '@/lib/utils'
-import dashboardLight from '@/assets/dashboard-hero-light.webp'
-import dashboardDark from '@/assets/dashboard-hero-dark.webp'
-import logisticsLight from '@/assets/logistics-hero-light.webp'
-import logisticsDark from '@/assets/logistics-hero-dark.webp'
-import importsLight from '@/assets/imports-hero-light.webp'
-import importsDark from '@/assets/imports-hero-dark.webp'
-import purchasesLight from '@/assets/purchases-hero-light.webp'
-import purchasesDark from '@/assets/purchases-hero-dark.webp'
-import inventoryLight from '@/assets/inventory-hero-light.webp'
-import inventoryDark from '@/assets/inventory-hero-dark.webp'
-import loginLight from '@/assets/login-hero-light.webp'
-import loginDark from '@/assets/login-hero-dark.webp'
+import dashboardLight from '@/assets/dashboard-hero-light.png'
+import dashboardDark from '@/assets/dashboard-hero-dark.png'
+import logisticsLight from '@/assets/logistics-hero-light.png'
+import logisticsDark from '@/assets/logistics-hero-dark.png'
+import importsLight from '@/assets/imports-hero-light.png'
+import importsDark from '@/assets/imports-hero-dark.png'
+import purchasesLight from '@/assets/purchases-hero-light.png'
+import purchasesDark from '@/assets/purchases-hero-dark.png'
+import inventoryLight from '@/assets/inventory-hero-light.png'
+import inventoryDark from '@/assets/inventory-hero-dark.png'
+import loginLight from '@/assets/login-hero-light.png'
+import loginDark from '@/assets/login-hero-dark.png'
 
 /**
  * Ambient, subject-related backdrop: a slow, soft "smoke" of blurred,
@@ -73,16 +73,6 @@ interface ModulePhotoSet {
 // behind the content — the numbers are the thing being read, the photo is
 // only setting the mood. Login is deliberately untouched: it has no data on
 // top of it, so its photo can stay at full strength.
-//
-// This used to be pinned at 0.82 to keep secondary text legible: with the old
-// translucent Card (bg-surface/40) and the old lighter `muted` (#5A6478), a
-// 0.74 wash measured 4.24:1 over the darkest parts of these photos, i.e. below
-// WCAG AA. The enterprise restyle removed that constraint from both ends —
-// Card is now /78 · /82 and `muted` darkened to #475569 — so the photo barely
-// reaches the text at all. Re-measured against the real images, the worst case
-// across all five modules is now 6.23:1 in light and 7.13:1 in dark even at the
-// LIGHTEST scrim in use, so these values are free to be a design choice again.
-// Still worth re-measuring if Card ever goes translucent again.
 const DENSE_SCRIM = { light: 0.80, dark: 0.76 }
 const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
 
@@ -91,10 +81,6 @@ const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
  * module the same "photo behind glass cards" look Dashboard and
  * Logistics have. */
 const MODULE_PHOTOS: Partial<Record<PageKey | 'login', ModulePhotoSet>> = {
-  // Dashboard keeps a lighter wash than the rest so its photo stays visible
-  // behind the overview. That was a contrast problem at the old 0.46 (secondary
-  // text measured 3.04:1); at 0.58, against the restyle's opaque Card and
-  // darker `muted`, it measures 6.35:1 — comfortably legible.
   dashboard: { light: dashboardLight, dark: dashboardDark, scrim: { light: 0.58, dark: 0.62 }, dull: true },
   logistics: { light: logisticsLight, dark: logisticsDark, scrim: DENSE_SCRIM, dull: true },
   imports: { light: importsLight, dark: importsDark, scrim: DENSE_SCRIM, dull: true },

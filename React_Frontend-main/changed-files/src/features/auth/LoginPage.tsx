@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ThemedBackground } from '@/components/ThemedBackground'
-import logo from '@/assets/qadri_logo_transparent.webp'
+import logo from '@/assets/qadri_logo_transparent.png'
 
 // Each capability gets its own accent (drawn from the app's existing
 // module-accent palette) instead of one uniform color — reads as a set of

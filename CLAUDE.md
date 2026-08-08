@@ -348,6 +348,18 @@ never lands in a status column. `stores_schemas.py` defines the flat stores
 models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
 & inventory dashboards read.
 
+- **`Stock.rank` — the ABC classification, per item PER BRANCH.** `A`/`B` come
+  from the `ab_items` workbook's **`Main`** sheet, matched on
+  `(Item Code, Branch Name)`; every stock line the sheet doesn't list defaults to
+  **`C`** (`ItemRank` in `enums.py`, `server_default 'C'` since the loaders insert
+  raw). It lives on `Stock` and **not** on the `Item` master deliberately: the
+  ranking is driven by each branch's own stock and issuance, so one item is
+  legitimately an A line at one branch and a B line at another — 12 codes in the
+  current sheet do exactly that, and `items.item_code` is unique, so the master
+  could only ever hold one of the two. The sheet's other ranked tabs
+  (`Re-Order`, `Critical`) are filtered views of `Main`, so only `Main` is read.
+  An AB entry whose branch has no stock row is simply not applied (66 currently).
+
 - **Each loader reads _every_ workbook in its folder** (`etl_common.list_excel_files`
   + `read_and_concat`), skipping `~$` lock files — dropping another period's file
   into the folder loads it too, no code change. Multiple workbooks in one folder
