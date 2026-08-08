@@ -17,6 +17,9 @@ import {
   type ConsignmentQuery,
 } from '@/lib/api/imports'
 import {
+  sendToLogistics, sendToTrucking, forwardStateOf, getForwardedConsignments, type ForwardRecord,
+} from '@/lib/importsStatusData'
+import {
   apiToRow, slippageDays, requiredDelayDays, freeDaysLeft,
   type ImportsListRow,
 } from '@/lib/api/importsMap'
@@ -49,6 +52,8 @@ export function ImportsStatusList() {
 
   // --- filter state (drives the query) ---
   const [search, setSearch] = useState('')
+  const [view, setView] = useState<'consignments' | 'forwarded'>('consignments')
+  const [, forceForwardTick] = useState(0)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [stage, setStage] = useState<StageKey>('all')
   const [statusFilter, setStatusFilter] = useState<string[]>([])
@@ -383,7 +388,7 @@ export function ImportsStatusList() {
       ),
     },
     {
-      key: 'actions', label: '', width: 180,
+      key: 'actions', label: '', width: 340,
       render: (r) => (
         <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
           <button
@@ -411,6 +416,27 @@ export function ImportsStatusList() {
               {reopeningId === r.id ? 'Reopening…' : 'Reopen'}
             </button>
           )}
+          {(r.incoterm === 'FOB') && (() => {
+            const fwd = forwardStateOf(r.systemId)
+            return (
+              <>
+                <button
+                  onClick={() => { sendToLogistics(r); forceForwardTick((t) => t + 1) }}
+                  title={fwd.logistics ? 'Already sent to Logistics — click to re-send' : 'Send to Logistics (shipping & clearing)'}
+                  className={`rounded border px-2.5 py-1 text-[11px] ${fwd.logistics ? 'border-[var(--color-healthy)] text-[var(--color-healthy)]' : 'border-line hover:border-muted'}`}
+                >
+                  {fwd.logistics ? '✓ Logistics' : 'Send → Logistics'}
+                </button>
+                <button
+                  onClick={() => { sendToTrucking(r); forceForwardTick((t) => t + 1) }}
+                  title={fwd.trucking ? 'Already sent to Trucking — click to re-send' : 'Send to Trucking (inland movement)'}
+                  className={`rounded border px-2.5 py-1 text-[11px] ${fwd.trucking ? 'border-[var(--color-healthy)] text-[var(--color-healthy)]' : 'border-line hover:border-muted'}`}
+                >
+                  {fwd.trucking ? '✓ Trucking' : 'Send → Trucking'}
+                </button>
+              </>
+            )
+          })()}
           <button
             onClick={() => navigate(`/imports-status/${r.id}/history`)}
             title="View change history"
@@ -441,6 +467,19 @@ export function ImportsStatusList() {
         </div>
       </div>
 
+      <SegmentedControl
+        options={[
+          { value: 'consignments' as const, label: 'Consignments' },
+          { value: 'forwarded' as const, label: `Forwarded (${getForwardedConsignments().length})` },
+        ]}
+        value={view}
+        onChange={setView}
+      />
+
+      {view === 'forwarded' ? (
+        <ForwardedPanel onNavigate={navigate} />
+      ) : (
+      <>
       {/* The stage strip filters server-side. Counts aren't shown per stage:
           they'd need a separate aggregate call, and a wrong count is worse
           than none. */}
@@ -558,6 +597,65 @@ export function ImportsStatusList() {
           </div>
         }
       />
+      </>
+      )}
+    </div>
+  )
+}
+
+/** Read-only list of consignments explicitly forwarded to Logistics/Trucking.
+ *  Mock store today (see importsStatusData FORWARDS); swaps to an API view
+ *  when the backend exposes forwarding. */
+function ForwardedPanel({ onNavigate }: { onNavigate: (to: string) => void }) {
+  const rows = getForwardedConsignments()
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-line px-3 py-8 text-center text-sm text-muted">
+        Nothing forwarded yet. Use "Send → Logistics" or "Send → Trucking" on a FOB consignment to hand it over.
+      </div>
+    )
+  }
+  return (
+    <div className="max-h-[65vh] overflow-auto rounded-xl border border-line bg-surface [scrollbar-width:auto]">
+      <table className="w-full min-w-[820px] text-sm">
+        <thead className="sticky top-0 z-10 bg-canvas-alt text-xs text-muted shadow-[0_1px_0_var(--color-line)]">
+          <tr>
+            <th className="px-3 py-2 text-left">Consignment</th>
+            <th className="px-3 py-2 text-left">Supplier</th>
+            <th className="px-3 py-2 text-left">Items</th>
+            <th className="px-3 py-2 text-left">Sent to Logistics</th>
+            <th className="px-3 py-2 text-left">Sent to Trucking</th>
+            <th className="px-3 py-2 text-left"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r: ForwardRecord) => (
+            <tr key={r.systemId} className="border-t border-line hover:bg-canvas-alt">
+              <td className="px-3 py-2 font-semibold tabular-nums">{r.systemId}</td>
+              <td className="px-3 py-2">{r.supplier}<div className="text-[11px] text-muted">{r.origin}</div></td>
+              <td className="px-3 py-2">{r.itemSummary || '—'}</td>
+              <td className="px-3 py-2 text-[13px]">
+                {r.sentToLogisticsAt
+                  ? <span className="text-[var(--color-healthy)]">{new Date(r.sentToLogisticsAt).toLocaleDateString()}</span>
+                  : <span className="text-muted">—</span>}
+              </td>
+              <td className="px-3 py-2 text-[13px]">
+                {r.sentToTruckingAt
+                  ? <span className="text-[var(--color-healthy)]">{new Date(r.sentToTruckingAt).toLocaleDateString()}</span>
+                  : <span className="text-muted">—</span>}
+              </td>
+              <td className="px-3 py-2">
+                <button
+                  onClick={() => onNavigate(`/imports-status/${r.id}`)}
+                  className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+                >
+                  Open
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

@@ -420,6 +420,77 @@ export function getConsignmentDraft(systemId: string): ConsignmentDraft | undefi
  * (so the list/detail screens — which read `ALL`, not the draft cache — also
  * reflect the edit).
  */
+/**
+ * Cross-module hand-off store (MOCK, client-side only).
+ *
+ * Imports is on the real API now, so the consignment ROW comes from the
+ * server and we can't hang forward-flags off it. Until the backend exposes a
+ * real "forward" endpoint, the hand-off state lives here — a standalone map
+ * keyed by the consignment's systemId, holding a light snapshot so the
+ * "Forwarded" view and the Logistics/Trucking requests can render without a
+ * round-trip. When the API lands, swap these four functions for calls to it;
+ * nothing else has to change.
+ */
+export interface ForwardRecord {
+  systemId: string
+  /** The real database id — what the wired imports detail route actually
+   *  navigates on (systemId is display-only once imports is on the live API). */
+  id: number
+  supplier: string
+  origin: string
+  itemSummary: string
+  sentToLogisticsAt: string | null
+  sentToTruckingAt: string | null
+}
+
+const FORWARDS: Record<string, ForwardRecord> = {}
+
+function ensureForward(row: { id: number; systemId: string; supplier?: string; origin?: string; items?: { itemName: string }[] }): ForwardRecord {
+  let rec = FORWARDS[row.systemId]
+  if (!rec) {
+    const first = row.items?.[0]?.itemName
+    const more = (row.items?.length ?? 0) - 1
+    rec = {
+      systemId: row.systemId,
+      id: row.id,
+      supplier: row.supplier ?? '',
+      origin: row.origin ?? '',
+      itemSummary: first ? `${first}${more > 0 ? ` +${more} more` : ''}` : '',
+      sentToLogisticsAt: null,
+      sentToTruckingAt: null,
+    }
+    FORWARDS[row.systemId] = rec
+  }
+  return rec
+}
+
+/** Forward a consignment to Logistics (shipping + clearing) / Trucking
+ *  (inland movement). Pass the row so the snapshot can be captured for the
+ *  Forwarded view. Idempotent. */
+export function sendToLogistics(row: { id: number; systemId: string; supplier?: string; origin?: string; items?: { itemName: string }[] }): void {
+  ensureForward(row).sentToLogisticsAt = new Date().toISOString()
+}
+export function sendToTrucking(row: { id: number; systemId: string; supplier?: string; origin?: string; items?: { itemName: string }[] }): void {
+  ensureForward(row).sentToTruckingAt = new Date().toISOString()
+}
+export function unsendFromLogistics(systemId: string): void {
+  if (FORWARDS[systemId]) FORWARDS[systemId].sentToLogisticsAt = null
+}
+export function unsendFromTrucking(systemId: string): void {
+  if (FORWARDS[systemId]) FORWARDS[systemId].sentToTruckingAt = null
+}
+
+/** Forward flags for one consignment (for rendering the Send buttons' state). */
+export function forwardStateOf(systemId: string): { logistics: boolean; trucking: boolean } {
+  const rec = FORWARDS[systemId]
+  return { logistics: !!rec?.sentToLogisticsAt, trucking: !!rec?.sentToTruckingAt }
+}
+
+/** Everything explicitly forwarded to either downstream module. */
+export function getForwardedConsignments(): ForwardRecord[] {
+  return Object.values(FORWARDS).filter((r) => r.sentToLogisticsAt || r.sentToTruckingAt)
+}
+
 export function updateConsignment(systemId: string, data: ConsignmentDraft): void {
   DRAFTS[systemId] = data
 

@@ -11,6 +11,7 @@ import { can } from '@/lib/roleAccess'
 import { MOVEMENT_TYPES, TRUCKING_SOURCES, vehicleCount } from './schema'
 import { exportListExcel, exportListPdf, type ListColumn } from '@/lib/listExport'
 import { usePagination, Pagination, useSort, SortHeader } from '@/components/Pagination'
+import { SegmentedControl } from '@/components/SegmentedControl'
 import {
   getTruckingJobs,
   rollupLabel,
@@ -42,6 +43,7 @@ export function TruckingStatusList() {
   const [movementFilter, setMovementFilter] = useState<string[]>([])
   const [sourceFilter, setSourceFilter] = useState<string[]>([])
   const [search, setSearch] = useState('')
+  const [requestTab, setRequestTab] = useState<'all' | 'from-logistics' | 'from-import-fob' | 'from-export'>('all')
   const [takingId, setTakingId] = useState<string | null>(null)
   const [executionFrom, setExecutionFrom] = useState('')
   const [executionTo, setExecutionTo] = useState('')
@@ -64,6 +66,8 @@ export function TruckingStatusList() {
 
   // A request = a live, not-yet-taken derived row (from another module). Once
   // taken it becomes an owned job and drops out of this list.
+  const requestsByTab = (rs: TruckingRow[]) =>
+    requestTab === 'all' ? rs : rs.filter((r) => r.source === requestTab)
   const requests = useMemo(
     () =>
       all
@@ -173,14 +177,24 @@ export function TruckingStatusList() {
           <span className="rounded-full bg-[var(--color-watch-bg)] px-2 py-0.5 text-[11px] text-[var(--color-watch)]">{requests.length}</span>
           <span className="text-xs text-muted">Handed over from Logistics, Import-FOB and Export — take one to start an owned job</span>
         </div>
-        {requests.length === 0 ? (
+        <SegmentedControl
+          options={[
+            { value: 'all' as const, label: `All (${requests.length})` },
+            { value: 'from-logistics' as const, label: `Logistics (${requests.filter((r) => r.source === 'from-logistics').length})` },
+            { value: 'from-import-fob' as const, label: `Import FOB (${requests.filter((r) => r.source === 'from-import-fob').length})` },
+            { value: 'from-export' as const, label: `Export (${requests.filter((r) => r.source === 'from-export').length})` },
+          ]}
+          value={requestTab}
+          onChange={setRequestTab}
+        />
+        {requestsByTab(requests).length === 0 ? (
           <div className="rounded-xl border border-dashed border-line px-3 py-6 text-center text-sm text-muted">
             No open requests right now. New ones appear here automatically when Logistics sends an order to trucking or a FOB/export shipment is ready.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-line [scrollbar-width:auto]">
+          <div className="max-h-[55vh] overflow-auto rounded-xl border border-line [scrollbar-width:auto]">
             <table className="w-full min-w-[900px] text-left text-sm">
-              <thead className="bg-canvas-alt text-xs uppercase text-muted">
+              <thead className="sticky top-0 z-10 bg-canvas-alt text-xs uppercase text-muted shadow-[0_1px_0_var(--color-line)]">
                 <tr>
                   <th className="px-3 py-2">Request ID</th>
                   <th className="px-3 py-2">Source</th>
@@ -193,7 +207,7 @@ export function TruckingStatusList() {
                 </tr>
               </thead>
               <tbody>
-                {requests.map((r) => (
+                {requestsByTab(requests).map((r) => (
                   <tr
                     key={r.systemId}
                     className="cursor-pointer border-t border-line hover:bg-canvas-alt"
@@ -239,9 +253,9 @@ export function TruckingStatusList() {
           <h3 className="text-sm font-semibold">Trucking Jobs</h3>
           <span className="rounded-full bg-canvas-alt px-2 py-0.5 text-[11px] text-muted">{jobs.length}</span>
         </div>
-        <div className="overflow-x-auto rounded-xl border border-line [scrollbar-width:auto]">
+        <div className="max-h-[60vh] overflow-auto rounded-xl border border-line [scrollbar-width:auto]">
           <table className="w-full min-w-[1000px] text-left text-sm">
-            <thead className="bg-canvas-alt text-xs uppercase text-muted">
+            <thead className="sticky top-0 z-10 bg-canvas-alt text-xs uppercase text-muted shadow-[0_1px_0_var(--color-line)]">
               <tr>
                 <SortHeader label="ID" sortKey="systemId" sort={sort} onToggle={toggle} />
                 <SortHeader label="Source" sortKey="source" sort={sort} onToggle={toggle} />

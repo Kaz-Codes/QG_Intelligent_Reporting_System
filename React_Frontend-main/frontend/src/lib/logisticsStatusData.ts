@@ -1,6 +1,7 @@
 import {
   ORDER_TYPES,
   DEPARTMENTS,
+  SHIPMENT_MODES,
   INCOTERMS,
   PACKING_STATUSES,
   statusesFor,
@@ -223,6 +224,7 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
   const systemId = moBasedSystemId(plan.moNo, plan.batchNo) ?? `LOG-2026-${orderKey.padStart(4, '0')}`
   const orderType: OrderType = pick(ORDER_TYPES)
   const department: Department = pick(DEPARTMENTS)
+  const shipmentMode = pick([...SHIPMENT_MODES])
   const isExport = orderType === 'Export'
   const statuses = statusesFor(orderType)
   const status = pick(statuses)
@@ -248,6 +250,7 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
     systemId,
     orderType,
     department,
+    shipmentMode,
     originCountry: isExport ? pick(COUNTRIES) : '',
     originCity: isExport ? '' : CITIES[province],
     originProvince: isExport ? '' : province,
