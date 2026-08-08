@@ -77,6 +77,18 @@ export const vehicleImportRefSchema = z.object({
 export type VehicleImportRef = z.infer<typeof vehicleImportRefSchema>
 
 export const vehicleSchema = z.object({
+  /**
+   * Row identity, needed so a save can say "update THIS vehicle" rather than
+   * "replace them all". Derived from the backend id once saved
+   * (`vehicle-42`) and therefore stable across reloads; a row added in the
+   * browser carries a uuid until its first save, which lib/api/truckingMap's
+   * remapNewVehicleIds then swaps for the real one.
+   *
+   * Without it the update route's diff sees no matching ids and treats every
+   * save as delete-all + insert-all, losing the vehicles' ids and their
+   * change history.
+   */
+  id: z.string().default(() => `vehicle-${crypto.randomUUID()}`),
   vehicleNumber: z.string().optional(),
   vehicleType: z.string().optional(),
   noOfPackages: z.number().int().min(0).optional(),
@@ -96,6 +108,9 @@ export type Vehicle = z.infer<typeof vehicleSchema>
 
 export function emptyVehicle(): Vehicle {
   return {
+    // Unique per row so two brand-new vehicles never collide before the
+    // backend gives them real ids.
+    id: `vehicle-${crypto.randomUUID()}`,
     vehicleNumber: '',
     vehicleType: '',
     noOfPackages: 0,

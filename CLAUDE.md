@@ -295,8 +295,33 @@ as imports.
 stored job-level status** — the tracking status is per-vehicle, and the job
 rollup is derived.
 
-Endpoints mirror imports, plus **`GET /open-requests`** (see cross-module).
-Closes/locks when **every vehicle is "Delivered"** (`helpers.is_closed`).
+Endpoints mirror imports, plus **`GET /open-requests`** (see cross-module) and
+**`GET /filter-options`**.
+
+**Closes/locks when every active vehicle is "Delivered" AND the job is
+submitted** — the same two-part rule as imports and logistics, not the vehicles
+alone. Only `POST /{id}/submit` sets `is_locked`; the update route never closes
+a job. `serialize_consignment` returns `missing_fields`, and the history
+serializer returns `changed_at` (both imported inside the function to dodge the
+helpers cycle).
+
+**Frontend is wired**: `lib/api/trucking.ts`, `truckingMap.ts`,
+`truckingChangeHistoryMap.ts` — list, detail, wizard and change history all on
+the API. Two things specific to this module:
+
+- **No job-level status anywhere, including the UI.** Tracking is per vehicle;
+  the job-level reading is `schema.trackingRollup` over the vehicles, computed
+  at render. Nothing stores it, so it cannot drift from what it summarises.
+- **Vehicle rows carry an `id`** (`vehicleSchema.id`, derived from the backend
+  id as `vehicle-42`). It was added because without it the update diff matched
+  nothing and every save read as delete-all + insert-all, losing vehicle ids and
+  their change history. A row added in the browser holds a uuid until
+  `remapNewVehicleIds` swaps in the real id after the first save.
+- The list's two tables are **two different endpoints**: Open Requests
+  (`/open-requests` — derived, no trucking id, cannot be opened or edited) and
+  Trucking Jobs (`/`). "Take Action" opens the new-job wizard carrying
+  `?source=&source_ref=`, which the wizard seeds into the draft — that pair is
+  what later drops the request off the queue.
 
 ## cross-module linkage (`cross_module.py`)
 

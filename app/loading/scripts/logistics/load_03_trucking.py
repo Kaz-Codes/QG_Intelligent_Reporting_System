@@ -25,6 +25,7 @@ from app.loading.scripts.etl_common import (
 from app.loading.scripts.logistics.logistics_common import (
     SHEET_SHIFTING, admin_id, bump_sequence, read_logistics_sheet,
 )
+from app.loading.scripts.backfill_trucking_closed import mark_closed_jobs
 
 DEFAULT_TRACKING_STATUS = "Going to load"
 
@@ -251,6 +252,12 @@ def load_trucking(conn):
 
     bump_sequence(conn, "trucking_consignments")
     bump_sequence(conn, "trucking_vehicles")
+
+    # A job is closed when every one of its vehicles is Delivered AND it is
+    # submitted (helpers.is_closed). That depends on rows inserted a moment
+    # ago, so it can't be a value written inline with the header — it has to
+    # be a pass over both tables once they exist.
+    mark_closed_jobs(conn)
 
     inbound = sum(1 for r in consignment_rows if r[1] == "Inbound")
     outbound = sum(1 for r in consignment_rows if r[1] == "Outbound")

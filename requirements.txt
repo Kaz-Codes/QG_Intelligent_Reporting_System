@@ -1,8 +1,38 @@
-sqlalchemy
+# Backend runtime dependencies.
+#
+# Every entry is imported by app/ — verified against the actual import graph,
+# not added speculatively. Transitive packages (starlette, pydantic-core,
+# ecdsa, ...) are deliberately not listed; pip resolves them.
+
+# --- web framework ---
 fastapi
 uvicorn
-python-dotenv
-pandas
+# Imported directly by every module's schemas.py, so it is named here rather
+# than relied on as a FastAPI transitive dependency.
+pydantic
+# WebSocket support for the admin activity-log feed (app/logs) — uvicorn only
+# speaks the protocol when this is installed.
 wsproto
+
+# --- database ---
+sqlalchemy
+# The ORM driver AND the raw connection the Excel loaders use
+# (app/loading/database_connection.py). The -binary build ships wheels, so no
+# local libpq/compiler is needed.
+psycopg2-binary
+
+# --- auth ---
+# JWT for the httpOnly session cookie (app/auth). HS256 is symmetric, so the
+# plain package is enough — the [cryptography] extra is only for RSA/EC.
+python-jose
+
+# --- config ---
+python-dotenv
+
+# --- Excel: loaders in, exports out ---
+pandas
+# Writes the .xlsx exports (app/export_utils.py) and reads modern workbooks.
 openpyxl
+# Reads legacy .xls workbooks — several source files under
+# app/loading/data/items_database are that older format.
 xlrd

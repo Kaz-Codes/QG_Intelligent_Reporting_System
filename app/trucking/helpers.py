@@ -495,12 +495,21 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 # THE CLOSED LOCK
 #
 # Trucking has no stored job-level status — the job status is a rollup over
-# the vehicles. So a job is "closed" once it has vehicles and every one of
-# them is "Delivered". While closed it cannot be edited by anyone until an
-# admin reopens it.
+# the vehicles. So a job is closed once it has vehicles, every one of them is
+# "Delivered", AND it has been submitted. A draft whose trucks have all
+# arrived is not closed yet: it has not passed the full rule set in
+# submission_errors, so there is nothing to protect.
+#
+# Same two-part rule as imports ("Arrived at Works" AND submitted) and
+# logistics ("Delivered" AND submitted). As there, only the /submit route acts
+# on it — a plain draft save never closes a job, no matter what the vehicles
+# say. While closed it cannot be edited by anyone until an admin reopens it.
 #---------------------------------------
 
 def is_closed(consignment):
+    if consignment.record_state != "submitted":
+        return False
+
     active_vehicles = [v for v in consignment.vehicles if not v.is_deleted]
     if not active_vehicles:
         return False

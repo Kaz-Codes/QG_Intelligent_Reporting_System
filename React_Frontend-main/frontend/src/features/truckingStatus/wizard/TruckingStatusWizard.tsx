@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { FormProvider, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import type { z } from 'zod'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import {
@@ -14,9 +15,13 @@ import {
   truckingDraftSchema,
   type TruckingDraft,
 } from '../schema'
-import { getTruckingJob, isKnownRecord, updateTruckingJob } from '@/lib/truckingStatusData'
+import { ApiError } from '@/lib/api/client'
+import {
+  getTruckingJob, createTruckingJob, updateTruckingJob, submitTruckingJob,
+  parseSubmitErrors, type TruckingPayload,
+} from '@/lib/api/trucking'
+import { apiToDraft, draftToPayload, remapNewVehicleIds } from '@/lib/api/truckingMap'
 import { WizardStepper } from './WizardStepper'
-import { UnsavedChangesDialog } from './UnsavedChangesDialog'
 import { Step1Movement } from './steps/Step1Movement'
 import { Step2Vehicles } from './steps/Step2Vehicles'
 import { Step3Freight } from './steps/Step3Freight'
@@ -25,204 +30,328 @@ import { Step4Tracking } from './steps/Step4Tracking'
 const STEP_COMPONENTS = [Step1Movement, Step2Vehicles, Step3Freight, Step4Tracking]
 
 /**
- * Mirrors the edit-mode behavior established for importsStatus/logisticsStatus:
- *   - edit mode (:id present) loads the existing record into defaultValues;
- *   - stepper steps are freely clickable in edit mode, gated by Next-validation
- *     in new mode;
- *   - a dirty-form guard shows a 3-option dialog on navigation away.
+ * Trucking Status wizard — wired to the live backend.
  *
- * Dirtiness is tracked manually against a normalized snapshot (undefined / null
- * / '' treated as equal) rather than react-hook-form's isDirty, to avoid the
- * proxy/empty-string false-positive that bit the other two modules. Claude Code
- * should reconcile the exact snapshot helper with whatever those modules now use
- * so all three share one implementation.
+ * Same shape as the imports and logistics wizards, for the same reasons:
+ *
+ *  - NO unsaved-changes dialog. Every navigation — Back, "Save and Next", or
+ *    clicking a step — saves first (POST the first time, PUT after) and only
+ *    moves once that succeeds. Nothing is left to lose, so nothing to warn about.
+ *  - SUBMIT sits on every step, not just the last, and reports back whatever
+ *    the server says is still missing.
+ *  - A CLOSED job is read-only. Only /submit can close one (every vehicle
+ *    Delivered AND submitted), so the confirmation fires on Submit alone.
+ *
+ * TAKE ACTION. Arriving from an open request carries `?source=…&source_ref=…`.
+ * Those seed the draft so the resulting job records where it came from — which
+ * is what makes the request drop off trucking's queue (open-requests subtracts
+ * jobs matched on that pair) and what the detail page links back through. They
+ * are read ONCE, for a new job; on an existing record the values come from the
+ * server, never from the URL.
  */
 export function TruckingStatusWizard() {
   const { user } = useAuth()
   const { id, step } = useParams()
   const navigate = useNavigate()
-  const isNew = !id
+  const [searchParams] = useSearchParams()
 
-  const currentStep = isNew ? 1 : Number(step) || 1
+  const currentStep = id ? Number(step) || 1 : 1
   const stepIndex = Math.min(Math.max(currentStep, 1), WIZARD_STEPS.length) - 1
   const stepDef = WIZARD_STEPS[stepIndex]
   const StepComponent = STEP_COMPONENTS[stepIndex]
 
-  const existing = useMemo(() => (id ? getTruckingJob(id) : undefined), [id])
-  // `isNew` (no :id at all) is only true on the very first page of the /new
-  // flow — Next mints a real id and navigates to /:id/edit/2, at which point
-  // `isNew` alone would (wrongly) read as "editing an existing job" even
-  // though nothing has been submitted yet.
-  //
-  // `/new` → `/:id/edit/2` is a route CHANGE (different <Route> match, same
-  // component), so this component genuinely remounts on that transition —
-  // whatever was typed on step 1 would be silently lost unless it's
-  // persisted first (see navToStep below). `isKnownRecord` — not
-  // `!!existing` — is what decides new-vs-edit mode: a mid-creation draft
-  // gets persisted (so `existing` is truthy and step-1 data survives the
-  // remount) but must still behave like new mode — sequential
-  // Next-validation, no free stepper jumps, no dirty guard — all the way to
-  // Submit, since it isn't a real record yet (`isKnownRecord` only looks at
-  // manual jobs and live-derived rows, never the in-progress-draft cache).
-  const trulyNew = !id || !isKnownRecord(id)
+  // Seeded once per mounted instance so the source survives re-renders.
+  const [initialValues] = useState<TruckingDraft>(() => {
+    const source = searchParams.get('source')
+    const sourceRef = searchParams.get('source_ref')
+    if (!source || !sourceRef) return DRAFT_DEFAULT_VALUES
+    return {
+      ...DRAFT_DEFAULT_VALUES,
+      source: source as TruckingDraft['source'],
+      sourceRef,
+      // An inbound FOB import and an outbound logistics order move in
+      // different directions; seed the obvious one rather than making the
+      // user restate what the hand-off already implies.
+      movementType: source === 'from-import-fob' ? 'Inbound' : 'Outbound',
+    }
+  })
 
-  // takenSnapshot (and a couple of other fields) carry a zod `.default()`,
-  // which makes the resolver's INPUT type diverge from TruckingDraft (the
-  // OUTPUT type) — same divergence already fixed the same way in
-  // importsStatus/logisticsStatus's wizards; see the note there.
   const methods = useForm<z.input<typeof truckingDraftSchema>, unknown, TruckingDraft>({
     resolver: zodResolver(truckingDraftSchema),
-    defaultValues: DRAFT_DEFAULT_VALUES,
+    defaultValues: initialValues,
     mode: 'onBlur',
   })
 
-  // Load the existing record once it's resolved (edit mode). reset() re-baselines
-  // the form so the dirty snapshot below starts from the loaded values.
-  const snapshotRef = useRef<string>('')
-  useEffect(() => {
-    if (existing) {
-      methods.reset(existing)
-      snapshotRef.current = JSON.stringify(normalize(existing))
-    } else {
-      snapshotRef.current = JSON.stringify(normalize(DRAFT_DEFAULT_VALUES))
-    }
+  // --- loading the existing job (edit mode) ---
+  const [jobId, setJobId] = useState<number | null>(id ? Number(id) : null)
+  const [loadingRecord, setLoadingRecord] = useState(!!id)
+  const [notFound, setNotFound] = useState(false)
+  const [loadErrorMsg, setLoadErrorMsg] = useState<string | null>(null)
+  const [isLocked, setIsLocked] = useState(false)
+  const [recordState, setRecordState] = useState('draft')
+
+  const loadRecord = useCallback(() => {
+    if (!id) return
+    setLoadingRecord(true)
+    setNotFound(false)
+    setLoadErrorMsg(null)
+    getTruckingJob(id)
+      .then((j) => {
+        setJobId(j.id)
+        setIsLocked(j.is_locked)
+        setRecordState(j.record_state ?? 'draft')
+        methods.reset(apiToDraft(j))
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) setNotFound(true)
+        else setLoadErrorMsg(err instanceof Error ? err.message : 'Could not load this job')
+      })
+      .finally(() => setLoadingRecord(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existing])
+  }, [id])
 
-  const [pendingNav, setPendingNav] = useState<number | null>(null)
+  useEffect(() => { loadRecord() }, [loadRecord])
 
-  const allowed = trulyNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
+  // --- saving ---
+  const [saving, setSaving] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null)
+  const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
+  const [justSaved, setJustSaved] = useState(false)
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+
+  const isNew = !jobId
+  const allowed = isNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
   if (!allowed) return <Navigate to="/trucking-status" replace />
 
-  function isDirty(): boolean {
-    const current = JSON.stringify(normalize(methods.getValues()))
-    return current !== snapshotRef.current
+  function buildPayload(): TruckingPayload {
+    return draftToPayload(methods.getValues() as TruckingDraft)
   }
 
-  function rebaseline() {
-    snapshotRef.current = JSON.stringify(normalize(methods.getValues()))
+  async function saveDraft(): Promise<{ id: number; isLocked: boolean } | null> {
+    setSaving(true)
+    setSaveErrorMsg(null)
+    setSubmitErrors(null)
+    try {
+      const payload = buildPayload()
+      const response = jobId
+        ? await updateTruckingJob(jobId, payload)
+        : await createTruckingJob(payload)
+
+      if (!jobId) setJobId(response.id)
+      setRecordState(response.record_state ?? 'draft')
+      setIsLocked(response.is_locked)
+
+      // Vehicles that were brand-new now have real ids; adopt them so the
+      // NEXT save updates those rows instead of inserting duplicates.
+      const current = methods.getValues() as TruckingDraft
+      const remapped = remapNewVehicleIds(current, response)
+      if (remapped !== current) {
+        methods.setValue('vehicles', remapped.vehicles, { shouldDirty: false })
+      }
+
+      return { id: response.id, isLocked: response.is_locked }
+    } catch (err) {
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Could not save')
+      return null
+    } finally {
+      setSaving(false)
+    }
   }
 
-  async function navToStep(nextStep: number) {
+  /** Only a SUBMIT can close a job, so only Submit needs confirming. */
+  function willClose(isSubmitAction: boolean): boolean {
+    if (!isSubmitAction) return false
+    const vehicles = (methods.getValues('vehicles') ?? []) as TruckingDraft['vehicles']
+    const allDelivered = vehicles.length > 0
+      && vehicles.every((v) => v.trackingStatus === 'Delivered')
+    const alreadyClosed = recordState === 'submitted' && isLocked
+    return allDelivered && !alreadyClosed
+  }
+
+  function runWithCloseConfirm(action: () => void, opts: { isSubmit?: boolean } = {}) {
+    if (willClose(!!opts.isSubmit)) setPendingAction(() => action)
+    else action()
+  }
+
+  function confirmClose() {
+    const action = pendingAction
+    setPendingAction(null)
+    action?.()
+  }
+
+  function goToStep(nextStep: number) {
     const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
-    if (trulyNew) {
-      // Whole creation flow (from the id-less /new page through every step
-      // until Submit actually persists it) keeps Next-validation gating.
-      const valid = await methods.trigger(stepDef.fields)
-      if (!valid) return
-      const targetId = id ?? crypto.randomUUID()
-      if (!id && clamped === 1) return
-      // Persist under targetId before navigating: the step change is a real
-      // remount (see the trulyNew comment above), so without this, whatever
-      // was just filled in would vanish the moment the next step's fresh
-      // useForm mounts with DRAFT_DEFAULT_VALUES instead.
-      // getValues() returns the resolver's INPUT type (fields with a zod
-      // `.default()` are optional there); updateTruckingJob wants the OUTPUT
-      // type. Safe to cast — those defaulted fields are always populated
-      // once the form has mounted with defaultValues.
-      updateTruckingJob(targetId, methods.getValues() as TruckingDraft)
-      navigate(`/trucking-status/${targetId}/edit/${clamped}`)
-      return
+    if (clamped === stepDef.step) return
+    void doGoToStep(clamped)
+  }
+
+  async function doGoToStep(clamped: number) {
+    const saved = await saveDraft()
+    if (saved === null) return // error is already shown; stay put
+    // A save that closed the job leaves nothing further to edit — land on the
+    // read-only detail view rather than an edit route that would bounce.
+    navigate(saved.isLocked
+      ? `/trucking-status/${saved.id}`
+      : `/trucking-status/${saved.id}/edit/${clamped}`)
+  }
+
+  async function handleSaveOnly() {
+    const saved = await saveDraft()
+    if (saved === null) return
+    setJustSaved(true)
+    setTimeout(() => setJustSaved(false), 2000)
+    if (isNew) navigate(`/trucking-status/${saved.id}/edit/${stepDef.step}`, { replace: true })
+  }
+
+  function handleSubmit() {
+    runWithCloseConfirm(() => void doHandleSubmit(), { isSubmit: true })
+  }
+
+  async function doHandleSubmit() {
+    const saved = await saveDraft()
+    if (saved === null) return
+
+    setSubmitting(true)
+    setSubmitErrors(null)
+    try {
+      await submitTruckingJob(saved.id)
+      navigate(`/trucking-status/${saved.id}`)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const parsed = parseSubmitErrors(err.detail)
+        if (parsed) { setSubmitErrors(parsed.errors); return }
+      }
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Could not submit')
+    } finally {
+      setSubmitting(false)
     }
-    navigate(`/trucking-status/${id}/edit/${clamped}`)
   }
 
-  // Entry point for both the Back/Next buttons and (in edit mode) stepper clicks.
-  function requestNav(nextStep: number) {
-    if (!trulyNew && isDirty()) {
-      setPendingNav(nextStep)
-      return
-    }
-    void navToStep(nextStep)
+  /* ---- render ---- */
+
+  if (loadingRecord) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Loading job…" module="truckingStatus" />
+      </div>
+    )
   }
 
-  function onDialogSaveAndMove() {
-    if (id) updateTruckingJob(id, methods.getValues() as TruckingDraft)
-    rebaseline()
-    const target = pendingNav
-    setPendingNav(null)
-    if (target != null) void navToStep(target)
+  if (notFound) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Trucking job not found" module="truckingStatus" />
+        <button onClick={() => navigate('/trucking-status')} className="text-sm text-accent hover:underline">
+          ← Back to trucking
+        </button>
+      </div>
+    )
   }
 
-  function onDialogMoveWithout() {
-    // Discard this step's edits: restore to the last baseline, then navigate.
-    if (existing) methods.reset(existing)
-    rebaseline()
-    const target = pendingNav
-    setPendingNav(null)
-    if (target != null) void navToStep(target)
+  if (loadErrorMsg) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Trucking job" module="truckingStatus" />
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{loadErrorMsg}</span>
+          <button type="button" onClick={loadRecord} className="underline">Retry</button>
+        </div>
+      </div>
+    )
   }
 
-  function onSubmit(data: TruckingDraft) {
-    if (id) updateTruckingJob(id, data)
-    else console.log('submit trucking draft', data) // placeholder until API exists
-    navigate(id ? `/trucking-status/${id}` : '/trucking-status')
+  if (isLocked) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title={`Trucking job ${id}`} subtitle="Closed" module="truckingStatus" />
+        <div className="rounded-lg border border-line bg-canvas-alt px-3.5 py-2.5 text-sm text-muted">
+          This job is closed. An admin must reopen it before it can be edited.
+        </div>
+        <button onClick={() => navigate(`/trucking-status/${id}`)} className="text-sm text-accent hover:underline">
+          ← View job
+        </button>
+      </div>
+    )
   }
+
+  const busy = saving || submitting
+  const isLastStep = stepDef.step === WIZARD_STEPS.length
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={trulyNew ? 'New Trucking Job' : `Edit Trucking Job ${id}`}
+        title={isNew ? 'New Trucking Job' : `Edit Trucking Job ${jobId ?? id}`}
         subtitle={`Step ${stepDef.step} of ${WIZARD_STEPS.length} — ${stepDef.label}`}
         module="truckingStatus"
       />
 
-      <WizardStepper
-        steps={WIZARD_STEPS}
-        current={stepDef.step}
-        clickable={!trulyNew}
-        onStepClick={(s) => requestNav(s)}
-      />
+      <WizardStepper steps={WIZARD_STEPS} current={stepDef.step} onStepClick={busy ? undefined : goToStep} />
 
       <Card>
         <CardContent className="p-6">
           <FormProvider {...methods}>
-            <form onSubmit={methods.handleSubmit(onSubmit)}>
+            <form onSubmit={(e) => e.preventDefault()}>
               <StepComponent />
 
-              <div className="mt-6 flex justify-between">
+              {saveErrorMsg && (
+                <p className="mt-4 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{saveErrorMsg}</p>
+              )}
+              {submitErrors && submitErrors.length > 0 && (
+                <div className="mt-4 rounded-lg bg-risk-bg px-3 py-2.5 text-sm text-risk">
+                  <p className="font-medium">This job can’t be submitted yet:</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    {submitErrors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-between">
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={stepDef.step === 1}
-                  onClick={() => requestNav(stepDef.step - 1)}
+                  disabled={stepDef.step === 1 || busy}
+                  onClick={() => goToStep(stepDef.step - 1)}
                 >
                   Back
                 </Button>
-                {stepDef.step < WIZARD_STEPS.length ? (
-                  <Button type="button" onClick={() => requestNav(stepDef.step + 1)}>
-                    Next
+
+                <div className="flex items-center gap-3">
+                  {justSaved && <span className="text-xs text-[var(--color-healthy)]">Saved</span>}
+                  {isLastStep ? (
+                    <Button type="button" variant="outline" disabled={busy} onClick={handleSaveOnly}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" disabled={busy} onClick={() => goToStep(stepDef.step + 1)}>
+                      {saving ? 'Saving…' : 'Save and Next'}
+                    </Button>
+                  )}
+                  <Button type="button" disabled={busy} onClick={handleSubmit}>
+                    {submitting ? 'Submitting…' : 'Submit'}
                   </Button>
-                ) : (
-                  <Button type="submit">Submit</Button>
-                )}
+                </div>
               </div>
             </form>
           </FormProvider>
         </CardContent>
       </Card>
 
-      <UnsavedChangesDialog
-        open={pendingNav != null}
-        onSaveAndMove={onDialogSaveAndMove}
-        onMoveWithout={onDialogMoveWithout}
-        onCancel={() => setPendingNav(null)}
+      <ConfirmDialog
+        open={!!pendingAction}
+        title="Close this job?"
+        description={
+          <>
+            Every vehicle on this job is marked <span className="font-medium text-ink">Delivered</span>, so
+            submitting closes it. Once closed, no one but an admin can edit it (an admin can reopen it later).
+          </>
+        }
+        confirmLabel="Yes, submit and close it"
+        confirmingLabel="Submitting…"
+        confirming={busy}
+        onConfirm={confirmClose}
+        onCancel={() => setPendingAction(null)}
       />
     </div>
   )
-}
-
-/** Normalize undefined/null/'' as equivalent so a field flipping undefined→''
- * on mount doesn't register as a user edit. Recurses into arrays/objects. */
-function normalize(value: unknown): unknown {
-  if (value == null || value === '') return null
-  if (Array.isArray(value)) return value.map(normalize)
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = normalize(v)
-    }
-    return out
-  }
-  return value
 }

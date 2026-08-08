@@ -8,7 +8,7 @@ from app.accounts.permissions import CAN_EDIT_TRUCKING
 from app.trucking.helpers import (
     updated_fields, verify_entry_ownership, apply_updates, new_vehicles_to_add,
     updated_vehicles, delete_missing, add_in_consignment_change_history,
-    fetch_consignment, is_closed,
+    fetch_consignment,
 )
 from app.trucking.models import TruckingVehicle
 from app.trucking.serializers import serialize_consignment, serialize_many
@@ -89,11 +89,11 @@ def update_consignment(
             if old_vehicle:
                 apply_updates(updated_vehicle, old_vehicle)
 
-        # If every vehicle is now delivered the job is closed, so lock it. The
-        # closing update itself goes through; only later edits are refused,
-        # until an admin reopens.
-        if is_closed(consignment):
-            consignment.is_locked = True
+        # A plain draft save never closes a job, even if this update marks the
+        # last vehicle delivered on an already-submitted record — submission is
+        # what closes it (see submit_consignment.py), not merely saving while
+        # both conditions happen to be true. Only /submit locks. Mirrors
+        # imports and logistics.
 
         db.commit()
         db.refresh(consignment)
