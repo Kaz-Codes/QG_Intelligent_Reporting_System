@@ -72,9 +72,9 @@ export function ServiceJobsTab() {
         />
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-line bg-surface [scrollbar-width:auto]">
+      <div className="max-h-[60vh] overflow-auto rounded-xl border border-line bg-surface [scrollbar-width:auto]">
         <table className="w-full min-w-[900px] text-sm">
-          <thead className="bg-canvas-alt text-xs text-muted">
+          <thead className="sticky top-0 z-10 bg-canvas-alt text-xs text-muted shadow-[0_1px_0_var(--color-line)]">
             <tr>
               <th className="px-3 py-2 text-left">Job ID</th>
               <th className="px-3 py-2 text-left">Type</th>

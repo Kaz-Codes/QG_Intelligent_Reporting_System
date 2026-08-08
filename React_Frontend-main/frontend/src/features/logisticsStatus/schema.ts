@@ -38,6 +38,12 @@ export type OrderType = (typeof ORDER_TYPES)[number]
 export const DEPARTMENTS = ['Cement', 'Sugar', 'General'] as const
 export type Department = (typeof DEPARTMENTS)[number]
 
+// EFS = Export Facilitation Scheme (duty-suspended inputs for export
+// manufacturing); Regular = standard duty-paid. An attribute the Logistics
+// team sets on the order itself, like department.
+export const SHIPMENT_MODES = ['EFS', 'Regular'] as const
+export type ShipmentMode = (typeof SHIPMENT_MODES)[number]
+
 export const INCOTERMS = ['FOB', 'CIF', 'CFR', 'EXW', 'DAP'] as const
 export type Incoterm = (typeof INCOTERMS)[number]
 
@@ -91,6 +97,7 @@ export const consignmentSchema = z
   .object({
     orderType: z.enum(ORDER_TYPES),
     department: z.enum(DEPARTMENTS),
+    shipmentMode: z.enum(SHIPMENT_MODES).default('Regular'),
     originCountry: z.string().optional(),
     originCity: z.string().optional(),
     originProvince: z.string().optional(),
@@ -261,6 +268,7 @@ export const consignmentDraftSchema = z
   .object({
     orderType: z.enum(ORDER_TYPES),
     department: z.enum(DEPARTMENTS),
+    shipmentMode: z.enum(SHIPMENT_MODES).default('Regular'),
     originCountry: z.string().optional(),
     originCity: z.string().optional(),
     originProvince: z.string().optional(),
@@ -281,6 +289,7 @@ export type LogisticsDraft = z.infer<typeof consignmentDraftSchema>
 export const DRAFT_DEFAULT_VALUES: LogisticsDraft = {
   orderType: 'Export',
   department: 'General',
+  shipmentMode: 'Regular',
   originCountry: '',
   originCity: '',
   originProvince: '',
@@ -332,7 +341,7 @@ export const WIZARD_STEPS: WizardStepDef[] = [
     step: 1,
     key: 'order',
     label: 'Order Details',
-    fields: ['orderType', 'department', 'originCountry', 'originCity', 'originProvince',
+    fields: ['orderType', 'department', 'shipmentMode', 'originCountry', 'originCity', 'originProvince',
       'customerName', 'moNo', 'batchNo', 'batchLabel', 'incoterm', 'items'],
   },
   { step: 2, key: 'packing', label: 'Packing', fields: ['packages'] },

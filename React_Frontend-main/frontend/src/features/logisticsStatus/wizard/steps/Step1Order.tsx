@@ -4,7 +4,7 @@ import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import {
-  ORDER_TYPES, DEPARTMENTS, INCOTERMS, emptyItem, itemPendingFields, itemNetWeight, batchDisplayLabel,
+  ORDER_TYPES, DEPARTMENTS, SHIPMENT_MODES, INCOTERMS, emptyItem, itemPendingFields, itemNetWeight, batchDisplayLabel,
   type LogisticsDraft, type LogisticsItem, type LogisticsPackage,
 } from '../../schema'
 import {
@@ -117,6 +117,16 @@ export function Step1Order() {
               ))}
             </select>
             {errors.department && <p className="text-xs text-risk">{errors.department.message}</p>}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="shipmentMode">Shipment Mode</Label>
+            <select id="shipmentMode" className={selectClass} {...register('shipmentMode')}>
+              {SHIPMENT_MODES.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted">EFS = Export Facilitation Scheme · Regular = duty-paid</p>
           </div>
 
           {/* Origin: country for exports; city + province for local. */}

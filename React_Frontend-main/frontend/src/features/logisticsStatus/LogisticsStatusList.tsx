@@ -91,6 +91,7 @@ export function LogisticsStatusList() {
   const { sorted: rows, sort, toggle } = useSort(rowsRaw, {
     systemId: (o) => o.systemId,
     orderType: (o) => orderTypeLabel(o.department, o.orderType),
+    mode: (o) => o.shipmentMode ?? '',
     customer: (o) => o.customerName,
     batch: (o) => o.batchNo,
     packages: (o) => o.packages.length,
@@ -118,6 +119,7 @@ export function LogisticsStatusList() {
     { header: 'Batch', value: (o) => batchDisplayLabel(o.batchNo, o.batchLabel) },
     { header: 'Department', value: (o) => o.department },
     { header: 'Order Type', value: (o) => orderTypeLabel(o.department, o.orderType) },
+    { header: 'Shipment Mode', value: (o) => o.shipmentMode ?? '' },
     { header: 'Job No(s).', value: (o) => jobNumbers(o.items).join('; ') },
     { header: 'Customer', value: (o) => o.customerName },
     { header: 'Items', value: (o) => o.items.map((it) => `${it.itemDetail} ×${it.quantity ?? 0}`).join('; ') },
@@ -201,12 +203,13 @@ export function LogisticsStatusList() {
           </CardContent>
         </Card>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-line bg-surface [scrollbar-width:auto]">
+        <div className="max-h-[65vh] overflow-auto rounded-xl border border-line bg-surface [scrollbar-width:auto]">
           <table className="w-full min-w-[1000px] text-sm">
-            <thead className="bg-canvas-alt text-xs text-muted">
+            <thead className="sticky top-0 z-10 bg-canvas-alt text-xs text-muted shadow-[0_1px_0_var(--color-line)]">
               <tr>
                 <SortHeader label="MO #" sortKey="systemId" sort={sort} onToggle={toggle} />
                 <SortHeader label="Order Type" sortKey="orderType" sort={sort} onToggle={toggle} />
+                <SortHeader label="Mode" sortKey="mode" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2 text-left">Job #</th>
                 <SortHeader label="Customer" sortKey="customer" sort={sort} onToggle={toggle} />
                 <SortHeader label="Batch #" sortKey="batch" sort={sort} onToggle={toggle} />
@@ -245,6 +248,7 @@ export function LogisticsStatusList() {
                       </div>
                     </td>
                     <td className="px-3 py-2">{orderTypeLabel(o.department, o.orderType)}</td>
+                    <td className="px-3 py-2 text-[13px]">{o.shipmentMode ?? '—'}</td>
                     <td className="px-3 py-2 text-[13px] tabular-nums" title={jobNos.join(', ') || undefined}>
                       {jobNos.length === 0 ? '—' : jobNos.length <= 2 ? jobNos.join(', ') : `${jobNos.slice(0, 2).join(', ')} +${jobNos.length - 2}`}
                     </td>
