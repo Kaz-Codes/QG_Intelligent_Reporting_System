@@ -1,0 +1,9 @@
+/venv
+.env
+/.chroma
+__pycache__/
+*.pyc
+*.pyo
+requirements.no_prophet.txt
+server.out.log
+server.err.log

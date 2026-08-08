@@ -1,0 +1,150 @@
+// Conversation state, decoupled from the UI — port of the original chatbot
+// frontend's useChat.js. Owns the message list, the thread id (persisted so
+// a refresh keeps the same conversation), the in-flight state, and errors.
+// The Assistant page reads this and renders; it never calls the API client
+// directly.
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { fetchChatHistory, streamMessage } from './api'
+import type { AssistantMessage } from './types'
+
+const THREAD_STORAGE_KEY = 'qgirs-chatbot-thread-id'
+
+let messageSeq = 0
+const nextId = () => `m${Date.now()}-${messageSeq++}`
+
+export function useChat() {
+  const [messages, setMessages] = useState<AssistantMessage[]>([])
+  const [threadId, setThreadId] = useState<string | null>(
+    () => window.localStorage.getItem(THREAD_STORAGE_KEY) || null,
+  )
+  const [isSending, setIsSending] = useState(false)
+  // Live progress label from the stream ("Writing the query…").
+  const [status, setStatus] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const abortRef = useRef<AbortController | null>(null)
+
+  // On first mount, if we already have a thread id, replay its history so a
+  // page refresh does not lose the visible conversation.
+  useEffect(() => {
+    if (!threadId) return
+    const controller = new AbortController()
+
+    fetchChatHistory(threadId, { signal: controller.signal })
+      .then((data) => {
+        const restored = (data.messages || []).map((m) => ({
+          id: nextId(),
+          role: m.role,
+          content: m.content,
+        }))
+        if (restored.length) setMessages(restored)
+      })
+      .catch(() => {
+        // A stale/unknown thread id is not worth surfacing — just start fresh.
+      })
+
+    return () => controller.abort()
+    // Intentionally run once for the initial thread id only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const send = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed || isSending) return
+
+      setError(null)
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      const userMessage: AssistantMessage = { id: nextId(), role: 'user', content: trimmed }
+      setMessages((prev) => [...prev, userMessage])
+      setIsSending(true)
+
+      // The assistant's message exists from the start and is filled in as
+      // the stream arrives, so text appears as it is written.
+      const replyId = nextId()
+      setMessages((prev) => [
+        ...prev,
+        { id: replyId, role: 'assistant', content: '', streaming: true },
+      ])
+
+      const patchReply = (patch: Partial<AssistantMessage>) =>
+        setMessages((prev) => prev.map((m) => (m.id === replyId ? { ...m, ...patch } : m)))
+
+      let streamedText = ''
+      try {
+        await streamMessage(
+          trimmed,
+          threadId,
+          (ev) => {
+            if (ev.type === 'start') {
+              if (ev.thread_id && ev.thread_id !== threadId) {
+                setThreadId(ev.thread_id)
+                window.localStorage.setItem(THREAD_STORAGE_KEY, ev.thread_id)
+              }
+            } else if (ev.type === 'status') {
+              setStatus(ev.label || '')
+            } else if (ev.type === 'token') {
+              streamedText += ev.text || ''
+              patchReply({ content: streamedText })
+            } else if (ev.type === 'error') {
+              throw new Error(ev.message || 'Something went wrong.')
+            } else if (ev.type === 'done') {
+              setStatus('')
+              patchReply({
+                streaming: false,
+                // Clarify/teach replies short-circuit the model, so nothing
+                // was streamed — fall back to the finished answer.
+                content: ev.streamed && streamedText ? streamedText : ev.answer || '(no answer)',
+                clarificationOptions: ev.clarification_options || [],
+                columns: ev.columns || [],
+                rows: ev.rows || [],
+                charts: ev.charts || [],
+                meta: {
+                  route: ev.route,
+                  domain: ev.domain,
+                  intent: ev.intent,
+                  rowCount: ev.row_count,
+                  sql: ev.sql,
+                  tablesUsed: ev.tables_used,
+                  knowledgeInferred: ev.knowledge_inferred,
+                  analysisType: ev.analysis_type,
+                  forecast: ev.forecast,
+                  computationCode: ev.computation_code,
+                  computationExplanation: ev.computation_explanation,
+                  computationResult: ev.computation_result,
+                  error: ev.error,
+                },
+              })
+            }
+          },
+          { signal: controller.signal },
+        )
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        const message = err instanceof Error ? err.message : 'Something went wrong.'
+        setError(message)
+        patchReply({ streaming: false, failed: !streamedText })
+      } finally {
+        setStatus('')
+        setIsSending(false)
+      }
+    },
+    [threadId, isSending],
+  )
+
+  const resetConversation = useCallback(() => {
+    abortRef.current?.abort()
+    window.localStorage.removeItem(THREAD_STORAGE_KEY)
+    setThreadId(null)
+    setMessages([])
+    setError(null)
+    setStatus('')
+    setIsSending(false)
+  }, [])
+
+  return { messages, isSending, status, error, threadId, send, resetConversation }
+}
