@@ -48,6 +48,7 @@ function App() {
               <Route path="/logistics-status">
                 <Route index element={<LogisticsStatusList />} />
                 <Route path="new" element={<LogisticsStatusWizard />} />
+                <Route path="rework/new" element={<LogisticsStatusWizard initialJobKind="rework" />} />
                 <Route path=":id" element={<LogisticsStatusDetail />} />
                 <Route path=":id/history" element={<LogisticsChangeHistory />} />
                 <Route path=":id/edit/:step" element={<LogisticsStatusWizard />} />

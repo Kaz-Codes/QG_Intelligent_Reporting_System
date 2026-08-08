@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Truck } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { FilterBar } from '@/components/FilterBar'
@@ -85,9 +85,25 @@ export function LogisticsStatusList() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [filters, setFilters] = useState<LogisticsFilters>({})
-  const [tab, setTab] = useState<'orders' | 'services'>('orders')
+  // A brand-new rework job lands back here via /logistics-status?tab=
+  // services&serviceType=customer-rework (see LogisticsStatusWizard's
+  // onSubmit) — read once on mount so that redirect actually lands on the
+  // Service Jobs tab with the right filter pre-selected, not the Orders tab.
+  const [searchParams] = useSearchParams()
+  const [tab, setTab] = useState<'orders' | 'services'>(searchParams.get('tab') === 'services' ? 'services' : 'orders')
+  const initialServiceType = searchParams.get('serviceType')
 
-  const rowsRaw = useMemo(() => getLogisticsOrders(filters), [filters])
+  // Rework jobs are real LogisticsOrder records (jobKind: 'rework') so they
+  // can share getLogisticsOrders/getCrossBatchItems/the Trucking handoff with
+  // standard orders — but they're not "orders" from this list's point of
+  // view, so they're filtered out here rather than in getLogisticsOrders
+  // itself (that function is also what truckingStatusData.ts's
+  // deriveFromLogistics reads, which must still see rework's sentToTrucking
+  // flag). Service Jobs' Customer Rework tab is their real home.
+  const rowsRaw = useMemo(
+    () => getLogisticsOrders(filters).filter((o) => o.jobKind !== 'rework'),
+    [filters],
+  )
   const { sorted: rows, sort, toggle } = useSort(rowsRaw, {
     systemId: (o) => o.systemId,
     orderType: (o) => orderTypeLabel(o.department, o.orderType),
@@ -162,7 +178,7 @@ export function LogisticsStatusList() {
       />
 
       {tab === 'services' ? (
-        <ServiceJobsTab />
+        <ServiceJobsTab initialTypeFilter={initialServiceType === 'customer-rework' || initialServiceType === 'import-fob' ? initialServiceType : undefined} />
       ) : (
       <>
       <FilterBar

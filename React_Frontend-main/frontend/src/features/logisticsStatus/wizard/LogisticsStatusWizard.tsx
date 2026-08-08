@@ -13,7 +13,7 @@ import {
   saveLogisticsDraft, getLogisticsDraft, isKnownLogisticsOrder,
   generateLogisticsSystemId, nextBatchNoForMo,
 } from '@/lib/logisticsStatusData'
-import { consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, emptyItem, type LogisticsDraft } from '../schema'
+import { consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, emptyItem, type LogisticsDraft, type JobKind } from '../schema'
 import { WizardStepper } from './WizardStepper'
 import { UnsavedChangesDialog } from './UnsavedChangesDialog'
 import { Step1Order } from './steps/Step1Order'
@@ -54,11 +54,18 @@ const snapshot = (v: unknown) => JSON.stringify(normalizeForDirtyCheck(v))
  * here (once per fresh /new session, not on every render — see the lazy
  * useState below) keeps every new order's starting item globally unique.
  */
-function freshDraftDefaults(): LogisticsDraft {
-  return { ...DRAFT_DEFAULT_VALUES, items: [emptyItem(`item-${crypto.randomUUID()}`)] }
+function freshDraftDefaults(jobKind: JobKind = 'standard'): LogisticsDraft {
+  return { ...DRAFT_DEFAULT_VALUES, jobKind, items: [emptyItem(`item-${crypto.randomUUID()}`)] }
 }
 
-export function LogisticsStatusWizard() {
+/**
+ * `initialJobKind` is only ever 'rework' — passed by the /logistics-status/
+ * rework/new route (see App.tsx) so a brand-new record starts out tagged as
+ * a customer-rework job. It has no effect once an id exists (editing an
+ * existing order/rework job always reads its own saved jobKind, never this
+ * prop) — see the initialValues lazy-init below.
+ */
+export function LogisticsStatusWizard({ initialJobKind = 'standard' }: { initialJobKind?: JobKind } = {}) {
   const { user } = useAuth()
   const { id, step } = useParams()
   const navigate = useNavigate()
@@ -97,7 +104,7 @@ export function LogisticsStatusWizard() {
   // below — calling freshDraftDefaults() separately in two places would mint
   // two different random item ids and make the form read as dirty on the
   // very first render.
-  const [initialValues] = useState<LogisticsDraft>(() => existingOrder ?? draft ?? freshDraftDefaults())
+  const [initialValues] = useState<LogisticsDraft>(() => existingOrder ?? draft ?? freshDraftDefaults(initialJobKind))
 
   const methods = useForm<z.input<typeof consignmentDraftSchema>, unknown, LogisticsDraft>({
     resolver: zodResolver(consignmentDraftSchema),
@@ -224,8 +231,23 @@ export function LogisticsStatusWizard() {
     // back on Step 1 — see createLogisticsOrder's comment for why reusing
     // that id (rather than generating a fresh one here) matters.
     if (id) {
-      if (existingOrder) updateLogisticsOrder(id, data, user?.name ?? 'Unknown')
-      else createLogisticsOrder(id, data)
+      if (existingOrder) {
+        updateLogisticsOrder(id, data, user?.name ?? 'Unknown')
+      } else {
+        createLogisticsOrder(id, data)
+        // A brand-new rework job's "home" is the Service Jobs tab, not its
+        // own detail page — mirrors the old inline ReworkForm's onCreated
+        // behavior (land back on the list with the Customer Rework filter
+        // active), just via a real navigation now that creation is a real
+        // multi-step route instead of an inline panel. Editing an EXISTING
+        // rework job still goes to its own detail page like any other order
+        // (the `existingOrder` branch above), since by then it's just
+        // another real record to look up.
+        if (data.jobKind === 'rework') {
+          navigate('/logistics-status?tab=services&serviceType=customer-rework')
+          return
+        }
+      }
     }
     navigate(id ? `/logistics-status/${id}` : '/logistics-status')
   }
@@ -233,7 +255,11 @@ export function LogisticsStatusWizard() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={isNew ? 'New Logistics Order' : `Edit Logistics Order ${id}`}
+        title={
+          isNew
+            ? (initialValues.jobKind === 'rework' ? 'New Customer Rework Job' : 'New Logistics Order')
+            : (initialValues.jobKind === 'rework' ? `Edit Rework Job ${id}` : `Edit Logistics Order ${id}`)
+        }
         subtitle={`Step ${stepDef.step} of ${WIZARD_STEPS.length} — ${stepDef.label}`}
         module="logisticsStatus"
       />

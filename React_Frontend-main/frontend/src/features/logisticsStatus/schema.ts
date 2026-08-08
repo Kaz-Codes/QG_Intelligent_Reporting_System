@@ -44,6 +44,14 @@ export type Department = (typeof DEPARTMENTS)[number]
 export const SHIPMENT_MODES = ['EFS', 'Regular'] as const
 export type ShipmentMode = (typeof SHIPMENT_MODES)[number]
 
+// Distinguishes a standard export/local order from a customer-rework job —
+// both are full LogisticsOrder records (same items/packing/shipping/
+// expenditures/status/sentToTrucking shape), just surfaced on different
+// screens (Orders vs. Service Jobs' Customer Rework tab). See
+// lib/logisticsStatusData.ts's getLogisticsOrders/getReworkOrders.
+export const JOB_KINDS = ['standard', 'rework'] as const
+export type JobKind = (typeof JOB_KINDS)[number]
+
 export const INCOTERMS = ['FOB', 'CIF', 'CFR', 'EXW', 'DAP'] as const
 export type Incoterm = (typeof INCOTERMS)[number]
 
@@ -98,6 +106,7 @@ export const consignmentSchema = z
     orderType: z.enum(ORDER_TYPES),
     department: z.enum(DEPARTMENTS),
     shipmentMode: z.enum(SHIPMENT_MODES).default('Regular'),
+    jobKind: z.enum(JOB_KINDS).default('standard'),
     originCountry: z.string().optional(),
     originCity: z.string().optional(),
     originProvince: z.string().optional(),
@@ -269,6 +278,7 @@ export const consignmentDraftSchema = z
     orderType: z.enum(ORDER_TYPES),
     department: z.enum(DEPARTMENTS),
     shipmentMode: z.enum(SHIPMENT_MODES).default('Regular'),
+    jobKind: z.enum(JOB_KINDS).default('standard'),
     originCountry: z.string().optional(),
     originCity: z.string().optional(),
     originProvince: z.string().optional(),
@@ -290,6 +300,7 @@ export const DRAFT_DEFAULT_VALUES: LogisticsDraft = {
   orderType: 'Export',
   department: 'General',
   shipmentMode: 'Regular',
+  jobKind: 'standard',
   originCountry: '',
   originCity: '',
   originProvince: '',
@@ -341,7 +352,7 @@ export const WIZARD_STEPS: WizardStepDef[] = [
     step: 1,
     key: 'order',
     label: 'Order Details',
-    fields: ['orderType', 'department', 'shipmentMode', 'originCountry', 'originCity', 'originProvince',
+    fields: ['orderType', 'department', 'shipmentMode', 'jobKind', 'originCountry', 'originCity', 'originProvince',
       'customerName', 'moNo', 'batchNo', 'batchLabel', 'incoterm', 'items'],
   },
   { step: 2, key: 'packing', label: 'Packing', fields: ['packages'] },
