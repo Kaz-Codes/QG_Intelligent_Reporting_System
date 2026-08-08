@@ -1,21 +1,27 @@
 // The one and only bridge to the chatbot backend.
 //
-// This is a SEPARATE service from this app's own FastAPI backend (app/, see
-// lib/api/client.ts) — a different stack entirely (LangGraph + OpenAI text-
-// to-SQL) that lives in its own folder (chatbot_backend/) and runs on its
-// own port. No cookies, no shared auth — a plain unauthenticated JSON/SSE
-// API. If that ever changes, this is the only file that needs to.
+// The chatbot itself is a SEPARATE service (a different stack entirely —
+// LangGraph + OpenAI text-to-SQL — living in its own folder, chatbot_backend/,
+// on its own port), but the browser never talks to it directly: this app's
+// own FastAPI backend (app/) reverse-proxies /chatbot/* through to it
+// (see app/chatbot_proxy.py), so the frontend only ever needs ONE base URL —
+// the same one lib/api/client.ts uses. Two independent processes stay two
+// independent processes; the browser just can't tell.
 //
-// Contract (see chatbot_backend/backend/api/chatbot.py):
-//   POST /api/chat                       { message, thread_id? } -> ChatResponse
-//   POST /api/chat/stream                 same body, Server-Sent Events
-//   GET  /api/chat/{thread_id}/history                            -> ChatHistory
-//   GET  /api/health                                              -> HealthResponse
+// Contract (see app/chatbot_proxy.py, which mirrors chatbot_backend/backend/api/chatbot.py):
+//   POST /chatbot/chat                       { message, thread_id? } -> ChatResponse
+//   POST /chatbot/chat/stream                 same body, Server-Sent Events
+//   GET  /chatbot/chat/{thread_id}/history                            -> ChatHistory
+//   GET  /chatbot/health                                              -> HealthResponse
 
 import type { ChatHistory, ChatResponse, HealthResponse, StreamEvent } from './types'
 
+// Defaults to riding on the main API's own origin + /chatbot (the proxy).
+// VITE_CHATBOT_API_BASE_URL still works as an override — e.g. to talk to
+// chatbot_backend directly on :8010 while developing on it in isolation.
 const CHATBOT_BASE_URL = (
-  import.meta.env.VITE_CHATBOT_API_BASE_URL ?? 'http://127.0.0.1:8010/api'
+  import.meta.env.VITE_CHATBOT_API_BASE_URL ??
+  `${(import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000').replace(/\/$/, '')}/chatbot`
 ).replace(/\/$/, '')
 
 export class ChatbotApiError extends Error {
