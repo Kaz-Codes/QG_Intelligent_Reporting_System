@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Truck } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -13,18 +13,20 @@ import {
   totalNetWeight, totalPackageGrossWeight, orderTypeLabel, jobNumbers, batchDisplayLabel,
   arrivalDelayDays, latestPlannedRfd, latestActualRfd,
 } from '@/features/logisticsStatus/schema'
-import { exportListExcel, exportListPdf, type ListColumn } from '@/lib/listExport'
-import { usePagination, Pagination, useSort, SortHeader } from '@/components/Pagination'
+import { Pagination, useSort, SortHeader } from '@/components/Pagination'
 import { SegmentedControl } from '@/components/SegmentedControl'
 import { ServiceJobsTab } from './ServiceJobsTab'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { ApiError } from '@/lib/api/client'
 import {
-  getLogisticsOrders,
-  customerList, orderTypeList, statusList,
-  type LogisticsOrder, type LogisticsFilters,
-} from '@/lib/logisticsStatusData'
-import { getTruckingReadthrough } from '@/lib/truckingStatusData'
+  listLogisticsOrders, fetchLogisticsFilterOptions, exportLogisticsExcel, downloadBlob,
+  reopenLogisticsOrder, type LogisticsQuery,
+} from '@/lib/api/logistics'
+import { apiToRow, type LogisticsListRow } from '@/lib/api/logisticsMap'
 
 const num = (v: number) => v.toLocaleString('en-US')
+
+const PAGE_SIZE = 50
 
 /**
  * Consistent delay pill used across the status modules: red when late, green
@@ -47,44 +49,32 @@ function DelayCell({ days, settled }: { days: number | null; settled: boolean })
   )
 }
 
-function TruckingHandoffBadge({ order }: { order: LogisticsOrder }) {
-  if (!order.sentToTrucking) {
-    return <span className="text-xs text-muted">Not sent</span>
-  }
-  const readthrough = getTruckingReadthrough(order.systemId)
-  if (!readthrough || !readthrough.taken) {
-    return (
-      <span className="rounded border border-[var(--color-watch)]/30 bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-watch)]">
-        Awaiting pickup
-      </span>
-    )
-  }
-  return (
-    <span className="rounded border border-[var(--color-healthy)]/30 bg-[var(--color-healthy-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-healthy)]" title={readthrough.trackingRollupLabel}>
-      {readthrough.trackingRollupLabel}
-    </span>
-  )
-}
-
 /**
- * Logistics Status — list view.
+ * Logistics Status — list view, ORDERS wired to the live backend.
  *
- * Columns per the confirmed spec: MO # (the system id itself — see
- * generateLogisticsSystemId in lib/logisticsStatusData.ts — with the batch
- * label alongside for Batch 2+), merged department+order-type label, Job #s,
- * Customer, Batch # (with an MO-group accent when siblings are visible),
- * Items, Packages, Net/Gross Weight, Works (first package's packing works),
- * Incoterm — plus Status and actions, which every other list in this app
- * keeps.
+ * Every filter runs SERVER-side: the three multi-selects, the gate-out range
+ * and the search box are all query params on GET /logistics/, and Export Excel
+ * re-runs the same query with no page cap so the download is exactly the
+ * filtered set. Sorting is client-side over the loaded page, as before.
  *
- * An Orders / Service Jobs tab switch sits above the table — Service Jobs
- * (ServiceJobsTab) holds the read-only Import FOB feed alongside owned
- * Customer Rework jobs, replacing the old inline FOB table here.
+ * TWO DELIBERATE DIFFERENCES FROM THE IMPORTS LIST:
+ *
+ *  - There is no "closed" stage strip and no include_closed toggle. A
+ *    delivered (closed) order STAYS in the list; it just reports "Closed" in
+ *    its own column. The backend list has no such param either, so the two
+ *    already agree — nothing to keep in lockstep.
+ *  - The Mode column reads from a field the backend does not have yet
+ *    (shipmentMode is front-end-only), so it renders "—" for every row rather
+ *    than being dropped: the column is in the agreed spec, and showing the gap
+ *    is more honest than hiding it.
+ *
+ * The Service Jobs tab is still entirely mock — it has no backend at all — so
+ * it is untouched here and keeps reading lib/logisticsStatusData.
  */
 export function LogisticsStatusList() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const [filters, setFilters] = useState<LogisticsFilters>({})
+
   // A brand-new rework job lands back here via /logistics-status?tab=
   // services&serviceType=customer-rework (see LogisticsStatusWizard's
   // onSubmit) — read once on mount so that redirect actually lands on the
@@ -93,17 +83,102 @@ export function LogisticsStatusList() {
   const [tab, setTab] = useState<'orders' | 'services'>(searchParams.get('tab') === 'services' ? 'services' : 'orders')
   const initialServiceType = searchParams.get('serviceType')
 
-  // Rework jobs are real LogisticsOrder records (jobKind: 'rework') so they
-  // can share getLogisticsOrders/getCrossBatchItems/the Trucking handoff with
-  // standard orders — but they're not "orders" from this list's point of
-  // view, so they're filtered out here rather than in getLogisticsOrders
-  // itself (that function is also what truckingStatusData.ts's
-  // deriveFromLogistics reads, which must still see rework's sentToTrucking
-  // flag). Service Jobs' Customer Rework tab is their real home.
-  const rowsRaw = useMemo(
-    () => getLogisticsOrders(filters).filter((o) => o.jobKind !== 'rework'),
-    [filters],
-  )
+  // --- filter state (drives the query) ---
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [orderTypeFilter, setOrderTypeFilter] = useState<string[]>([])
+  const [customerFilter, setCustomerFilter] = useState<string[]>([])
+  const [gateOutFrom, setGateOutFrom] = useState('')
+  const [gateOutTo, setGateOutTo] = useState('')
+  const [page, setPage] = useState(1)
+
+  // --- data ---
+  const [rowsRaw, setRowsRaw] = useState<LogisticsListRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [pageCount, setPageCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [reopeningId, setReopeningId] = useState<number | null>(null)
+  /** The closed order awaiting reopen confirmation; null means no dialog. */
+  const [confirmReopen, setConfirmReopen] = useState<LogisticsListRow | null>(null)
+
+  // --- dropdown options, from the data itself ---
+  const [statusOptions, setStatusOptions] = useState<string[]>([])
+  const [orderTypeOptions, setOrderTypeOptions] = useState<string[]>([])
+  const [customerOptions, setCustomerOptions] = useState<string[]>([])
+  const [optionsError, setOptionsError] = useState<string | null>(null)
+
+  // Typing shouldn't fire a request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  const loadOptions = useCallback(() => {
+    setOptionsError(null)
+    fetchLogisticsFilterOptions()
+      .then((options) => {
+        setStatusOptions((options.statuses ?? []).map((s) => s.value))
+        setOrderTypeOptions((options.order_types ?? []).map((t) => t.value))
+        setCustomerOptions(options.customers ?? [])
+      })
+      .catch((err) => {
+        // Never swallow this: a silent failure here shows three empty
+        // dropdowns with no hint that anything went wrong.
+        setOptionsError(err instanceof Error ? err.message : 'Could not load filter options')
+      })
+  }, [])
+
+  useEffect(() => { loadOptions() }, [loadOptions])
+
+  const query: LogisticsQuery = useMemo(() => ({
+    page,
+    pageSize: PAGE_SIZE,
+    status: statusFilter,
+    orderType: orderTypeFilter,
+    customer: customerFilter,
+    gateOutFrom: gateOutFrom || undefined,
+    gateOutTo: gateOutTo || undefined,
+    search: debouncedSearch,
+    // Orders only. Customer-rework jobs share this table (job_kind is the
+    // discriminator) but belong to the Service Jobs tab, not here. Sent
+    // explicitly rather than relying on the server-side default, so the
+    // intent is readable at the call site.
+    jobKind: 'standard',
+  }), [page, statusFilter, orderTypeFilter, customerFilter, gateOutFrom, gateOutTo, debouncedSearch])
+
+  // Any filter change puts us back on page 1 — staying on page 7 of a result
+  // set that now has 2 pages would show an empty table.
+  const firstRender = useRef(true)
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return }
+    setPage(1)
+  }, [statusFilter, orderTypeFilter, customerFilter, gateOutFrom, gateOutTo, debouncedSearch])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { rows: apiRows, pagination } = await listLogisticsOrders(query)
+      setRowsRaw(apiRows.map(apiToRow))
+      setTotal(pagination?.total ?? apiRows.length)
+      setPageCount(pagination?.total_pages ?? 1)
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 403
+        ? "Signed in, but this account doesn't have permission to view logistics."
+        : err instanceof Error ? err.message : 'Could not load logistics orders')
+      setRowsRaw([])
+      setTotal(0)
+      setPageCount(0)
+    } finally {
+      setLoading(false)
+    }
+  }, [query])
+
+  useEffect(() => { void load() }, [load])
+
   const { sorted: rows, sort, toggle } = useSort(rowsRaw, {
     systemId: (o) => o.systemId,
     orderType: (o) => orderTypeLabel(o.department, o.orderType),
@@ -115,54 +190,61 @@ export function LogisticsStatusList() {
     gross: (o) => totalPackageGrossWeight(o.packages),
     incoterm: (o) => o.incoterm ?? '',
     status: (o) => o.status,
+    submitted: (o) => (o.recordState === 'submitted' ? 1 : 0),
+    closed: (o) => (o.isLocked ? 1 : 0),
     delay: (o) => arrivalDelayDays(o) ?? -99999,
     actualRfd: (o) => latestActualRfd(o.items) ?? '',
   })
-  const { page, pageCount, pageRows, setPage, total, pageSize } = usePagination(rows, 10)
+
   const canEdit = can(user, 'editAny')
 
   // MO-group sizes across the currently-visible rows — drives the "shares an
-  // MO with other batches" accent on the Batch # column.
+  // MO with other batches" accent on the Batch # column. Only ever reflects
+  // the loaded page, which is why it is described as "visible rows".
   const moCounts = useMemo(() => {
     const m = new Map<string, number>()
     rows.forEach((o) => { if (o.moNo) m.set(o.moNo, (m.get(o.moNo) ?? 0) + 1) })
     return m
   }, [rows])
 
-  const exportColumns: ListColumn<LogisticsOrder>[] = [
-    { header: 'System ID', value: (o) => o.systemId },
-    { header: 'MO No.', value: (o) => o.moNo ?? '' },
-    { header: 'Batch', value: (o) => batchDisplayLabel(o.batchNo, o.batchLabel) },
-    { header: 'Department', value: (o) => o.department },
-    { header: 'Order Type', value: (o) => orderTypeLabel(o.department, o.orderType) },
-    { header: 'Shipment Mode', value: (o) => o.shipmentMode ?? '' },
-    { header: 'Job No(s).', value: (o) => jobNumbers(o.items).join('; ') },
-    { header: 'Customer', value: (o) => o.customerName },
-    { header: 'Items', value: (o) => o.items.map((it) => `${it.itemDetail} ×${it.quantity ?? 0}`).join('; ') },
-    { header: 'Net Weight', value: (o) => totalNetWeight(o.items) },
-    { header: 'Gross Weight', value: (o) => totalPackageGrossWeight(o.packages) },
-    { header: 'Packages', value: (o) => o.packages.length },
-    { header: 'Works', value: (o) => o.packages.find((p) => p.packingWorks)?.packingWorks ?? '' },
-    { header: 'Incoterm', value: (o) => o.incoterm ?? '' },
-    { header: 'Origin', value: (o) => (o.orderType === 'Export' ? o.originCountry ?? '' : `${o.originCity}, ${o.originProvince}`) },
-    { header: 'Status', value: (o) => o.status },
-    { header: 'Arrival delay (days)', value: (o) => arrivalDelayDays(o) ?? '' },
-    { header: 'Planned RFD', value: (o) => latestPlannedRfd(o.items) ?? '' },
-    { header: 'Actual RFD', value: (o) => latestActualRfd(o.items) ?? '' },
-    { header: 'Gate Out Date', value: (o) => o.gateOutDate ?? '' },
-    { header: 'Sent to Trucking', value: (o) => (o.sentToTrucking ? 'Yes' : 'No') },
-  ]
-  const stamp = () => new Date().toISOString().slice(0, 10)
-  const doExcel = () => exportListExcel(rows, exportColumns, `logistics_orders_${stamp()}.xlsx`, 'Logistics')
-  const doPdf = () => exportListPdf(rows, exportColumns, `logistics_orders_${stamp()}.pdf`, 'Logistics Status')
+  /** Admin-only server-side too (require_admin on the route) — the button is
+   *  hidden for everyone else, but that is UX, not the boundary. */
+  async function handleReopen(order: LogisticsListRow) {
+    setReopeningId(order.id)
+    setError(null)
+    try {
+      await reopenLogisticsOrder(order.id)
+      setConfirmReopen(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen this order')
+    } finally {
+      setReopeningId(null)
+    }
+  }
+
+  async function doExcel() {
+    setExporting(true)
+    try {
+      const blob = await exportLogisticsExcel(query)
+      downloadBlob(blob, `logistics_orders_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not export')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const shown = loading ? 'Loading…' : `${total} total${pageCount > 1 ? ` · page ${page} of ${pageCount}` : ''}`
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeader title="Logistics Status" subtitle={`${rows.length} shown`} module="logisticsStatus" />
+        <PageHeader title="Logistics Status" subtitle={shown} module="logisticsStatus" />
         <div className="flex gap-2">
-          <Button variant="outline" onClick={doExcel}>Export Excel</Button>
-          <Button variant="outline" onClick={doPdf}>Export PDF</Button>
+          <Button variant="outline" onClick={() => void doExcel()} disabled={exporting || total === 0}>
+            {exporting ? 'Exporting…' : 'Export Excel'}
+          </Button>
           {can(user, 'enter') && (
             <Button asChild>
               <Link to="/logistics-status/new">New Logistics Order</Link>
@@ -183,20 +265,20 @@ export function LogisticsStatusList() {
       <>
       <FilterBar
         search={{
-          value: filters.search ?? '',
-          onChange: (search) => setFilters((f) => ({ ...f, search })),
+          value: search,
+          onChange: setSearch,
           placeholder: 'ID, MO no., customer, item, job no…',
         }}
       >
-        <MultiSelectFilter label="Order type" options={orderTypeList} value={filters.orderType ?? []} onChange={(orderType) => setFilters((f) => ({ ...f, orderType: orderType as typeof f.orderType }))} />
-        <MultiSelectFilter label="Status" options={statusList} value={filters.status ?? []} onChange={(status) => setFilters((f) => ({ ...f, status }))} />
-        <MultiSelectFilter label="Customer" options={customerList} value={filters.customer ?? []} onChange={(customer) => setFilters((f) => ({ ...f, customer }))} />
+        <MultiSelectFilter label="Order type" options={orderTypeOptions} value={orderTypeFilter} onChange={setOrderTypeFilter} />
+        <MultiSelectFilter label="Status" options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
+        <MultiSelectFilter label="Customer" options={customerOptions} value={customerFilter} onChange={setCustomerFilter} />
         <div className="flex flex-col gap-1.5">
           <label className="text-xs text-muted">Gate out from</label>
           <input
             type="date"
-            value={filters.gateOutFrom ?? ''}
-            onChange={(e) => setFilters((f) => ({ ...f, gateOutFrom: e.target.value || undefined }))}
+            value={gateOutFrom}
+            onChange={(e) => setGateOutFrom(e.target.value)}
             className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink"
           />
         </div>
@@ -204,23 +286,37 @@ export function LogisticsStatusList() {
           <label className="text-xs text-muted">Gate out to</label>
           <input
             type="date"
-            value={filters.gateOutTo ?? ''}
-            onChange={(e) => setFilters((f) => ({ ...f, gateOutTo: e.target.value || undefined }))}
+            value={gateOutTo}
+            onChange={(e) => setGateOutTo(e.target.value)}
             className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink"
           />
         </div>
       </FilterBar>
 
+      {optionsError && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>Filter options couldn’t be loaded — {optionsError}</span>
+          <button type="button" onClick={loadOptions} className="underline">Retry</button>
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{error}</span>
+          <button type="button" onClick={() => void load()} className="underline">Retry</button>
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <Card>
           <CardContent className="flex h-48 flex-col items-center justify-center gap-2 text-center text-muted">
             <Truck size={28} />
-            <p>No logistics orders match this search.</p>
+            <p>{loading ? 'Loading logistics orders…' : 'No logistics orders match this search.'}</p>
           </CardContent>
         </Card>
       ) : (
         <div className="max-h-[65vh] overflow-auto rounded-xl border border-line bg-surface [scrollbar-width:auto]">
-          <table className="w-full min-w-[1000px] text-sm">
+          <table className="w-full min-w-[1200px] text-sm">
             <thead className="sticky top-0 z-10 bg-canvas-alt text-xs text-muted shadow-[0_1px_0_var(--color-line)]">
               <tr>
                 <SortHeader label="MO #" sortKey="systemId" sort={sort} onToggle={toggle} />
@@ -236,6 +332,8 @@ export function LogisticsStatusList() {
                 <th className="px-3 py-2 text-left">Works</th>
                 <SortHeader label="Incoterm" sortKey="incoterm" sort={sort} onToggle={toggle} />
                 <SortHeader label="Status" sortKey="status" sort={sort} onToggle={toggle} />
+                <SortHeader label="Submitted" sortKey="submitted" sort={sort} onToggle={toggle} />
+                <SortHeader label="Closed" sortKey="closed" sort={sort} onToggle={toggle} />
                 <SortHeader label="Arrival delay" sortKey="delay" sort={sort} onToggle={toggle} align="right" />
                 <SortHeader label="Actual RFD" sortKey="actualRfd" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2 text-left">Sent to Trucking</th>
@@ -243,7 +341,7 @@ export function LogisticsStatusList() {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((o) => {
+              {rows.map((o) => {
                 const jobNos = jobNumbers(o.items)
                 const itemsSummary = o.items.map((it) => `${it.itemDetail}${it.quantity !== undefined ? ` ×${it.quantity}` : ''}`)
                 const inMoGroup = !!o.moNo && (moCounts.get(o.moNo) ?? 0) > 1
@@ -251,9 +349,9 @@ export function LogisticsStatusList() {
                 const colours = [...new Set(o.packages.map((p) => p.colourCode).filter(Boolean))]
                 return (
                   <tr
-                    key={o.systemId}
+                    key={o.id}
                     className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${inMoGroup ? 'border-l-2 border-l-brand' : ''}`}
-                    onClick={() => navigate(`/logistics-status/${o.systemId}`)}
+                    onClick={() => navigate(`/logistics-status/${o.id}`)}
                   >
                     <td className="px-3 py-2">
                       <div className="tabular-nums font-semibold">
@@ -268,7 +366,7 @@ export function LogisticsStatusList() {
                     <td className="px-3 py-2 text-[13px] tabular-nums" title={jobNos.join(', ') || undefined}>
                       {jobNos.length === 0 ? '—' : jobNos.length <= 2 ? jobNos.join(', ') : `${jobNos.slice(0, 2).join(', ')} +${jobNos.length - 2}`}
                     </td>
-                    <td className="px-3 py-2">{o.customerName}</td>
+                    <td className="px-3 py-2">{o.customerName || '—'}</td>
                     <td className="px-3 py-2">
                       <span className="text-[13px]">{batchDisplayLabel(o.batchNo, o.batchLabel)}</span>
                       {inMoGroup && (
@@ -288,6 +386,16 @@ export function LogisticsStatusList() {
                     <td className="px-3 py-2">
                       <StatusBadge label={o.status} />
                     </td>
+                    <td className="px-3 py-2">
+                      {o.recordState === 'submitted'
+                        ? <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted">Submitted</span>
+                        : <span className="rounded border border-[var(--color-watch)]/30 bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-watch)]">Draft</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      {o.isLocked
+                        ? <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted" title="Delivered — an admin must reopen it before editing">Closed</span>
+                        : <span className="text-muted">—</span>}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <DelayCell days={arrivalDelayDays(o)} settled={!!o.actualArrivalDate} />
                     </td>
@@ -301,26 +409,39 @@ export function LogisticsStatusList() {
                       })()}
                     </td>
                     <td className="px-3 py-2">
-                      <TruckingHandoffBadge order={o} />
+                      {o.sentToTrucking
+                        ? <span className="rounded border border-[var(--color-healthy)]/30 bg-[var(--color-healthy-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-healthy)]">Sent</span>
+                        : <span className="text-xs text-muted">Not sent</span>}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={() => navigate(`/logistics-status/${o.systemId}`)}
+                          onClick={() => navigate(`/logistics-status/${o.id}`)}
                           className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
                         >
                           Open
                         </button>
                         {canEdit && (
                           <button
-                            onClick={() => navigate(`/logistics-status/${o.systemId}/edit/order`)}
-                            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+                            onClick={() => navigate(`/logistics-status/${o.id}/edit/order`)}
+                            disabled={o.isLocked}
+                            title={o.isLocked ? 'Closed — an admin must reopen it before editing' : undefined}
+                            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
                           >
                             Edit
                           </button>
                         )}
+                        {user?.isAdmin && o.isLocked && (
+                          <button
+                            onClick={() => setConfirmReopen(o)}
+                            disabled={reopeningId === o.id}
+                            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
+                          >
+                            {reopeningId === o.id ? 'Reopening…' : 'Reopen'}
+                          </button>
+                        )}
                         <button
-                          onClick={() => navigate(`/logistics-status/${o.systemId}/history`)}
+                          onClick={() => navigate(`/logistics-status/${o.id}/history`)}
                           title="View change history"
                           className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
                         >
@@ -335,10 +456,30 @@ export function LogisticsStatusList() {
           </table>
         </div>
       )}
-      <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} onPage={setPage} />
+
+      {/* Rows are SERVER-paged, so this drives the fetch rather than slicing
+          an already-loaded array. */}
+      <Pagination page={page} pageCount={pageCount} total={total} pageSize={PAGE_SIZE} onPage={setPage} />
 
       </>
       )}
+
+      <ConfirmDialog
+        open={!!confirmReopen}
+        title="Reopen this order?"
+        description={
+          <>
+            <span className="font-medium text-ink">{confirmReopen?.moNo || `Order #${confirmReopen?.id}`}</span> is
+            closed. Reopening makes it editable again until it is submitted at "Delivered" once more.
+          </>
+        }
+        confirmLabel="Yes, reopen it"
+        confirmingLabel="Reopening…"
+        confirming={!!confirmReopen && reopeningId === confirmReopen.id}
+        danger={false}
+        onConfirm={() => confirmReopen && void handleReopen(confirmReopen)}
+        onCancel={() => setConfirmReopen(null)}
+      />
     </div>
   )
 }

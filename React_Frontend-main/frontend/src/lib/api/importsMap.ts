@@ -112,6 +112,11 @@ export interface ImportsListRow {
   isLocked: boolean
   isClosed: boolean
 
+  /** Cross-module hand-off timestamps (ISO), or null when not sent. These
+   *  drive the list's "Sent" column and disable each Send button. */
+  sentToLogisticsAt: string | null
+  sentToTruckingAt: string | null
+
   // --- detail-page-only fields (harmless on the list, just unused there) ---
   gdNumber: string | null
   gdFilingDate: string | null
@@ -269,6 +274,9 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
     recordState: c.record_state,
     isLocked: c.is_locked,
     isClosed: status === CLOSED_STATUS,
+
+    sentToLogisticsAt: c.sent_to_logistics_at ?? null,
+    sentToTruckingAt: c.sent_to_trucking_at ?? null,
 
     gdNumber: c.gd_number,
     gdFilingDate: c.gd_filing_date,

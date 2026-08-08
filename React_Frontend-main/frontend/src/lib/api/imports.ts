@@ -113,6 +113,9 @@ export interface ApiConsignment {
   eta_revisions: ApiEtaRevision[]
   status_updates: ApiStatusUpdate[]
   missing_fields: string[]
+  /** Cross-module hand-off. NULL = not sent. Set only by the send routes. */
+  sent_to_logistics_at: string | null
+  sent_to_trucking_at: string | null
   record_state: string
   is_locked: boolean
   is_deleted: boolean
@@ -214,6 +217,8 @@ export interface ConsignmentQuery {
   includeClosed?: boolean
   /** Only records still incomplete (server-side: record_state === 'draft'). */
   missingOnly?: boolean
+  /** Only consignments handed to logistics and/or trucking — the "Forwarded" view. */
+  sentOnly?: boolean
   includeDeleted?: boolean
   etdFrom?: string
   etdTo?: string
@@ -230,6 +235,7 @@ function buildQuery(q: ConsignmentQuery): URLSearchParams {
   if (q.stage && q.stage !== 'all') params.set('stage', q.stage)
   if (q.includeClosed) params.set('include_closed', 'true')
   if (q.missingOnly) params.set('missing_only', 'true')
+  if (q.sentOnly) params.set('sent_only', 'true')
   if (q.includeDeleted) params.set('include_deleted', 'true')
   if (q.etdFrom) params.set('etd_from', q.etdFrom)
   if (q.etdTo) params.set('etd_to', q.etdTo)
@@ -430,6 +436,24 @@ export async function revertConsignmentUpdate(id: number | string, historyId: nu
     `/consignments/revert-update/${id}/${historyId}`,
     { method: 'PUT' },
   )
+  return res.data
+}
+
+/**
+ * Hand a consignment over to Logistics (shipping + clearing) or Trucking
+ * (inland movement). An explicit act, not something inferred: being bought FOB
+ * only makes a consignment ELIGIBLE — the backend 400s on any other incoterm,
+ * and the trucking inbox reads the resulting timestamp rather than the
+ * incoterm. The record stays in imports afterwards; these just stamp when it
+ * was handed over.
+ */
+export async function sendToLogisticsApi(id: number | string): Promise<ApiConsignment> {
+  const res = await apiFetch<DetailEnvelope>(`/consignments/${id}/send-to-logistics`, { method: 'POST' })
+  return res.data
+}
+
+export async function sendToTruckingApi(id: number | string): Promise<ApiConsignment> {
+  const res = await apiFetch<DetailEnvelope>(`/consignments/${id}/send-to-trucking`, { method: 'POST' })
   return res.data
 }
 

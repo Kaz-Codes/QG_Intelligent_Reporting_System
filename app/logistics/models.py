@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Optional, TYPE_CHECKING
 
 from app.database import Base
+from app.enums import JobKind
 from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
@@ -74,6 +75,29 @@ class LogisticsConsignment(Base, TimestampMixin):
     department: Mapped[Optional[str]] = mapped_column(
         String(20),
         nullable=True
+    )
+
+    # 'standard' (an export/local order) or 'rework' (a customer-rework
+    # service job). Not a user-facing field — it follows from which flow was
+    # entered, is set once at creation and never changes. server_default too:
+    # the loaders insert with raw psycopg2, where a Python-side default never
+    # runs, and every loaded row is a standard order.
+    job_kind: Mapped[str] = mapped_column(
+        String(20),
+        default=JobKind.STANDARD.value,
+        server_default=JobKind.STANDARD.value,
+        nullable=False,
+        index=True
+    )
+
+    # EFS or Regular (ShipmentMode). Set by the Logistics team on the order,
+    # like department. Nullable rather than defaulted: the loaded workbooks
+    # have no such column, and defaulting every historical order to "Regular"
+    # would make an unrecorded value look recorded.
+    shipment_mode: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        index=True
     )
 
     # Origin is a country for exports, and city + province for local orders.

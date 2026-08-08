@@ -227,9 +227,61 @@ rather than their own tables: per-item `rfd_history`, per-package `allocations`
 `remarks_log` feed. MO/batch numbering and cross-batch resolution are
 frontend-driven — the backend stores what it's given.
 
-Endpoints mirror imports (`POST /`, `GET /`, `GET /export`, `GET /{id}`,
-`GET /{id}/trucking-jobs`, `PUT`, `POST /{id}/submit`, `POST /{id}/reopen`,
-`DELETE`, undo-delete, change-history, revert). Closes/locks at **"Delivered"**.
+Endpoints mirror imports (`POST /`, `GET /`, `GET /export`, `GET /filter-options`,
+`GET /{id}`, `GET /{id}/trucking-jobs`, `PUT`, `POST /{id}/submit`,
+`POST /{id}/reopen`, `DELETE`, undo-delete, change-history, revert).
+
+**Closes/locks at "Delivered" AND submitted** — the same two-part rule as
+imports, not status alone. Only `POST /{id}/submit` sets `is_locked`; the update
+route never closes an order, so a draft may sit at "Delivered" and stay
+editable. `serialize_consignment` returns `missing_fields` (from
+`submission_errors`, imported inside the function to dodge the helpers cycle)
+so a disabled Submit and a failed submit can't disagree.
+
+`shipment_mode` (**EFS / Regular**, `ShipmentMode`) is an order-level attribute
+like department. Nullable and NULL on every loaded row — the workbooks have no
+such column — so the UI shows a gap rather than defaulting it to "Regular".
+
+**Frontend (orders) is wired**: `lib/api/logistics.ts` (transport),
+`logisticsMap.ts` (`apiToRow` / `apiToDraft` / `draftToPayload` /
+`remapNewChildIds`), `logisticsChangeHistoryMap.ts`. List, detail, wizard and
+change history all run on the API. Two things to know:
+
+- The list has **no closed stage and no `include_closed`** — a delivered order
+  stays visible and reports "Closed" in its own column. The backend list has no
+  such param either, so the two agree by construction.
+- **Child-row identity.** The wizard identifies items/packages/containers by a
+  string id, and a package's `allocations` reference items by it. There is no
+  column for that string, so it is DERIVED from the backend id (`item-42`) and
+  is stable across reloads. A row added in the browser carries a uuid until the
+  first save; `remapNewChildIds` rewrites it — and any allocation pointing at
+  it — once the backend assigns real ids.
+
+### Service Jobs — the two halves are not alike
+
+**Customer Rework is WIRED, and has no table of its own.** A rework job is
+structurally an order (items, packing, shipping, expenditures, status, Send to
+Trucking), so it is a `logistics_consignments` row with **`job_kind='rework'`**
+(`JobKind`) as the discriminator — which gives it change history, submit and
+the closed lock for free.
+
+- **Not a user-facing field.** There is no form control; it follows from which
+  flow was entered ("New Logistics Order" vs "New Rework Job"), is accepted on
+  **create only**, and is **immutable** — `helpers.updated_fields` excludes it,
+  so a PUT can never move a record between the two tabs. The wizard sends the
+  whole draft on every save, so it *is* in the payload; ignoring it is what
+  makes it stick. On an existing record the wizard reads the kind from the
+  server, never from the route.
+- `GET /logistics/` and `/export` take **`job_kind`** — `standard` (**the
+  default**, so the Orders list can't accidentally show service jobs),
+  `rework`, or `all`.
+
+**Import FOB is a READ-THROUGH, and is also wired.** The consignment's home
+stays imports (its item details were entered there); logistics only sees the
+ones imports explicitly handed over. `GET /logistics/import-fob-jobs` lists
+consignments with `sent_to_logistics_at` set, and the row opens the **source
+consignment in imports** rather than anything in logistics. There is no "take"
+step, so — unlike trucking's queue — nothing is ever consumed off this list.
 
 ## trucking — `/trucking`
 
@@ -250,10 +302,27 @@ Closes/locks when **every vehicle is "Delivered"** (`helpers.is_closed`).
 
 The three modules are one flow; trucking work originates in the other two.
 
+**Nothing is inferred — every hand-off is an explicit act.** Imports records it
+on the consignment itself: **`sent_to_logistics_at`** / **`sent_to_trucking_at`**
+(nullable timestamps, NULL = not sent), set only by
+`POST /consignments/{id}/send-to-logistics` and `.../send-to-trucking`.
+**`incoterm == 'FOB'` decides only whether Send is OFFERED** — the routes 400 on
+any other incoterm, and 423 on a closed consignment. Sending is idempotent and
+one-way; the front end disables each button once its own timestamp is set.
+
+**The record stays everywhere.** It keeps its row in imports (and appears under
+`?sent_only=true`, the "Forwarded" view), shows in logistics' Service Jobs, and
+sits in trucking's open requests until a job takes it — after which the JOB is
+the link back, which is why a taken request drops off that one queue.
+
 - **`GET /trucking/open-requests`** — the trucking inbox: logistics orders with
-  `sent_to_trucking` + import consignments bought FOB, **minus** the ones a
-  trucking job already took (matched by `(source, source_ref)`). Each carries a
-  snapshot the "New Trucking Job" form pre-fills from.
+  `sent_to_trucking` + import consignments with **`sent_to_trucking_at`**
+  (NOT every FOB consignment — that older behaviour filled the queue with work
+  nobody had asked for), **minus** the ones a trucking job already took (matched
+  by `(source, source_ref)`). Each carries a snapshot the "New Trucking Job"
+  form pre-fills from.
+- **`GET /logistics/import-fob-jobs`** — the logistics side: consignments with
+  `sent_to_logistics_at`. Never consumed; logistics has no "take" step.
 - **`GET /consignments/{id}/trucking-jobs`** and
   **`GET /logistics/{id}/trucking-jobs`** — the reverse lookup (which jobs came
   from this consignment/order).

@@ -169,7 +169,8 @@ ORDER_CANCELLED_VALUE = Status.ORDER_CANCELLED.value
 
 def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
                             branch_id, supplier_id, requisition_type,
-                            missing_only, etd_from, etd_to, q, page, page_size):
+                            missing_only, etd_from, etd_to, q, page, page_size,
+                            sent_only=False):
     # status, branch_id, supplier_id and requisition_type are lists (the list
     # screen filters are multi-select), so each is an IN filter, not an equals.
     conditions = []
@@ -229,6 +230,16 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     # record is a draft (a submitted one has passed the full rule set).
     if missing_only:
         conditions.append(Consignment.record_state == "draft")
+
+    # The "Forwarded" view: consignments handed to logistics and/or trucking.
+    # Either timestamp counts — the two hand-offs are independent.
+    if sent_only:
+        conditions.append(
+            or_(
+                Consignment.sent_to_logistics_at.is_not(None),
+                Consignment.sent_to_trucking_at.is_not(None),
+            )
+        )
 
     if etd_from:
         conditions.append(Consignment.etd >= etd_from)

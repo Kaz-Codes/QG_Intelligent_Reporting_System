@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge } from '@/components/StatusBadge'
@@ -10,8 +10,13 @@ import {
   totalQuantity, totalNetWeight, orderTypeLabel, batchDisplayLabel,
   packingDelay, packingSavings, totalPackageNetWeight, totalPackageGrossWeight,
 } from './schema'
-import { getLogisticsOrder, getCrossBatchItems, outstandingByItemAcrossMo } from '@/lib/logisticsStatusData'
-import { getTruckingReadthrough } from '@/lib/truckingStatusData'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { ApiError } from '@/lib/api/client'
+import {
+  getLogisticsOrder, listLogisticsOrders, submitLogisticsOrder, reopenLogisticsOrder,
+  getLinkedTruckingJobs, parseSubmitErrors, type ApiLinkedTruckingJob,
+} from '@/lib/api/logistics'
+import { apiToRow, type LogisticsListRow, type LogisticsListItem } from '@/lib/api/logisticsMap'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const dateShort = (v?: string) => {
@@ -57,25 +62,137 @@ const LOCAL_COSTS: { name: string; label: string }[] = [
  * marketing delay, the merged remarks feed, and — once sent — a read-through
  * into the linked Trucking job.
  */
+/** An item belonging to a SIBLING batch under the same MO, which one of this
+ *  order's packages allocated against. */
+interface CrossBatchItem {
+  item: LogisticsListItem
+  sourceOrderId: string
+  sourceBatchLabel: string
+}
+
 export default function LogisticsStatusDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  const row = useMemo(() => (id ? getLogisticsOrder(id) : undefined), [id])
-  const editable = can(user, 'editAny') || can(user, 'editOwnDraft')
-  const crossBatchItems = row?.moNo ? getCrossBatchItems(row.moNo, row.systemId) : []
+  const [row, setRow] = useState<LogisticsListRow | null>(null)
+  const [crossBatchItems, setCrossBatchItems] = useState<CrossBatchItem[]>([])
+  const [truckingJobs, setTruckingJobs] = useState<ApiLinkedTruckingJob[]>([])
+  const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [reopening, setReopening] = useState(false)
+  const [confirmReopen, setConfirmReopen] = useState(false)
+  const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
 
-  if (!row) {
+  const load = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
+    setError(null)
+    setNotFound(false)
+    try {
+      const mapped = apiToRow(await getLogisticsOrder(id))
+      setRow(mapped)
+
+      // Cross-batch allocations point at items owned by SIBLING batches under
+      // the same MO. The backend stores those references but never resolves
+      // them (MO/batch grouping is front-end-driven, see CLAUDE.md), so the
+      // siblings are fetched by searching on the MO — `q` covers mo_no.
+      if (mapped.moNo) {
+        const { rows: siblings } = await listLogisticsOrders({ search: mapped.moNo, pageSize: 100 })
+        setCrossBatchItems(
+          siblings
+            .map(apiToRow)
+            .filter((s) => s.id !== mapped.id && s.moNo === mapped.moNo)
+            .flatMap((s) => s.items.map((item) => ({
+              item,
+              sourceOrderId: String(s.id),
+              sourceBatchLabel: batchDisplayLabel(s.batchNo, s.batchLabel),
+            }))),
+        )
+      } else {
+        setCrossBatchItems([])
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) setNotFound(true)
+      else setError(err instanceof Error ? err.message : 'Could not load this order')
+    } finally {
+      setLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => { void load() }, [load])
+
+  // Read-through into any trucking job created from this order. Independent of
+  // the main load so a trucking failure never blanks the page.
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    getLinkedTruckingJobs(id)
+      .then((jobs) => { if (!cancelled) setTruckingJobs(jobs) })
+      .catch(() => { /* panel just says "not linked" */ })
+    return () => { cancelled = true }
+  }, [id])
+
+  async function handleSubmit() {
+    if (!row) return
+    setSubmitting(true)
+    setError(null)
+    setSubmitErrors(null)
+    try {
+      await submitLogisticsOrder(row.id)
+      await load()
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const parsed = parseSubmitErrors(err.detail)
+        if (parsed) { setSubmitErrors(parsed.errors); return }
+      }
+      setError(err instanceof Error ? err.message : 'Could not submit this order')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleReopen() {
+    if (!row) return
+    setConfirmReopen(false)
+    setReopening(true)
+    setError(null)
+    try {
+      await reopenLogisticsOrder(row.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen this order')
+    } finally {
+      setReopening(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <PageHeader title="Loading order…" module="logisticsStatus" />
+      </div>
+    )
+  }
+
+  if (notFound || !row) {
     return (
       <div className="space-y-4">
         <PageHeader title="Logistics order not found" module="logisticsStatus" />
+        {error && <p className="text-sm text-risk">{error}</p>}
         <button onClick={() => navigate('/logistics-status')} className="text-sm text-brand hover:underline">
           ← Back to logistics orders
         </button>
       </div>
     )
   }
+
+  // A closed order is locked for everyone; only an admin can reopen it.
+  const editable = (can(user, 'editAny') || can(user, 'editOwnDraft')) && !row.isLocked
+  const submittable = editable && row.recordState !== 'submitted'
+  const submitBlocked = row.missingFields.length > 0
 
   const isExport = row.orderType === 'Export'
   const costs = isExport ? EXPORT_COSTS : LOCAL_COSTS
@@ -84,18 +201,31 @@ export default function LogisticsStatusDetail() {
   const qty = totalQuantity(row.items)
   const netW = totalNetWeight(row.items)
   const arrivalDelay = daysBetween(row.croArrivalDate, row.actualArrivalDate)
-  const outstanding = outstandingByItemAcrossMo(row.items, row.packages, row.moNo, row.systemId)
   const allItems = [...row.items, ...crossBatchItems.map((c) => c.item)]
   const totalPkgNet = totalPackageNetWeight(row.packages, allItems)
   const totalPkgGross = totalPackageGrossWeight(row.packages)
   const mDelay = marketingDelay(row.packages, row.gateOutDate)
   const feed = buildRemarksFeed(row.items, row.remarksLog)
-  const readthrough = row.sentToTrucking ? getTruckingReadthrough(row.systemId) : null
+
+  // How much of each item is still unallocated. Computed here rather than via
+  // the mock's outstandingByItemAcrossMo, which keys on the mock system id;
+  // allocations reference items by their string id, and only THIS order's
+  // packages can consume THIS order's items.
+  const outstanding: Record<string, number> = {}
+  for (const item of row.items) {
+    const allocated = row.packages.reduce(
+      (sum, pkg) => sum + pkg.allocations
+        .filter((a) => a.itemId === item.id)
+        .reduce((s, a) => s + (a.quantity ?? 0), 0),
+      0,
+    )
+    outstanding[item.id] = Math.max(0, (item.quantity ?? 0) - allocated)
+  }
 
   const EditLink = ({ step }: { step: string }) => {
     if (!editable) return null
     return (
-      <button onClick={() => navigate(`/logistics-status/${row.systemId}/edit/${step}`)} className="ml-auto text-xs text-brand hover:underline">
+      <button onClick={() => navigate(`/logistics-status/${row.id}/edit/${step}`)} className="ml-auto text-xs text-brand hover:underline">
         Edit
       </button>
     )
@@ -110,22 +240,70 @@ export default function LogisticsStatusDetail() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader
-          title={row.systemId}
+          title={row.moNo || `Order #${row.id}`}
           subtitle={`${row.customerName} · ${orderTypeLabel(row.department, row.orderType)} · ${batchDisplayLabel(row.batchNo, row.batchLabel)} · ${row.items.length} item${row.items.length === 1 ? '' : 's'}`}
           module="logisticsStatus"
         />
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <StatusBadge label={row.status} />
+          <span className={`rounded border px-1.5 py-0.5 text-[11px] ${row.recordState === 'submitted'
+            ? 'border-line text-muted'
+            : 'border-[var(--color-watch)]/30 bg-[var(--color-watch-bg)] text-[var(--color-watch)]'}`}>
+            {row.recordState === 'submitted' ? 'Submitted' : 'Draft'}
+          </span>
+          {row.isLocked && (
+            <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted"
+              title="Delivered and submitted — an admin must reopen it before editing">
+              Closed
+            </span>
+          )}
+          {row.isLocked && user?.isAdmin && (
+            <Button variant="outline" onClick={() => setConfirmReopen(true)} disabled={reopening}>
+              {reopening ? 'Reopening…' : 'Reopen'}
+            </Button>
+          )}
           <Button variant="outline" onClick={() => window.print()}>Export PDF</Button>
+          {submittable && (
+            <Button
+              variant="outline"
+              onClick={() => void handleSubmit()}
+              disabled={submitting || submitBlocked}
+              title={submitBlocked ? `Missing: ${row.missingFields.join(', ')}` : undefined}
+            >
+              {submitting ? 'Submitting…' : 'Submit'}
+            </Button>
+          )}
           {editable && (
             <Button asChild>
-              <a href="#" onClick={(e) => { e.preventDefault(); navigate(`/logistics-status/${row.systemId}/edit/order`) }}>
+              <a href="#" onClick={(e) => { e.preventDefault(); navigate(`/logistics-status/${row.id}/edit/order`) }}>
                 Edit order
               </a>
             </Button>
           )}
         </div>
       </div>
+
+      {error && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{error}</span>
+          <button type="button" onClick={() => void load()} className="underline">Retry</button>
+        </div>
+      )}
+
+      {submitErrors && submitErrors.length > 0 && (
+        <div className="rounded-lg bg-risk-bg px-3 py-2.5 text-sm text-risk">
+          <p className="font-medium">This order can’t be submitted yet:</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {submitErrors.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {row.isLocked && (
+        <div className="rounded-lg border border-line bg-canvas-alt px-3.5 py-2.5 text-sm text-muted">
+          This order is closed. An admin must reopen it before it can be edited.
+        </div>
+      )}
 
       {/* key figures */}
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3 lg:grid-cols-6">
@@ -359,16 +537,32 @@ export default function LogisticsStatusDetail() {
 
         <div className="mt-3 rounded-lg border border-line bg-canvas-alt px-3 py-2.5 text-[13px]">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Trucking</div>
-          {!row.sentToTrucking ? (
-            <p className="text-muted">Not sent to Trucking yet.</p>
-          ) : !readthrough || !readthrough.taken ? (
-            <p className="text-muted">Awaiting trucking pickup — visible as an open request in Trucking Status.</p>
+          {/* Read-through via GET /logistics/{id}/trucking-jobs — the reverse
+              lookup cross_module already provides. "Sent" is the order's own
+              flag; a job existing is what proves trucking actually took it. */}
+          {truckingJobs.length === 0 ? (
+            !row.sentToTrucking
+              ? <p className="text-muted">Not sent to Trucking yet.</p>
+              : <p className="text-muted">Awaiting trucking pickup — visible as an open request in Trucking Status.</p>
           ) : (
-            <div className="grid gap-1 sm:grid-cols-3">
-              <div><span className="text-muted">Job:</span> {readthrough.truckingJobId}</div>
-              <div><span className="text-muted">Transporter:</span> {readthrough.transporterName || '—'}</div>
-              <div><span className="text-muted">Vehicles:</span> {readthrough.vehicleCount}</div>
-              <div className="sm:col-span-3"><span className="text-muted">Tracking:</span> {readthrough.trackingRollupLabel}</div>
+            <div className="space-y-1.5">
+              {truckingJobs.map((job) => {
+                const vehicles = (job.vehicles ?? []).filter((v) => !v.is_deleted)
+                const delivered = vehicles.filter((v) => v.tracking_status === 'Delivered').length
+                const rollup = vehicles.length === 0
+                  ? 'No vehicles yet'
+                  : delivered === vehicles.length
+                    ? 'All delivered'
+                    : `${delivered} of ${vehicles.length} delivered`
+                return (
+                  <div key={job.id} className="grid gap-1 sm:grid-cols-3">
+                    <div><span className="text-muted">Job:</span> #{job.id}</div>
+                    <div><span className="text-muted">Transporter:</span> {job.transporter_name || '—'}</div>
+                    <div><span className="text-muted">Vehicles:</span> {vehicles.length}</div>
+                    <div className="sm:col-span-3"><span className="text-muted">Tracking:</span> {rollup}</div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
@@ -393,6 +587,23 @@ export default function LogisticsStatusDetail() {
           </div>
         )}
       </Section>
+
+      <ConfirmDialog
+        open={confirmReopen}
+        title="Reopen this order?"
+        description={
+          <>
+            <span className="font-medium text-ink">{row.moNo || `Order #${row.id}`}</span> is closed. Reopening
+            makes it editable again until it is submitted at "Delivered" once more.
+          </>
+        }
+        confirmLabel="Yes, reopen it"
+        confirmingLabel="Reopening…"
+        confirming={reopening}
+        danger={false}
+        onConfirm={() => void handleReopen()}
+        onCancel={() => setConfirmReopen(false)}
+      />
     </div>
   )
 }

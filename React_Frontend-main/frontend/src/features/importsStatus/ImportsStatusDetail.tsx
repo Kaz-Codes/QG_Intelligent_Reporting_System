@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
@@ -38,6 +39,7 @@ export function ImportsStatusDetail() {
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reopening, setReopening] = useState(false)
+  const [confirmReopen, setConfirmReopen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const load = useCallback(async () => {
@@ -63,7 +65,7 @@ export function ImportsStatusDetail() {
 
   async function handleReopen() {
     if (!row) return
-    if (!window.confirm('Reopen this consignment? It will become editable again until closed once more.')) return
+    setConfirmReopen(false)
     setReopening(true)
     try {
       await reopenConsignmentApi(row.id)
@@ -175,7 +177,7 @@ export function ImportsStatusDetail() {
             </Tag>
           )}
           {row.isLocked && user?.isAdmin && (
-            <Button variant="outline" onClick={() => void handleReopen()} disabled={reopening}>
+            <Button variant="outline" onClick={() => setConfirmReopen(true)} disabled={reopening}>
               {reopening ? 'Reopening…' : 'Reopen'}
             </Button>
           )}
@@ -428,6 +430,23 @@ export function ImportsStatusDetail() {
           fees it can't see. This is the shipment's visible expenditure, for reference.
         </p>
       </Section>
+
+      <ConfirmDialog
+        open={confirmReopen}
+        title="Reopen this consignment?"
+        description={
+          <>
+            <span className="font-medium text-ink">{row.systemId}</span> is closed. Reopening makes it editable
+            again until it is submitted at "Arrived at Works" once more.
+          </>
+        }
+        confirmLabel="Yes, reopen it"
+        confirmingLabel="Reopening…"
+        confirming={reopening}
+        danger={false}
+        onConfirm={() => void handleReopen()}
+        onCancel={() => setConfirmReopen(false)}
+      />
     </div>
   )
 }

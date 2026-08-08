@@ -257,6 +257,28 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
+    #--- cross-module hand-off ---
+    # When this consignment was handed to Logistics (shipping + clearing) and
+    # to Trucking (inland movement). NULL means "not sent". They are the
+    # record of INTENT: nothing reaches either module until someone sends it,
+    # which is why the trucking inbox keys off sent_to_trucking_at rather than
+    # inferring from the incoterm (FOB only decides whether Send is OFFERED).
+    #
+    # Timestamps rather than booleans because "when was this handed over" is
+    # the question people actually ask, and a bool answers strictly less.
+    # Set only by the dedicated send routes — never by a normal update.
+    sent_to_logistics_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True
+    )
+
+    sent_to_trucking_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True
+    )
+
     # Draft vs submitted. A draft saves with anything (or nothing) filled;
     # submitting runs the full rule set (see helpers.submission_errors) and,
     # only if it passes, flips this to "submitted". Submitting never locks the

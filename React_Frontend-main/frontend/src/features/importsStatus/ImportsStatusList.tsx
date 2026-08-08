@@ -5,6 +5,7 @@ import { FilterBar } from '@/components/FilterBar'
 import { SegmentedControl } from '@/components/SegmentedControl'
 import { MultiSelectFilter } from '@/components/MultiSelectFilter'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import { SortableTable, type SortableColumn } from './components/SortableTable'
@@ -14,11 +15,8 @@ import { STAGE_GROUPS } from '@/lib/importsStages'
 import { CANCELLED_STATUS } from './schema'
 import {
   listConsignments, fetchFilterOptions, exportConsignmentsExcel, downloadBlob, reopenConsignmentApi,
-  type ConsignmentQuery,
+  sendToLogisticsApi, sendToTruckingApi, type ConsignmentQuery,
 } from '@/lib/api/imports'
-import {
-  sendToLogistics, sendToTrucking, forwardStateOf, getForwardedConsignments, type ForwardRecord,
-} from '@/lib/importsStatusData'
 import {
   apiToRow, slippageDays, requiredDelayDays, freeDaysLeft,
   type ImportsListRow,
@@ -53,7 +51,6 @@ export function ImportsStatusList() {
   // --- filter state (drives the query) ---
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'consignments' | 'forwarded'>('consignments')
-  const [, forceForwardTick] = useState(0)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [stage, setStage] = useState<StageKey>('all')
   const [statusFilter, setStatusFilter] = useState<string[]>([])
@@ -74,6 +71,10 @@ export function ImportsStatusList() {
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [reopeningId, setReopeningId] = useState<number | null>(null)
+  /** The closed consignment awaiting reopen confirmation; null = no dialog. */
+  const [confirmReopen, setConfirmReopen] = useState<ImportsListRow | null>(null)
+  /** `${id}:${target}` while that hand-off is in flight. */
+  const [sendingKey, setSendingKey] = useState<string | null>(null)
 
   // --- dropdown options, from the data itself ---
   const [statusOptions, setStatusOptions] = useState<{ value: string; canonical: boolean }[]>([])
@@ -163,7 +164,7 @@ export function ImportsStatusList() {
   useEffect(() => { void load() }, [load])
 
   async function handleReopen(id: number) {
-    if (!window.confirm('Reopen this consignment? It will become editable again until closed once more.')) return
+    setConfirmReopen(null)
     setReopeningId(id)
     try {
       await reopenConsignmentApi(id)
@@ -172,6 +173,22 @@ export function ImportsStatusList() {
       setError(err instanceof Error ? err.message : 'Could not reopen this consignment')
     } finally {
       setReopeningId(null)
+    }
+  }
+
+  /** Hand a consignment to Logistics / Trucking. The backend records WHEN, so
+   *  the list just re-reads afterwards rather than patching state locally. */
+  async function handleSend(row: ImportsListRow, target: 'logistics' | 'trucking') {
+    setSendingKey(`${row.id}:${target}`)
+    setError(null)
+    try {
+      if (target === 'logistics') await sendToLogisticsApi(row.id)
+      else await sendToTruckingApi(row.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Could not send to ${target}`)
+    } finally {
+      setSendingKey(null)
     }
   }
 
@@ -388,6 +405,37 @@ export function ImportsStatusList() {
       ),
     },
     {
+      // Cross-module hand-off state. Only FOB consignments can be sent, so a
+      // non-FOB row says so rather than showing an empty dash that reads like
+      // "not sent yet".
+      key: 'sent', label: 'Sent', width: 130,
+      sortValue: (r) => (r.sentToLogisticsAt ? 2 : 0) + (r.sentToTruckingAt ? 1 : 0),
+      render: (r) => {
+        if (r.incoterm !== 'FOB') {
+          return <span className="text-muted" title="Only FOB consignments are handed onward">n/a</span>
+        }
+        if (!r.sentToLogisticsAt && !r.sentToTruckingAt) {
+          return <span className="text-muted">Not sent</span>
+        }
+        return (
+          <div className="flex flex-col gap-0.5">
+            {r.sentToLogisticsAt && (
+              <span className="text-[11px] text-[var(--color-healthy)]"
+                title={`Sent to Logistics ${new Date(r.sentToLogisticsAt).toLocaleString()}`}>
+                ✓ Logistics
+              </span>
+            )}
+            {r.sentToTruckingAt && (
+              <span className="text-[11px] text-[var(--color-healthy)]"
+                title={`Sent to Trucking ${new Date(r.sentToTruckingAt).toLocaleString()}`}>
+                ✓ Trucking
+              </span>
+            )}
+          </div>
+        )
+      },
+    },
+    {
       key: 'actions', label: '', width: 340,
       render: (r) => (
         <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -409,34 +457,47 @@ export function ImportsStatusList() {
           )}
           {user?.isAdmin && r.isLocked && (
             <button
-              onClick={() => void handleReopen(r.id)}
+              onClick={() => setConfirmReopen(r)}
               disabled={reopeningId === r.id}
               className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
             >
               {reopeningId === r.id ? 'Reopening…' : 'Reopen'}
             </button>
           )}
-          {(r.incoterm === 'FOB') && (() => {
-            const fwd = forwardStateOf(r.systemId)
-            return (
-              <>
-                <button
-                  onClick={() => { sendToLogistics(r); forceForwardTick((t) => t + 1) }}
-                  title={fwd.logistics ? 'Already sent to Logistics — click to re-send' : 'Send to Logistics (shipping & clearing)'}
-                  className={`rounded border px-2.5 py-1 text-[11px] ${fwd.logistics ? 'border-[var(--color-healthy)] text-[var(--color-healthy)]' : 'border-line hover:border-muted'}`}
-                >
-                  {fwd.logistics ? '✓ Logistics' : 'Send → Logistics'}
-                </button>
-                <button
-                  onClick={() => { sendToTrucking(r); forceForwardTick((t) => t + 1) }}
-                  title={fwd.trucking ? 'Already sent to Trucking — click to re-send' : 'Send to Trucking (inland movement)'}
-                  className={`rounded border px-2.5 py-1 text-[11px] ${fwd.trucking ? 'border-[var(--color-healthy)] text-[var(--color-healthy)]' : 'border-line hover:border-muted'}`}
-                >
-                  {fwd.trucking ? '✓ Trucking' : 'Send → Trucking'}
-                </button>
-              </>
-            )
-          })()}
+          {/* Send is offered only on FOB — on other incoterms the supplier
+              arranges the onward legs, so there is nothing to hand over. Each
+              button DISABLES once its own hand-off is recorded: sending is a
+              one-way act, and re-sending would only move the timestamp. */}
+          {r.incoterm === 'FOB' && (
+            <>
+              <button
+                onClick={() => void handleSend(r, 'logistics')}
+                disabled={!!r.sentToLogisticsAt || sendingKey === `${r.id}:logistics` || r.isLocked}
+                title={r.sentToLogisticsAt
+                  ? `Sent to Logistics ${new Date(r.sentToLogisticsAt).toLocaleString()}`
+                  : r.isLocked ? 'Closed — reopen it first' : 'Send to Logistics (shipping & clearing)'}
+                className={`rounded border px-2.5 py-1 text-[11px] disabled:cursor-not-allowed ${
+                  r.sentToLogisticsAt
+                    ? 'border-[var(--color-healthy)] text-[var(--color-healthy)] opacity-70'
+                    : 'border-line hover:border-muted disabled:opacity-40'}`}
+              >
+                {sendingKey === `${r.id}:logistics` ? 'Sending…' : r.sentToLogisticsAt ? '✓ Logistics' : 'Send → Logistics'}
+              </button>
+              <button
+                onClick={() => void handleSend(r, 'trucking')}
+                disabled={!!r.sentToTruckingAt || sendingKey === `${r.id}:trucking` || r.isLocked}
+                title={r.sentToTruckingAt
+                  ? `Sent to Trucking ${new Date(r.sentToTruckingAt).toLocaleString()}`
+                  : r.isLocked ? 'Closed — reopen it first' : 'Send to Trucking (inland movement)'}
+                className={`rounded border px-2.5 py-1 text-[11px] disabled:cursor-not-allowed ${
+                  r.sentToTruckingAt
+                    ? 'border-[var(--color-healthy)] text-[var(--color-healthy)] opacity-70'
+                    : 'border-line hover:border-muted disabled:opacity-40'}`}
+              >
+                {sendingKey === `${r.id}:trucking` ? 'Sending…' : r.sentToTruckingAt ? '✓ Trucking' : 'Send → Trucking'}
+              </button>
+            </>
+          )}
           <button
             onClick={() => navigate(`/imports-status/${r.id}/history`)}
             title="View change history"
@@ -470,7 +531,9 @@ export function ImportsStatusList() {
       <SegmentedControl
         options={[
           { value: 'consignments' as const, label: 'Consignments' },
-          { value: 'forwarded' as const, label: `Forwarded (${getForwardedConsignments().length})` },
+          // No count here: it would need its own query, and a stale or wrong
+          // count is worse than none (same reasoning as the stage strip).
+          { value: 'forwarded' as const, label: 'Forwarded' },
         ]}
         value={view}
         onChange={setView}
@@ -599,15 +662,73 @@ export function ImportsStatusList() {
       />
       </>
       )}
+
+      <ConfirmDialog
+        open={!!confirmReopen}
+        title="Reopen this consignment?"
+        description={
+          <>
+            <span className="font-medium text-ink">{confirmReopen?.systemId}</span> is closed. Reopening makes it
+            editable again until it is submitted at "Arrived at Works" once more.
+          </>
+        }
+        confirmLabel="Yes, reopen it"
+        confirmingLabel="Reopening…"
+        confirming={!!confirmReopen && reopeningId === confirmReopen.id}
+        danger={false}
+        onConfirm={() => confirmReopen && void handleReopen(confirmReopen.id)}
+        onCancel={() => setConfirmReopen(null)}
+      />
     </div>
   )
 }
 
-/** Read-only list of consignments explicitly forwarded to Logistics/Trucking.
- *  Mock store today (see importsStatusData FORWARDS); swaps to an API view
- *  when the backend exposes forwarding. */
+/**
+ * Read-only list of consignments handed to Logistics / Trucking, straight from
+ * the API (`sent_only`) rather than the page already loaded — a consignment
+ * sent months ago is not necessarily on the current page.
+ *
+ * The consignment KEEPS its own row in the main list; this is a view of the
+ * same records, not a queue they move into.
+ */
 function ForwardedPanel({ onNavigate }: { onNavigate: (to: string) => void }) {
-  const rows = getForwardedConsignments()
+  const [rows, setRows] = useState<ImportsListRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { rows: apiRows } = await listConsignments({ sentOnly: true, pageSize: 100, includeClosed: true })
+      setRows(apiRows.map(apiToRow))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load forwarded consignments')
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+
+  if (error) {
+    return (
+      <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+        <span>{error}</span>
+        <button type="button" onClick={() => void load()} className="underline">Retry</button>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-dashed border-line px-3 py-8 text-center text-sm text-muted">
+        Loading forwarded consignments…
+      </div>
+    )
+  }
+
   if (rows.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-line px-3 py-8 text-center text-sm text-muted">
@@ -629,11 +750,15 @@ function ForwardedPanel({ onNavigate }: { onNavigate: (to: string) => void }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r: ForwardRecord) => (
-            <tr key={r.systemId} className="border-t border-line hover:bg-canvas-alt">
+          {rows.map((r) => (
+            <tr key={r.id} className="border-t border-line hover:bg-canvas-alt">
               <td className="px-3 py-2 font-semibold tabular-nums">{r.systemId}</td>
               <td className="px-3 py-2">{r.supplier}<div className="text-[11px] text-muted">{r.origin}</div></td>
-              <td className="px-3 py-2">{r.itemSummary || '—'}</td>
+              <td className="px-3 py-2">
+                {r.items[0]?.itemName
+                  ? `${r.items[0].itemName}${r.items.length > 1 ? ` +${r.items.length - 1} more` : ''}`
+                  : '—'}
+              </td>
               <td className="px-3 py-2 text-[13px]">
                 {r.sentToLogisticsAt
                   ? <span className="text-[var(--color-healthy)]">{new Date(r.sentToLogisticsAt).toLocaleDateString()}</span>

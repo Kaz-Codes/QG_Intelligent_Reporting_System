@@ -8,10 +8,13 @@ from app.trucking.models import TruckingConsignment
 #-----------------------------------------------------
 # CROSS-MODULE LINKAGE
 #
-# The three modules are one flow. Trucking work originates in the other two:
+# The three modules are one flow. Downstream work originates in the other two,
+# and in BOTH cases it takes an explicit hand-off — nothing is inferred:
 #
 #   * a logistics order handed off with sent_to_trucking, and
-#   * an import consignment bought FOB (QG arranges the inbound truck).
+#   * an import consignment handed off with sent_to_trucking_at
+#     (being bought FOB only makes it ELIGIBLE to be sent; see
+#     imports/routes/send_consignment.py).
 #
 # A trucking job records where it came from as (source, source_ref) — e.g.
 # ("from-import-fob", "42"). This module turns those still-inert references
@@ -116,18 +119,23 @@ def derive_open_requests(db):
             "snapshot": _logistics_snapshot(order),
         })
 
-    imports_fob = db.execute(
+    # Consignments EXPLICITLY sent to trucking — not merely bought FOB.
+    # FOB only decides whether imports OFFERS the Send button; being bought on
+    # those terms is a commercial fact, not a statement that anybody intends to
+    # hand this over yet. Keying the inbox off the incoterm (as this once did)
+    # filled trucking's queue with work nobody had asked for.
+    imports_sent = db.execute(
         select(Consignment)
         .where(Consignment.is_deleted == False)
-        .where(Consignment.incoterm == "FOB")
+        .where(Consignment.sent_to_trucking_at.is_not(None))
         .options(
             selectinload(Consignment.items),
             joinedload(Consignment.supplier),
         )
-        .order_by(Consignment.id.desc())
+        .order_by(Consignment.sent_to_trucking_at.desc())
     ).scalars().all()
 
-    for consignment in imports_fob:
+    for consignment in imports_sent:
         ref = str(consignment.id)
         if ("from-import-fob", ref) in taken:
             continue
@@ -142,6 +150,56 @@ def derive_open_requests(db):
         })
 
     return requests
+
+
+#--------------------------------
+# IMPORT-FOB SERVICE JOBS (the logistics side of the hand-off)
+#
+# The consignments imports handed to LOGISTICS — the shipping/clearing work
+# logistics does on someone else's record. Unlike the trucking inbox these are
+# NOT consumed: logistics has no "take" step, and the consignment's home stays
+# imports, so nothing is subtracted here. It is a read-through, which is why
+# the rows carry the source id rather than being copied into logistics.
+#--------------------------------
+
+def derive_import_fob_jobs(db):
+    consignments = db.execute(
+        select(Consignment)
+        .where(Consignment.is_deleted == False)
+        .where(Consignment.sent_to_logistics_at.is_not(None))
+        .options(
+            selectinload(Consignment.items),
+            joinedload(Consignment.supplier),
+            joinedload(Consignment.clearing_agent),
+        )
+        .order_by(Consignment.sent_to_logistics_at.desc())
+    ).scalars().all()
+
+    jobs = []
+    for consignment in consignments:
+        items = [item for item in consignment.items if not item.is_deleted]
+        first = items[0].item_name if items else None
+        more = len(items) - 1
+
+        jobs.append({
+            "source": "from-import-fob",
+            "source_ref": str(consignment.id),
+            "consignment_id": consignment.id,
+            "instrument_number": consignment.instrument_number,
+            "supplier": consignment.supplier.name if consignment.supplier else None,
+            "origin": consignment.origin,
+            "item_summary": (
+                f"{first}{f' +{more} more' if more > 0 else ''}" if first else None
+            ),
+            "status": consignment.current_status,
+            # Free text on the consignment, so it is the agent NAME or nothing.
+            "clearing_agent": (
+                consignment.clearing_agent.name if consignment.clearing_agent else None
+            ),
+            "sent_at": consignment.sent_to_logistics_at,
+        })
+
+    return jobs
 
 
 #--------------------------------

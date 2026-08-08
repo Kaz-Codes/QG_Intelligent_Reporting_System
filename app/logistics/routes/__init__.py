@@ -10,9 +10,11 @@
 from app.logistics.routes.router import router
 
 from app.logistics.routes import create_consignment
-# Registered before get_consignment so GET /export is not captured by the
-# GET /{consignment_id} route.
+# Registered before get_consignment so GET /export and GET /filter-options are
+# not captured by the GET /{consignment_id} route (which would 422 on the int).
 from app.logistics.routes import export_consignments
+from app.logistics.routes import filter_options
+from app.logistics.routes import import_fob_jobs
 from app.logistics.routes import get_consignment
 from app.logistics.routes import get_trucking_jobs
 from app.logistics.routes import get_consignments_list

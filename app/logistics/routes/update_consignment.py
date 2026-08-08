@@ -9,7 +9,7 @@ from app.logistics.helpers import (
     updated_fields, verify_entry_ownership, apply_updates,
     new_children_to_add, updated_children, delete_missing,
     add_in_consignment_change_history, add_in_status_change_history,
-    create_child_objects, fetch_consignment, is_closed,
+    create_child_objects, fetch_consignment,
 )
 from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment, serialize_many
@@ -100,11 +100,11 @@ def update_consignment(
         # Applying header updates
         apply_updates(updation_dict, consignment)
 
-        # If this update pushed the status to "Delivered" the order is now
-        # closed, so lock it. The closing update itself goes through; only
-        # later edits are refused, until an admin reopens.
-        if is_closed(consignment):
-            consignment.is_locked = True
+        # A plain draft save never closes an order, even if this update sets
+        # the status to "Delivered" on an already-submitted record —
+        # submission is what closes it (see submit_consignment.py), not merely
+        # saving while both conditions happen to be true. Only /submit locks.
+        # Mirrors imports.
 
         # Applying line updates
         items_map = {item.id: item for item in consignment.items}

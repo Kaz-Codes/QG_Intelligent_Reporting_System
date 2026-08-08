@@ -1,7 +1,8 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.enums import (
-    LogisticsStatus, OrderType, Department, Incoterm, PackingStatus,
+    LogisticsStatus, OrderType, Department, Incoterm, PackingStatus, ShipmentMode,
+    JobKind,
 )
 from datetime import date
 from decimal import Decimal
@@ -106,6 +107,12 @@ class LogisticsConsignmentSchema(BaseModel):
     #--- step 1: order ---
     order_type: Optional[OrderType] = None
     department: Optional[Department] = None
+    # Accepted on CREATE only — it says which flow the record was started from
+    # ("New Logistics Order" vs "New Rework Job"), which the server cannot
+    # infer. The update route excludes it (see helpers.updated_fields), so a
+    # PUT can never move a record between the Orders and Service Jobs tabs.
+    job_kind: Optional[JobKind] = None
+    shipment_mode: Optional[ShipmentMode] = None
     origin_country: Optional[str] = Field(None, max_length=255)
     origin_city: Optional[str] = Field(None, max_length=255)
     origin_province: Optional[str] = Field(None, max_length=255)

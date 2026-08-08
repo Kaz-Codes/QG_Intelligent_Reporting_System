@@ -25,7 +25,9 @@ def get_consignments_list(
     missing_only : Optional[bool] = False,
     etd_from : Optional[date] = None,
     etd_to : Optional[date] = None,
-    q : Optional[str] = None
+    q : Optional[str] = None,
+    # The "Forwarded" view: only consignments handed to logistics or trucking.
+    sent_only : Optional[bool] = False
     ):
 
     db = SessionLocal()
@@ -49,7 +51,8 @@ def get_consignments_list(
         consignments, total = fetch_consignments_page(
             db, include_deleted, include_closed, status, stage,
             branch_id, supplier_id, requisition_type,
-            missing_only, etd_from, etd_to, q, page, page_size
+            missing_only, etd_from, etd_to, q, page, page_size,
+            sent_only=sent_only
         )
 
         # Serializeing this page of consignments

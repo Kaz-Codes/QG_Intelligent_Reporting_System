@@ -10,7 +10,7 @@ from app.logistics.models import (
     LogisticsChangeHistory, LogisticsStatusHistory,
 )
 from app.logistics.serializers import serialize_many
-from app.enums import LogisticsStatus
+from app.enums import LogisticsStatus, JobKind
 
 
 #----------------------------------
@@ -111,13 +111,20 @@ def fetch_consignment(db, consignment_id):
 
 def fetch_consignments_page(db, include_deleted, status, order_type,
                             customer, gate_out_from, gate_out_to, q,
-                            page, page_size):
+                            page, page_size, job_kind=JobKind.STANDARD.value):
     # status, order_type and customer are lists (the list screen filters are
     # multi-select), so each is an IN filter, not an equals.
     conditions = []
 
     if not include_deleted:
         conditions.append(LogisticsConsignment.is_deleted == False)
+
+    # Defaults to 'standard' rather than "everything": this list backs the
+    # ORDERS screen, and a rework service job showing up among the export/local
+    # orders is exactly the mix-up job_kind exists to prevent. The Service Jobs
+    # tab asks for 'rework' explicitly; pass None to get both.
+    if job_kind:
+        conditions.append(LogisticsConsignment.job_kind == job_kind)
 
     if status:
         conditions.append(LogisticsConsignment.current_status.in_(status))
@@ -248,10 +255,14 @@ def fetch_consignment_history(db, consignment_id, history_id):
 def updated_fields(consignment, update_consignment_data, db):
     updation_dict = {}  #--> which field to update and its old and new value
 
-    # exclude_none because a field left out means the user did not touch it
+    # exclude_none because a field left out means the user did not touch it.
+    # job_kind is excluded as well — it is set once at creation and immutable:
+    # letting a PUT change it would silently move a record between the Orders
+    # and Service Jobs tabs. The wizard sends the whole draft on every save,
+    # so it WILL be in the payload; ignoring it here is what makes it stick.
     fields_to_update = update_consignment_data.model_dump(
         exclude_none=True,
-        exclude={"consignment_id", "items", "packages", "containers"}
+        exclude={"consignment_id", "items", "packages", "containers", "job_kind"}
     )
 
     columns = {c.key for c in LogisticsConsignment.__mapper__.column_attrs}
@@ -508,12 +519,21 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 # THE CLOSED LOCK
 #
 # An order closes when its status reaches "Delivered" — the terminal stage for
-# both export and local orders. While closed it cannot be edited by anyone
-# until an admin reopens it.
+# both export and local orders — AND it has been submitted. A draft sitting at
+# "Delivered" is not closed yet: it has not passed the full rule set in
+# submission_errors, so there is nothing to protect.
+#
+# Matches imports (see app/imports/helpers.is_closed). As there, only the
+# /submit route acts on this — a plain draft save never closes an order, no
+# matter what status it sets. While closed it cannot be edited by anyone until
+# an admin reopens it.
 #---------------------------------------
 
 def is_closed(consignment):
-    return consignment.current_status == LogisticsStatus.DELIVERED.value
+    return (
+        consignment.current_status == LogisticsStatus.DELIVERED.value
+        and consignment.record_state == "submitted"
+    )
 
 
 #---------------------------------------

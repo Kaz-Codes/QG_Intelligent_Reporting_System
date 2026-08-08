@@ -329,6 +329,44 @@ class VehicleTrackingStatus(str, Enum):
 
 
 #--------------------------------
+# LOGISTICS: SHIPMENT MODE
+#
+# EFS = Export Facilitation Scheme (duty-suspended inputs for export
+# manufacturing); Regular = standard duty-paid. An attribute the Logistics
+# team sets on the order itself, like department — not something derived
+# from the goods.
+#--------------------------------
+
+class ShipmentMode(str, Enum):
+    EFS = "EFS"
+    REGULAR = "Regular"
+
+
+#--------------------------------
+# LOGISTICS: WHAT KIND OF JOB THE ORDER IS
+#
+# A customer-rework job (a customer sends used goods in to be reworked) needs
+# exactly the same shape as an export/local order — items, packing, shipping,
+# expenditures, status, Send to Trucking — so it lives in the SAME table
+# rather than getting one of its own. This column is the discriminator: the
+# Orders list shows 'standard', the Service Jobs tab shows 'rework'.
+#
+# NOT a user-facing choice. There is no form control for it: it follows from
+# which flow was entered ("New Logistics Order" vs "New Rework Job"), is set
+# once at creation, and is IMMUTABLE afterwards — the update route ignores it,
+# so a PUT can never move a record between the two tabs.
+#
+# Imports is not involved in a rework job. The other half of Service Jobs
+# (import-FOB) is NOT a row here at all — it is derived from the imports
+# consignments bought FOB (see cross_module.py), so it needs no job kind.
+#--------------------------------
+
+class JobKind(str, Enum):
+    STANDARD = "standard"
+    REWORK = "rework"
+
+
+#--------------------------------
 # STOCK: ABC RANK
 #
 # The ABC classification of a stocked item. A and B come from the "AB Items"

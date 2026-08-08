@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { FormProvider, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -6,16 +6,20 @@ import type { z } from 'zod'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
+import { ApiError } from '@/lib/api/client'
 import {
-  getLogisticsOrder, updateLogisticsOrder, createLogisticsOrder,
-  saveLogisticsDraft, getLogisticsDraft, isKnownLogisticsOrder,
-  generateLogisticsSystemId, nextBatchNoForMo,
-} from '@/lib/logisticsStatusData'
-import { consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, emptyItem, type LogisticsDraft, type JobKind } from '../schema'
+  getLogisticsOrder, createLogisticsOrder, updateLogisticsOrder, submitLogisticsOrder,
+  parseSubmitErrors, type LogisticsPayload,
+} from '@/lib/api/logistics'
+import { apiToDraft, draftToPayload, remapNewChildIds } from '@/lib/api/logisticsMap'
+import {
+  consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, emptyItem,
+  type LogisticsDraft, type JobKind,
+} from '../schema'
 import { WizardStepper } from './WizardStepper'
-import { UnsavedChangesDialog } from './UnsavedChangesDialog'
 import { Step1Order } from './steps/Step1Order'
 import { Step2Packing } from './steps/Step2Packing'
 import { Step3Shipping } from './steps/Step3Shipping'
@@ -26,279 +30,360 @@ const STEP_COMPONENTS = [
   Step1Order, Step2Packing, Step3Shipping, Step4Expenditures, Step5Status,
 ]
 
-/** See the matching function in features/importsStatus/wizard/
- *  ImportsStatusWizard.tsx: normalizes undefined/null/'' to one canonical
- *  value before a dirty comparison, since a field silently materializes from
- *  its schema default to '' the moment its owning step's input mounts —
- *  without the user touching anything. */
-function normalizeForDirtyCheck(value: unknown): unknown {
-  if (value === undefined || value === null || value === '') return null
-  if (Array.isArray(value)) return value.map(normalizeForDirtyCheck)
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = normalizeForDirtyCheck(v)
-    return out
-  }
-  return value
-}
-const snapshot = (v: unknown) => JSON.stringify(normalizeForDirtyCheck(v))
+/** "Delivered" is the terminal status; reaching it on a SUBMIT closes the
+ *  order (helpers.is_closed = Delivered AND submitted). */
+const CLOSED_STATUS = 'Delivered'
 
-/**
- * DRAFT_DEFAULT_VALUES is a single shared module-level object — its seed
- * item's id ("item-1") is a fixed literal, not generated per order. That's
- * harmless in isolation, but outstandingByItemAcrossMo now matches
- * allocations across sibling batches BY ITEM ID, so two unrelated brand-new
- * orders both starting from the same literal "item-1" would collide the
- * moment they share an MO: an allocation against one order's "item-1" would
- * incorrectly count against the other's. Regenerating the seed item's id
- * here (once per fresh /new session, not on every render — see the lazy
- * useState below) keeps every new order's starting item globally unique.
- */
 function freshDraftDefaults(jobKind: JobKind = 'standard'): LogisticsDraft {
   return { ...DRAFT_DEFAULT_VALUES, jobKind, items: [emptyItem(`item-${crypto.randomUUID()}`)] }
 }
 
 /**
- * `initialJobKind` is only ever 'rework' — passed by the /logistics-status/
- * rework/new route (see App.tsx) so a brand-new record starts out tagged as
- * a customer-rework job. It has no effect once an id exists (editing an
- * existing order/rework job always reads its own saved jobKind, never this
- * prop) — see the initialValues lazy-init below.
+ * Logistics Status wizard — ORDERS wired to the live backend.
+ *
+ * Same shape as the imports wizard, and for the same reasons:
+ *
+ *  - NO unsaved-changes dialog. Every navigation — Back, "Save and Next", or
+ *    clicking a step in the stepper — saves the current form state first (POST
+ *    the first time, PUT after) and only moves once that succeeds. There is
+ *    nothing left to lose, so there is nothing to warn about.
+ *  - SUBMIT sits on every step, not just the last. It saves, then calls the
+ *    strict /submit endpoint, which reports back anything still missing.
+ *  - A CLOSED order is read-only. Only /submit can close one (Delivered AND
+ *    submitted), so the confirmation fires on Submit alone — a draft save that
+ *    merely sets the status to Delivered closes nothing.
+ *
+ * react-hook-form holds ONE draft across all five steps (this component is not
+ * remounted between them — only the `:step` param changes), so every save
+ * sends the FULL draft. That is required for correctness: the update route
+ * diffs children against what it has, and a line missing from the payload
+ * reads as deleted.
+ *
+ * BOTH JOB KINDS use this one component and the same endpoints. A customer-
+ * rework job is structurally an order — same items, packing, shipping,
+ * expenditures and status — so it is stored in the same table with
+ * `job_kind: 'rework'` as the discriminator, and gets change history, submit
+ * and the closed lock for free.
+ *
+ * `jobKind` is never a form field. It comes from the route ("New Logistics
+ * Order" vs "New Rework Job"), is sent on create, and is IGNORED by the
+ * update route — so a save can't move a record between the Orders and
+ * Service Jobs tabs. On an existing record it is read from the server, not
+ * from `initialJobKind`.
  */
 export function LogisticsStatusWizard({ initialJobKind = 'standard' }: { initialJobKind?: JobKind } = {}) {
   const { user } = useAuth()
   const { id, step } = useParams()
   const navigate = useNavigate()
-  const [pendingStep, setPendingStep] = useState<number | null>(null)
 
   const currentStep = id ? Number(step) || 1 : 1
   const stepIndex = Math.min(Math.max(currentStep, 1), WIZARD_STEPS.length) - 1
   const stepDef = WIZARD_STEPS[stepIndex]
   const StepComponent = STEP_COMPONENTS[stepIndex]
 
-  // Edit mode loads the existing order synchronously from the mock store —
-  // see lib/logisticsStatusData.ts's getLogisticsOrder/updateLogisticsOrder.
-  // Note: React Router does NOT remount this component between wizard steps
-  // (only the `:step` route param changes, not the route element) — the same
-  // `methods` instance is reused for the whole edit session on one order,
-  // which is why the dirty-baseline resets in handleSaveAndMove/
-  // handleDiscardAndMove below matter.
-  const existingOrder = id ? getLogisticsOrder(id) : undefined
-  // A not-yet-submitted new order still needs to survive the /new →
-  // /:id/edit/2 remount (see commitNavigate below) — draft holds whatever
-  // was persisted there via saveLogisticsDraft, distinct from a real,
-  // submitted order in `existingOrder`.
-  const draft = id ? getLogisticsDraft(id) : undefined
-  // `!id` is only true on the very first page of the /new flow — Next mints
-  // a real id and navigates to /:id/edit/2, at which point `!id` alone would
-  // (wrongly) read as "editing an existing order" even though nothing has
-  // been submitted yet. `isNew` has to check for an actual SUBMITTED record
-  // (mirrors TruckingStatusWizard's `trulyNew` / isKnownRecord) — checking
-  // "does getLogisticsOrder find it" instead would flip isNew to false the
-  // moment the in-progress draft gets persisted for remount-survival, which
-  // is exactly the bug this two-tier draft/real split avoids.
-  const isNew = !id || !isKnownLogisticsOrder(id)
-
-  // Computed once per mounted instance (lazy useState initializer) so the
-  // SAME object seeds both useForm's defaultValues and the dirty baseline
-  // below — calling freshDraftDefaults() separately in two places would mint
-  // two different random item ids and make the form read as dirty on the
-  // very first render.
-  const [initialValues] = useState<LogisticsDraft>(() => existingOrder ?? draft ?? freshDraftDefaults(initialJobKind))
+  const [initialValues] = useState<LogisticsDraft>(() => freshDraftDefaults(initialJobKind))
+  // What KIND of record this is. Seeded from the route for a brand-new one and
+  // overwritten by the server once an existing record loads — the URL says
+  // nothing about the kind when editing (/logistics-status/:id/edit/:step is
+  // shared), so trusting `initialJobKind` there would mislabel every rework
+  // job opened for editing.
+  const [jobKind, setJobKind] = useState<JobKind>(initialJobKind)
 
   const methods = useForm<z.input<typeof consignmentDraftSchema>, unknown, LogisticsDraft>({
     resolver: zodResolver(consignmentDraftSchema),
     defaultValues: initialValues,
     mode: 'onBlur',
   })
-  // Manual dirty tracking against a normalized baseline snapshot rather than
-  // react-hook-form's own `formState.isDirty` — see the matching note in
-  // features/importsStatus/wizard/ImportsStatusWizard.tsx.
-  const baselineRef = useRef(snapshot(initialValues))
-  const isFormDirty = () => snapshot(methods.getValues()) !== baselineRef.current
 
-  // Same actions the list/detail views gate on — a viewer or a user without
-  // create rights should never land on this route, hyperlink or not.
+  // --- loading the existing order (edit mode, standard orders only) ---
+  const [orderId, setOrderId] = useState<number | null>(id ? Number(id) : null)
+  const [loadingRecord, setLoadingRecord] = useState(!!id)
+  const [notFound, setNotFound] = useState(false)
+  const [loadErrorMsg, setLoadErrorMsg] = useState<string | null>(null)
+  const [isLocked, setIsLocked] = useState(false)
+  const [recordState, setRecordState] = useState('draft')
+
+  const loadRecord = useCallback(() => {
+    if (!id) return
+    setLoadingRecord(true)
+    setNotFound(false)
+    setLoadErrorMsg(null)
+    getLogisticsOrder(id)
+      .then((o) => {
+        setOrderId(o.id)
+        setIsLocked(o.is_locked)
+        setRecordState(o.record_state ?? 'draft')
+        setJobKind((o.job_kind ?? 'standard') as JobKind)
+        methods.reset(apiToDraft(o))
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) setNotFound(true)
+        else setLoadErrorMsg(err instanceof Error ? err.message : 'Could not load this order')
+      })
+      .finally(() => setLoadingRecord(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  useEffect(() => { loadRecord() }, [loadRecord])
+
+  // --- saving ---
+  const [saving, setSaving] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null)
+  const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
+  const [justSaved, setJustSaved] = useState(false)
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+
+  const isNew = !orderId
   const allowed = isNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
   if (!allowed) return <Navigate to="/logistics-status" replace />
 
-  function commitNavigate(clamped: number) {
-    if (isNew) {
-      if (clamped === 1) return
-      // Reuse the id already in the URL once one exists — only the very
-      // first Next (bare /new, no id yet) mints one. Minting a fresh id on
-      // every step here would silently start a new, disconnected record
-      // each time, since nothing would ever tie steps 2-5 back to step 1.
-      let targetId = id
-      if (!targetId) {
-        // The system id is MO-based (see generateLogisticsSystemId), so
-        // batchNo has to be resolved first. Step 1's own onBlur/onChange
-        // handler already does this as the user types the MO number — this
-        // is a defensive re-resolve right before minting, so correctness
-        // doesn't depend on that handler having fired (e.g. clicking Next
-        // without ever blurring the field).
-        const values = methods.getValues()
-        const resolvedBatchNo = nextBatchNoForMo(values.moNo ?? '')
-        if (resolvedBatchNo !== values.batchNo) methods.setValue('batchNo', resolvedBatchNo)
-        targetId = generateLogisticsSystemId(values.moNo, resolvedBatchNo)
+  function buildPayload(): LogisticsPayload {
+    return draftToPayload(methods.getValues() as LogisticsDraft)
+  }
+
+  /**
+   * POST the first time, PUT after. Returns the saved id + whether that save
+   * closed the order, or null (with saveErrorMsg set) on failure.
+   */
+  async function saveDraft(): Promise<{ id: number; isLocked: boolean } | null> {
+    setSaving(true)
+    setSaveErrorMsg(null)
+    setSubmitErrors(null)
+    try {
+      const payload = buildPayload()
+      const response = orderId
+        ? await updateLogisticsOrder(orderId, payload)
+        : await createLogisticsOrder(payload)
+
+      if (!orderId) setOrderId(response.id)
+      setRecordState(response.record_state ?? 'draft')
+      setIsLocked(response.is_locked)
+
+      // Rows that were brand-new now have real ids; adopt them (and repoint
+      // any allocation that referenced their temporary uuid) so the NEXT save
+      // updates them instead of inserting duplicates.
+      const current = methods.getValues() as LogisticsDraft
+      const remapped = remapNewChildIds(current, response)
+      if (remapped !== current) {
+        methods.setValue('items', remapped.items, { shouldDirty: false })
+        methods.setValue('packages', remapped.packages, { shouldDirty: false })
+        methods.setValue('containers', remapped.containers, { shouldDirty: false })
       }
-      // /new and /:id/edit/:step are separate <Route> entries (see App.tsx),
-      // so this specific transition — and ONLY this one, since every later
-      // step-to-step move matches the same :id/edit/:step route — genuinely
-      // REMOUNTS the component. A fresh useForm() on that remount reads
-      // DRAFT_DEFAULT_VALUES again (nothing findable via getLogisticsOrder
-      // yet), silently discarding everything just typed on Step 1. Saving a
-      // DRAFT here first — before navigating — means the remounted
-      // instance's very first render finds it via getLogisticsDraft(id) and
-      // seeds useForm's defaultValues from it instead. This deliberately
-      // does NOT touch the real `ALL` store (createLogisticsOrder) — doing
-      // so would flip isKnownLogisticsOrder(id) true prematurely, which
-      // would in turn flip `isNew` false on the very next step and bring
-      // back the unsaved-changes dialog for what is still an in-progress
-      // creation.
-      saveLogisticsDraft(targetId, methods.getValues() as LogisticsDraft)
-      navigate(`/logistics-status/${targetId}/edit/${clamped}`)
-    } else {
-      navigate(`/logistics-status/${id}/edit/${clamped}`)
+
+      return { id: response.id, isLocked: response.is_locked }
+    } catch (err) {
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Could not save')
+      return null
+    } finally {
+      setSaving(false)
     }
   }
 
-  async function goToStep(nextStep: number) {
+  /** Only a SUBMIT can close an order, so only Submit needs confirming. */
+  function willClose(isSubmitAction: boolean): boolean {
+    if (!isSubmitAction) return false
+    const closing = methods.getValues('status') === CLOSED_STATUS
+    const alreadyClosed = recordState === 'submitted' && isLocked
+    return closing && !alreadyClosed
+  }
+
+  function runWithCloseConfirm(action: () => void, opts: { isSubmit?: boolean } = {}) {
+    if (willClose(!!opts.isSubmit)) setPendingAction(() => action)
+    else action()
+  }
+
+  function confirmClose() {
+    const action = pendingAction
+    setPendingAction(null)
+    action?.()
+  }
+
+  /* ---- navigation ---- */
+
+  function goToStep(nextStep: number) {
     const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
     if (clamped === stepDef.step) return
-
-    if (isNew) {
-      // New-record mode is unchanged: gated behind the current step's fields
-      // validating, since there's no existing record to jump around in yet.
-      const valid = await methods.trigger(stepDef.fields)
-      if (!valid) return
-      commitNavigate(clamped)
-      return
-    }
-
-    // Edit mode: free navigation, guarded only by unsaved changes.
-    if (isFormDirty()) {
-      setPendingStep(clamped)
-      return
-    }
-    commitNavigate(clamped)
+    void doGoToStep(clamped)
   }
 
-  function handleSaveAndMove() {
-    if (id && pendingStep !== null) {
-      const values = methods.getValues()
-      // getValues() returns the resolver's INPUT type (fields with a zod
-      // `.default()` are optional there); updateLogisticsOrder wants the
-      // OUTPUT type. Safe to cast — those defaulted fields are always
-      // populated once the form has mounted with defaultValues.
-      // changedBy is threaded through so updateLogisticsOrder can log an RFD
-      // audit event under the right name — see the comment there for why the
-      // previous-value comparison has to happen in that function, not here.
-      updateLogisticsOrder(id, values as LogisticsDraft, user?.name ?? 'Unknown')
-      // React Router keeps this component mounted across step navigation
-      // (only the `:step` param changes, not the route element) — so the
-      // dirty baseline has to move forward explicitly, or the guard fires
-      // again for no reason on the very next navigation.
-      baselineRef.current = snapshot(values)
-      commitNavigate(pendingStep)
-    }
-    setPendingStep(null)
+  async function doGoToStep(clamped: number) {
+    const saved = await saveDraft()
+    if (saved === null) return // error already shown; stay put
+    // A save that closed the order leaves nothing further to edit — land on
+    // the read-only detail view rather than an edit route that would bounce.
+    navigate(saved.isLocked
+      ? `/logistics-status/${saved.id}`
+      : `/logistics-status/${saved.id}/edit/${clamped}`)
   }
 
-  function handleDiscardAndMove() {
-    // Same reasoning as above in reverse: since the wizard doesn't remount
-    // between steps, discarding has to actually revert the fields this step
-    // owns — otherwise they'd still show the discarded edit if the user
-    // navigates back to this step later in the session. Re-deriving the
-    // baseline from the now-reverted values (rather than assuming it goes
-    // back to matching baselineRef exactly) correctly leaves any other
-    // steps' still-unsaved edits, if any, still flagged dirty.
-    stepDef.fields.forEach((f) => methods.resetField(f))
-    baselineRef.current = snapshot(methods.getValues())
-    if (pendingStep !== null) commitNavigate(pendingStep)
-    setPendingStep(null)
+  function handleSaveOnly() {
+    void doHandleSaveOnly()
   }
 
-  function handleCancelNavigate() {
-    setPendingStep(null)
+  async function doHandleSaveOnly() {
+    const saved = await saveDraft()
+    if (saved === null) return
+    setJustSaved(true)
+    setTimeout(() => setJustSaved(false), 2000)
+    if (isNew) navigate(`/logistics-status/${saved.id}/edit/${stepDef.step}`, { replace: true })
   }
 
-  function onSubmit(data: LogisticsDraft) {
-    // Edit mode: Submit is how the LAST step's edits get saved (there's no
-    // further Next to trigger the unsaved-changes dialog) — without this,
-    // e.g. checking "Send to Trucking" on Step 5 and clicking Submit would
-    // silently discard it. New-record creation persists under the id minted
-    // back on Step 1 — see createLogisticsOrder's comment for why reusing
-    // that id (rather than generating a fresh one here) matters.
-    if (id) {
-      if (existingOrder) {
-        updateLogisticsOrder(id, data, user?.name ?? 'Unknown')
-      } else {
-        createLogisticsOrder(id, data)
-        // A brand-new rework job's "home" is the Service Jobs tab, not its
-        // own detail page — mirrors the old inline ReworkForm's onCreated
-        // behavior (land back on the list with the Customer Rework filter
-        // active), just via a real navigation now that creation is a real
-        // multi-step route instead of an inline panel. Editing an EXISTING
-        // rework job still goes to its own detail page like any other order
-        // (the `existingOrder` branch above), since by then it's just
-        // another real record to look up.
-        if (data.jobKind === 'rework') {
-          navigate('/logistics-status?tab=services&serviceType=customer-rework')
-          return
-        }
+  function handleSubmit() {
+    runWithCloseConfirm(() => void doHandleSubmit(), { isSubmit: true })
+  }
+
+  async function doHandleSubmit() {
+    const saved = await saveDraft()
+    if (saved === null) return
+
+    setSubmitting(true)
+    setSubmitErrors(null)
+    try {
+      await submitLogisticsOrder(saved.id)
+      // A rework job's home is the Service Jobs tab, not the order book — so
+      // a freshly submitted one lands back there with its filter applied,
+      // rather than on a detail page the user would have to navigate out of.
+      navigate(jobKind === 'rework'
+        ? '/logistics-status?tab=services&serviceType=customer-rework'
+        : `/logistics-status/${saved.id}`)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const parsed = parseSubmitErrors(err.detail)
+        if (parsed) { setSubmitErrors(parsed.errors); return }
       }
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Could not submit')
+    } finally {
+      setSubmitting(false)
     }
-    navigate(id ? `/logistics-status/${id}` : '/logistics-status')
   }
+
+  /* ---- render ---- */
+
+  if (loadingRecord) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Loading order…" module="logisticsStatus" />
+      </div>
+    )
+  }
+
+  if (notFound) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Logistics order not found" module="logisticsStatus" />
+        <button onClick={() => navigate('/logistics-status')} className="text-sm text-accent hover:underline">
+          ← Back to logistics orders
+        </button>
+      </div>
+    )
+  }
+
+  if (loadErrorMsg) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Logistics order" module="logisticsStatus" />
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{loadErrorMsg}</span>
+          <button type="button" onClick={loadRecord} className="underline">Retry</button>
+        </div>
+      </div>
+    )
+  }
+
+  if (isLocked) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title={`Logistics order ${id}`} subtitle="Closed" module="logisticsStatus" />
+        <div className="rounded-lg border border-line bg-canvas-alt px-3.5 py-2.5 text-sm text-muted">
+          This order is closed. An admin must reopen it before it can be edited.
+        </div>
+        <button onClick={() => navigate(`/logistics-status/${id}`)} className="text-sm text-accent hover:underline">
+          ← View order
+        </button>
+      </div>
+    )
+  }
+
+  const busy = saving || submitting
+  const isLastStep = stepDef.step === WIZARD_STEPS.length
+  const title = jobKind === 'rework'
+    ? (isNew ? 'New Customer Rework Job' : `Edit Rework Job ${orderId ?? id}`)
+    : (isNew ? 'New Logistics Order' : `Edit Logistics Order ${orderId ?? id}`)
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={
-          isNew
-            ? (initialValues.jobKind === 'rework' ? 'New Customer Rework Job' : 'New Logistics Order')
-            : (initialValues.jobKind === 'rework' ? `Edit Rework Job ${id}` : `Edit Logistics Order ${id}`)
-        }
+        title={title}
         subtitle={`Step ${stepDef.step} of ${WIZARD_STEPS.length} — ${stepDef.label}`}
         module="logisticsStatus"
       />
 
-      <WizardStepper steps={WIZARD_STEPS} current={stepDef.step} onStepClick={isNew ? undefined : goToStep} />
+      <WizardStepper steps={WIZARD_STEPS} current={stepDef.step} onStepClick={busy ? undefined : goToStep} />
 
       <Card>
         <CardContent className="p-6">
           <FormProvider {...methods}>
-            <form onSubmit={methods.handleSubmit(onSubmit)}>
+            <form onSubmit={(e) => e.preventDefault()}>
               <StepComponent />
 
-              <div className="mt-6 flex justify-between">
+              {saveErrorMsg && (
+                <p className="mt-4 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{saveErrorMsg}</p>
+              )}
+              {submitErrors && submitErrors.length > 0 && (
+                <div className="mt-4 rounded-lg bg-risk-bg px-3 py-2.5 text-sm text-risk">
+                  <p className="font-medium">This order can’t be submitted yet:</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    {submitErrors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-between">
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={stepDef.step === 1}
+                  disabled={stepDef.step === 1 || busy}
                   onClick={() => goToStep(stepDef.step - 1)}
                 >
                   Back
                 </Button>
-                {stepDef.step < WIZARD_STEPS.length ? (
-                  <Button type="button" onClick={() => goToStep(stepDef.step + 1)}>
-                    Next
+
+                <div className="flex items-center gap-3">
+                  {justSaved && <span className="text-xs text-[var(--color-healthy)]">Saved</span>}
+                  {isLastStep ? (
+                    <Button type="button" variant="outline" disabled={busy} onClick={handleSaveOnly}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" disabled={busy} onClick={() => goToStep(stepDef.step + 1)}>
+                      {saving ? 'Saving…' : 'Save and Next'}
+                    </Button>
+                  )}
+                  <Button type="button" disabled={busy} onClick={handleSubmit}>
+                    {submitting ? 'Submitting…' : 'Submit'}
                   </Button>
-                ) : (
-                  <Button type="submit">Submit</Button>
-                )}
+                </div>
               </div>
             </form>
           </FormProvider>
         </CardContent>
       </Card>
 
-      <UnsavedChangesDialog
-        open={pendingStep !== null}
-        onSaveAndMove={handleSaveAndMove}
-        onDiscardAndMove={handleDiscardAndMove}
-        onCancel={handleCancelNavigate}
+      <ConfirmDialog
+        open={!!pendingAction}
+        title="Close this order?"
+        description={
+          <>
+            Submitting at status <span className="font-medium text-ink">"Delivered"</span> closes this order.
+            Once closed, no one but an admin can edit it (an admin can reopen it later).
+          </>
+        }
+        confirmLabel="Yes, submit and close it"
+        confirmingLabel="Submitting…"
+        confirming={busy}
+        onConfirm={confirmClose}
+        onCancel={() => setPendingAction(null)}
       />
     </div>
   )

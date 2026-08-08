@@ -135,6 +135,12 @@ def serialize_consignment(consignment, db):
         # module-level import would be circular.
         "missing_fields" : _submission_errors(consignment),
 
+        # Cross-module hand-off. NULL = not sent; the list shows a "Sent"
+        # column from these and disables each Send button once its own
+        # timestamp is set.
+        "sent_to_logistics_at" : consignment.sent_to_logistics_at,
+        "sent_to_trucking_at" : consignment.sent_to_trucking_at,
+
         "record_state" : consignment.record_state,
         "is_locked" : consignment.is_locked,
 
