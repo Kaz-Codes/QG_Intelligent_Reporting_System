@@ -8,6 +8,7 @@ import { Dashboard } from '@/pages/Dashboard'
 import { Reports } from '@/pages/Reports'
 import { Assistant } from '@/pages/Assistant'
 import { UserManagement } from '@/pages/UserManagement'
+import { MastersPage } from '@/pages/MastersPage'
 import { ImportsStatusList } from '@/features/importsStatus/ImportsStatusList'
 import { ImportsStatusDetail } from '@/features/importsStatus/ImportsStatusDetail'
 import { ImportsStatusWizard } from '@/features/importsStatus/wizard/ImportsStatusWizard'
@@ -65,6 +66,7 @@ function App() {
 
             <Route path="/reports" element={<RequirePage pageKey="reports"><Reports /></RequirePage>} />
             <Route path="/assistant" element={<RequirePage pageKey="assistant"><Assistant /></RequirePage>} />
+            <Route path="/masters" element={<RequirePage pageKey="masters"><MastersPage /></RequirePage>} />
             <Route path="/user-management" element={<RequirePage pageKey="userManagement"><UserManagement /></RequirePage>} />
           </Route>
         </Route>

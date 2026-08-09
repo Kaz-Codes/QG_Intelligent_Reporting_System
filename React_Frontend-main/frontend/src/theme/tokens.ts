@@ -29,6 +29,7 @@ export type PageKey =
   | 'reports'
   | 'assistant'
   | 'userManagement'
+  | 'masters'
 
 /** Restrained industrial set — steel blue, petrol, brass, navy, slate.
  * Every module still reads as distinct, but the palette holds together as
@@ -46,6 +47,7 @@ export const MODULE_ACCENTS: Record<PageKey, string> = {
   reports: '#475569',
   assistant: '#0369A1',
   userManagement: '#64748B',
+  masters: '#0F766E',
 }
 
 export interface Palette {

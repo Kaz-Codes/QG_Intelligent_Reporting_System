@@ -156,7 +156,7 @@ const DATA_ENTRY_PERMISSIONS: Permission[] = [
   CAN_VIEW_TRUCKING, CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING, CAN_DELETE_TRUCKING,
 ]
 
-const ALL_PAGES: PageKey[] = ['assistant', 'dashboard', 'reports', 'dataEntry', 'userManagement']
+const ALL_PAGES: PageKey[] = ['assistant', 'dashboard', 'reports', 'dataEntry', 'masters', 'userManagement']
 
 const has = (access: Access, ...names: Permission[]) =>
   names.some((n) => access.permissions.includes(n))
@@ -175,6 +175,7 @@ export function pagesForUser(access: Access | null | undefined): PageKey[] {
   if (has(access, ...DASHBOARD_PERMISSIONS)) pages.push('dashboard')
   if (has(access, CAN_MAKE_REPORTS)) pages.push('reports')
   if (has(access, ...DATA_ENTRY_PERMISSIONS)) pages.push('dataEntry')
+  if (has(access, CAN_VIEW_MASTER)) pages.push('masters')
   return pages
 }
 
