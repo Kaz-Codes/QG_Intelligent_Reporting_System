@@ -53,7 +53,7 @@ export function axisLabel(unit: string | undefined, axis: 'x' | 'y', color: stri
 
 export const tooltipStyle = {
   contentStyle: {
-    background: '#3730A3',
+    background: '#2A241B',
     border: 'none',
     borderRadius: 8,
     color: '#fff',

@@ -18,8 +18,8 @@ export function AgingBuckets({ data, height = 300, unit = 'Orders' }: Props) {
   const { colors } = useTheme()
   const severity: Record<string, string> = {
     '0-30 days': colors.healthy,
-    '31-60 days': colors.watch,
-    '61-90 days': '#D98800',
+    '31-60 days': '#B87F09',
+    '61-90 days': colors.watch,
     '90+ days': colors.risk,
   }
   const ordered = ORDER.map((bucket) => data.find((d) => d.bucket === bucket) ?? { bucket, orders: 0 })
