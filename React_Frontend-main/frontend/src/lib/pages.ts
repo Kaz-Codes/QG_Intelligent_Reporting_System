@@ -1,5 +1,5 @@
 import {
-  Gauge, ClipboardList, BarChart3, MessageSquare, Users,
+  Gauge, ClipboardList, BarChart3, MessageSquare, Users, Boxes,
   type LucideIcon,
 } from 'lucide-react'
 import type { PageKey } from '@/theme/tokens'
@@ -35,6 +35,7 @@ export const PAGE_DEFS: PageDef[] = [
       { label: 'Trucking Status', path: '/trucking-status' },
     ],
   },
+  { key: 'masters', label: 'Masters', path: '/masters', icon: Boxes },
   { key: 'userManagement', label: 'User Management', path: '/user-management', icon: Users },
 ]
 

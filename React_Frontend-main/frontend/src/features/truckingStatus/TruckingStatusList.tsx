@@ -326,8 +326,19 @@ export function TruckingStatusList() {
                     key={r.id}
                     className="cursor-pointer border-t border-line hover:bg-canvas-alt"
                     onClick={() => navigate(`/trucking-status/${r.id}`)}
+                    style={r.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
                   >
-                    <td className="px-3 py-2 font-medium text-ink">{r.systemId}</td>
+                    <td className="px-3 py-2 font-medium text-ink">
+                      {r.systemId}
+                      {r.missingFields.length > 0 && (
+                        <span
+                          className="ml-1.5 inline-block rounded bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[10.5px] text-[var(--color-watch)]"
+                          title={`Missing: ${r.missingFields.join(', ')}`}
+                        >
+                          {r.missingFields.length} missing
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2"><SourceTag source={r.source} /></td>
                     <td className="px-3 py-2">{r.movementType || '—'}</td>
                     <td className="px-3 py-2">{r.transporterName ?? '—'}</td>

@@ -58,3 +58,126 @@ export function nameToId(options: MasterOption[], name: string | undefined | nul
   const needle = name.trim().toLowerCase()
   return options.find((o) => o.name.trim().toLowerCase() === needle)?.id
 }
+
+
+/* ---------------------------------------------------------------------------
+ * Masters management screen — list + create.
+ *
+ * The read-only lookups above feed the Imports wizard. The Masters SCREEN
+ * needs a bit more: the full row (so a table can show country/city/type/etc.),
+ * plus the ability to add a record. Both hit the same `/masters/{master}`
+ * path — GET to list, POST to create — behind the `{status, message, data}`
+ * envelope the masters module uses.
+ *
+ * The backend supports six masters (supplier, branch, works, port, agent,
+ * item). This screen exposes the ones an ops user maintains by hand. There is
+ * no "customer" master on the backend — customers live only on the logistics
+ * side today — so it isn't listed here.
+ * ------------------------------------------------------------------------- */
+
+export type MasterKey = 'supplier' | 'branch' | 'works' | 'port' | 'agent'
+
+export interface SupplierRow {
+  id: number
+  name: string
+  country: string | null
+  city: string | null
+  contact_name: string | null
+  phone: string | null
+  email: string | null
+  default_currency: string | null
+  default_payment_terms: string | null
+  is_active: boolean
+  is_verified: boolean
+  used: number
+}
+
+export interface BranchRow {
+  id: number
+  name: string
+  code: string | null
+  city: string | null
+  address: string | null
+  is_active: boolean
+  is_verified: boolean
+  used: number
+}
+
+export interface WorksRow {
+  id: number
+  name: string
+  code: string | null
+  ntn_strn: string | null
+  note: string | null
+  is_active: boolean
+  is_verified: boolean
+  used: number
+}
+
+export interface PortRow {
+  id: number
+  name: string
+  country: string | null
+  port_type: string
+  un_locode: string | null
+  used_as: string
+  is_active: boolean
+  is_verified: boolean
+  used: number
+}
+
+export interface AgentRow {
+  id: number
+  name: string
+  licence_no: string | null
+  contact_name: string | null
+  phone: string | null
+  primary_port_id: number | null
+  primary_port: { id: number; name: string } | null
+  is_active: boolean
+  is_verified: boolean
+  used: number
+}
+
+export type MasterRow = SupplierRow | BranchRow | WorksRow | PortRow | AgentRow
+
+export const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED'] as const
+export const PORT_TYPES = ['Sea', 'Air', 'Dry', 'Land'] as const
+export const PORT_USED_AS = ['Loading', 'Delivery', 'Both'] as const
+
+interface ListParams {
+  q?: string
+  includeInactive?: boolean
+}
+
+/** List one master's rows. Fresh call each time (not the wizard's cache) since
+ *  the screen adds/edits and needs to see its own writes. */
+export async function listMasters<T extends MasterRow = MasterRow>(
+  master: MasterKey,
+  { q, includeInactive }: ListParams = {},
+): Promise<T[]> {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  if (includeInactive) params.set('include_inactive', 'true')
+  const qs = params.toString()
+  const res = await apiFetch<MastersEnvelope<T>>(`/masters/${master}${qs ? `?${qs}` : ''}`)
+  return res.data ?? []
+}
+
+/** Create a master record. Lands verified (the proper Masters-screen path,
+ *  unlike an inline-created record which waits for review). Returns the new
+ *  row. The backend enforces name uniqueness and replies 400 with a plain
+ *  message on a clash — surfaced to the caller as an ApiError. */
+export async function createMaster<T extends MasterRow = MasterRow>(
+  master: MasterKey,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  const res = await apiFetch<{ status: number; message: string; data: T }>(
+    `/masters/${master}`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+  // A create can also invalidate the wizard's read-only cache for this master;
+  // clear it so a wizard opened later sees the new option.
+  cache.delete(master)
+  return res.data
+}
