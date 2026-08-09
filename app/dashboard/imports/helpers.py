@@ -17,10 +17,13 @@ from app.masters.models import Supplier, Item, Branch
 #-------------------------------------
 
 def fetch_consignments(db):
+    # The item MASTER is loaded behind each line as well — the route builds its
+    # item_categories dropdown from item.item.category, which lazy-loaded one
+    # query per line without this.
     query = select(Consignment).where(
         Consignment.is_deleted == False
     ).options(
-        selectinload(Consignment.items),
+        selectinload(Consignment.items).joinedload(ConsignmentItem.item),
         joinedload(Consignment.supplier),
         joinedload(Consignment.branch)
     )
@@ -35,8 +38,19 @@ def fetch_filtered_consigments(
         to_date, mode_of_shipment
     ):
 
+    # Same eager loading as fetch_consignments, plus the item MASTER behind each
+    # line (category_delays reads item.item.category). Without these the value,
+    # supplier and category figures lazy-load per row — an N+1 across the whole
+    # filtered set, which was roughly half the response time before.
+    # distinct() because the item_category / work / supplier filters join, and a
+    # consignment with several matching lines would otherwise be counted once
+    # per line in every figure on the screen.
     query = select(Consignment).where(
         Consignment.is_deleted == False
+    ).options(
+        selectinload(Consignment.items).joinedload(ConsignmentItem.item),
+        joinedload(Consignment.supplier),
+        joinedload(Consignment.branch)
     )
 
     if work:
@@ -78,7 +92,7 @@ def fetch_filtered_consigments(
             Consignment.mode_of_shipment == mode_of_shipment
         )
 
-    return db.execute(query).scalars().all()
+    return db.execute(query).unique().scalars().all()
 
 
 

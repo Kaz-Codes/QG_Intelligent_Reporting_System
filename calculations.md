@@ -6,12 +6,107 @@ rate booked on the record, never a live rate. Filter option lists are built
 dynamically from the whole table so a dropdown shows every value present, not
 just the ones on the current page.
 
-This file covers the **imports**, **logistics**, **purchases** and **inventory**
-dashboards. (The overview dashboard also exists; it follows the same shape.)
+This file covers the **overview**, **imports**, **logistics**, **purchases** and
+**inventory** dashboards.
 
 Each dashboard lives under `app/dashboard/<name>/` with the same four files:
 `calculations.py` (the formulas below), `helpers.py` (the queries),
 `serializers.py` (row + aggregate assembly) and `routes/` (the endpoint).
+
+---
+
+## Overview — `GET /dashboard/overview`
+
+**Sources:** every module at once — `consignments` (+ item lines),
+`purchases_data`, `logistics_consignments`, `trucking_consignments`, `stock`,
+`issuance`. Permission: `can_view_overview_dashboard`.
+
+Unlike the per-module dashboards this one **never materializes rows** — every
+figure is a single SQL aggregate, so the whole payload builds in well under a
+second despite spanning ~49k issuance rows.
+
+**Params:** `date_from`, `date_to` (both omitted → **month to date**; either one
+given → that custom range, echoed back under `period`), and `dead_stock_days`
+(default **180**, 1–1825).
+
+Two conventions run through the whole endpoint:
+
+- **Every ratio ships with its denominator** (`*_basis`). Several rest on a small
+  slice of the book, so a bare percentage would read as a fact about the whole
+  table. The front end shows the basis beside the number.
+- **A period figure is never silently zero.** Where the window holds no rows the
+  payload says so, because the loaded data currently ends before the current
+  month and an unqualified "Rs 0" reads as a broken tile.
+
+### Imports
+
+| Figure | Formula |
+|---|---|
+| `period_value.value` | Σ stored `pkr_total` where `etd` ∈ window |
+| `period_value.undated` | consignments with a `pkr_total` but **no ETD** — they fall in *no* window, so they are reported separately rather than vanishing from every period at once |
+| `in_process` | count where status ∉ {Arrived at Works, Order Cancelled}, split across the **six-stage pipeline** the imports list uses (`STAGE_GROUPS`, minus Closed) |
+| `shafts` | consignments carrying a shaft line, split in-process vs arrived, + `arrived_pct` |
+
+**ETD is the activity date**, not gate-out: gate-out is populated on well under
+half the book and stops months earlier, so windowing on it would under-report a
+period rather than measure it.
+
+**Shafts are matched on `consignment_items.item_name`** against the curated
+`SHAFT_ITEMS` list (reused from `app/reports/helpers.py`) — *not* through the
+item master. Those names do not exist in `items`, and the line keeps its own copy
+of the name anyway (imports rule 12), so the line is the only reliable match.
+
+### Local procurement (all period-bounded, on `purchase` date)
+
+| Figure | Formula |
+|---|---|
+| `period_value` | Σ `amount`, line count, Σ `qty` where `purchase` ∈ window |
+| `category_split` | top **4** categories by value + a single **Other** bucket, each with `share_pct`; category comes from the item master via `item_code`, unresolved lines group as **Uncategorised** (dropped lines would make the shares fail to add up to the total shown beside them) |
+| `delay.delay_pct` | `required_d < purchase` ÷ lines having a `required_d` |
+| `cycle_time` | **two** readings, both returned |
+
+`cycle_time` gives `store_to_purchase_days` (`ppc_store` → `purchase`) **and**
+`po_to_purchase_days` (`po_date` → `purchase`). Which one "demand to purchase"
+means is a business decision, so the backend returns both rather than baking in a
+guess. Rows where the demand date sits *after* the purchase are excluded — they
+are data errors, and counting them as negative lead time would drag the average
+below what any real cycle took.
+
+### Logistics (lifetime, not period — "till yet … handled" is a running total)
+
+| Figure | Formula |
+|---|---|
+| `trucking_cost` | Σ `actual_freight` grouped by `movement_type`, + `quoted_freight` and `share_pct` per bucket |
+| `shipments_handled` | standard logistics orders (`job_kind = 'standard'`) + import consignments |
+
+**There is no "Local" movement type and none can be inferred.** Jobs with a NULL
+`movement_type` (currently 191) get their own **Unclassified** bucket rather than
+being folded into a category they may not belong to; they carry no actual freight,
+so they move the job count and not the cost.
+
+### Stores (a snapshot — not period-bounded; the two windows below are its own)
+
+| Figure | Formula |
+|---|---|
+| `stock_value` | Σ `stock_qty_amount`, Σ `available_amount`, line count |
+| `value_by_store` | the same grouped by `branch`, with `share_pct` |
+| `stock_days` | per branch **and** total: stock value ÷ (value issued over the window ÷ window days) |
+| `dead_stock` | lines with `stock_qty_amount > 0` and **no issuance** for that `(item_code, branch)` within `dead_stock_days` |
+
+**Days of stock is measured in rupees, not units** — a store holds many units of
+incomparable things; summing bolts and shafts is meaningless, summing their
+rupees is not. The consumption window is **90 days** (matching the inventory
+dashboard so the two agree) and ends at the **latest issuance in the data**, not
+today: the data is historical, and anchoring to today would measure an empty
+window and report every store as having infinite runway. A branch with no
+consumption history has `days_of_stock: null` and sorts **last**, so it never
+reads as the healthiest store on the list.
+
+`dead_stock` also returns **`history_days`** (the span of the issuance table,
+currently ~350) and **`exceeds_history`**. Once the threshold reaches back past
+the first issuance, the figure is really "never issued in the data we hold" and
+raising the threshold further cannot change it — the flag tells the front end to
+say so.
 
 ---
 
@@ -46,6 +141,40 @@ priced line **or** no booked exchange rate has a PKR value of 0.
 
 ### Option lists
 `works`, `suppliers`, `countries`, `item_categories`, `status`.
+
+---
+
+### KPI-document figures (imports)
+
+From `Supply_Chain_KPI's.docx`, computed over the **same filtered consignments**
+as everything above, and returned alongside it — nothing was replaced.
+
+| Key | Formula |
+|---|---|
+| `import_spend` | Σ **stored** `pkr_total` (+ how many consignments had none) |
+| `demands` | received = row count · processed = terminal status (Arrived at Works **or** Order Cancelled) · in_process = the rest, so the three always reconcile |
+| `delay` | late = arrival > `required_date`, where arrival is `gate_out_date` falling back to `eta` |
+| `supplier_pareto` | suppliers by spend desc, each with `share_pct` and a running `cumulative_pct` |
+| `category_delays` | delay stats per item-master category |
+
+**`import_spend` uses the stored `pkr_total`; `kpis.total_value_pkr` recomputes
+from the item lines.** The two therefore disagree (Rs 964.8M vs Rs 987.7M) —
+they are different measures, not a bug, and both are kept because the original
+tile predates the stored column. Imports rule 4 makes the **stored** figure the
+one that matches a printed report, so `import_spend` is the one to trust.
+
+**`delay` falls back to ETA** so a consignment still in transit counts as late
+the moment its ETA passes the required date, rather than dropping out of the
+measure until it lands. `measured_on_actual_arrival` says how many of the basis
+used a real gate-out rather than an ETA.
+
+**`category_delays` counts a consignment once per distinct category it
+carries** — a mixed consignment genuinely delays all of them, and splitting the
+delay between them would understate each. Lines that do not resolve to an item
+master (most of them today) fall into **Uncategorised** rather than vanishing.
+Rows are ranked by **number of delayed consignments, not percentage**: ranking
+on percentage floats a category with one delayed consignment at 100% above one
+with 17 of 34, which is noise on top of the real problem.
 
 ---
 
@@ -93,6 +222,27 @@ payload stays a few KB.
 - `status` is derived, so it's filtered in Python after the SQL fetch.
 - `item_category` lives on the item master and is filtered via the relationship (`.has()`).
 - Dropped from the original design: the `material` filter and the "view data" toggle.
+
+---
+
+### KPI-document figures (local procurement) — `procurement_kpis`
+
+The document asks for four; **two already existed** (`kpis.total_value` and
+`kpis.on_time_pct`), so only the missing two were added.
+
+| Key | Formula |
+|---|---|
+| `total_quantity` | Σ `qty` |
+| `avg_delay_days` | mean days late, **late lines only** |
+| `avg_days_vs_required` | mean of `purchase − required_d` across all comparable lines |
+| `delayed_lines` / `basis` | the counts behind both averages |
+
+The document defines the delay as *"AVERAGE of Required Date – Purchase Date"*,
+which is **negative** when a line is late. The sign is flipped here so
+`avg_delay_days` is positive when purchasing ran late — how a figure labelled
+"delay" is read. Both averages are returned because they answer different
+questions: how bad the late ones are (26.0 days), versus whether purchasing runs
+early or late overall (1.4 days).
 
 ---
 
@@ -169,6 +319,37 @@ rows are still built internally, only to feed the aggregates).
 
 ---
 
+### KPI-document figure (stores) — `purchase_vs_issuance_by_category`
+
+What each item category cost to **buy** against what it cost to **consume**.
+The two sides come from different tables (`purchases_data`, `issuance`), summed
+separately in SQL — issuance alone is ~49k rows and is never materialized.
+
+Two things make this figure trustworthy, and both were bugs before they were
+fixed:
+
+- **Both sides are clipped to the window they SHARE**, returned as `period`.
+  `purchases_data` currently holds **one month** (2026-06-09 → 2026-07-09) while
+  `issuance` holds a **full year**. Summing each in full compares a month of
+  buying against a year of consuming and reports every category as consuming
+  ~10× what it buys — a fact about the data's coverage wearing the costume of a
+  fact about the business. The window is derived, not hard-coded, so it widens
+  on its own once more purchase history is loaded.
+- **It is NOT filtered by branch** (`branch_filtered: false`).
+  `purchases_data.branch` holds short codes (`QEN`, `QCL`, `QB2`, `QE`, `QBL`,
+  `QE-II`, `IOL`); `issuance.branch` and `stock.branch` hold full company names.
+  The vocabularies share no values, so a branch filter matches the issuance side
+  and **nothing** on the purchases side, reporting a category as pure consumption
+  with zero spend. Company-wide and honest beats filtered and wrong. Mapping the
+  codes to names belongs in the loader, agreed with the business — `QE` vs `QEN`
+  vs `QE-II` is not something to guess at.
+
+A category present on one side and absent on the other still appears with zero
+on the missing side; rows rank by the **larger** of the two sides, so a category
+that is huge on consumption but barely purchased still makes the chart.
+
+---
+
 ## Logistics — three tabs
 
 The logistics dashboard is **three independent endpoints**, one per frontend
@@ -201,6 +382,34 @@ Charts: **status_split**, **cost_per_kg_by_country** (avg, top 8). Filters:
 `status[]`, `stage[]`, `shipping_line[]`, `country[]`, `customer[]`, ETD range
 (`port_in_date`), `search`.
 
+#### KPI-document figures (shipments)
+
+Per order: **`is_dispatched`** = has an `actual_arrival_date`;
+**`arrival_delay_days`** = `actual_arrival_date − cro_arrival_date` (null if
+either is missing).
+
+| Key | Formula |
+|---|---|
+| `dispatch_kpis.total_dispatches` | orders with an actual arrival |
+| `.total_weight_dispatched_kg` | Σ item `gross_weight` over those orders |
+| `.on_time_dispatches` / `.delayed_dispatches` / `.on_time_pct` / `.basis` | measured only on orders that ALSO have a planned arrival |
+| `container_type_usage` | counted over the **container rows** of the filtered orders (one order can ship several types) |
+| `customer_delays` | customers whose orders ran more than **7 days** late (threshold is a parameter) |
+
+**Dispatched and on-time have different denominators by design.** Dispatch needs
+only an actual arrival (141 orders); on-time needs a planned one to compare
+against (104). Status cannot substitute — the loaded vocabulary has no
+"dispatched" value and an order can sit at "Transportation" indefinitely.
+Weight stays in **kg**, the unit the data is in; tonnes are a display choice.
+
+**`dispatch_by_segment` returns `has_segmentation`, and it is currently
+`false`.** The segment is `department` (Sugar / Cement), populated on 810 orders
+and NULL on 614 — and the 614 are precisely the ones carrying arrival dates. So
+every order the chart can measure is Unassigned and it draws one meaningless
+bar. The flag lets the front end show "no segment data" instead. The figures are
+right; the segmentation is missing. **Filling `department` on delivered orders is
+what unlocks this chart** — no code change is needed.
+
 ### Packing — `GET /dashboard/logistics/packing`  (source: `LogisticsPackage` + its order)
 
 Per package: **`rfd_delay_days`** = `(packing_date − packing_ready_date).days`
@@ -218,6 +427,26 @@ Charts: **status_split**, **by_category** (order `department`),
 **by_business_type** (order `order_type`), **by_customer** (top 8). Filters:
 `status[]`, `works[]`, `product_category[]`, `business_type[]`, `customer[]`,
 packing-date range, `search` (order-level filters go through the relationship).
+
+#### KPI-document figures (packing) — `packing_cost_kpis`
+
+Package count and weight are solid. **The cost figures are not**: no package in
+the loaded data carries an `actual_packing_cost` and only **25 of 962** carry a
+quoted one, so savings and saving-per-kg have nothing to compute from.
+
+Rather than return a confident Rs 0 — which reads as "we packed for free" —
+every cost figure ships with the number of packages it was measured over
+(`packages_with_quoted_cost`, `packages_with_actual_cost`, `savings_basis`), and
+**`total_savings` / `avg_saving_per_kg` stay `null`** until both sides of the
+subtraction exist on the same package. Summing two differently-populated columns
+and subtracting would invent a number. The front end shows "awaiting data".
+
+| Key | Status today |
+|---|---|
+| `total_packages`, `total_weight_kg`, `packages_with_weight` | real (962 packages, 604 weighed) |
+| `total_quoted_cost` | thin — 25 packages |
+| `total_actual_cost` | **no data** — 0 packages |
+| `total_savings`, `avg_saving_per_kg` | **null** — needs both figures on one package |
 
 ### Transport — `GET /dashboard/logistics/transport`  (source: `TruckingConsignment`)
 

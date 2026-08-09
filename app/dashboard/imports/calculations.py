@@ -180,3 +180,237 @@ def monthly_value_trend(consignments):
     ]
 
     return trend
+
+
+#=====================================================
+# THE KPI-DOCUMENT FIGURES
+#
+# Everything below comes from Supply_Chain_KPI's.docx. They are computed over
+# the SAME filtered consignment list as the figures above, so the whole screen
+# always describes one set of rows.
+#
+# Ratios carry the row count they were measured over (`*_basis`), because
+# several of these rest on a small slice of the book and a bare percentage
+# would read as a fact about every consignment.
+#=====================================================
+
+TERMINAL_STATUSES = (Status.ARRIVED_AT_WORKS.value, Status.ORDER_CANCELLED.value)
+
+
+def _pct(part, whole, digits=1):
+    if not whole:
+        return None
+    return round((part / whole) * 100, digits)
+
+
+#-------------------------------------
+# TOTAL IMPORT SPEND
+#
+# The STORED pkr_total, not the line-by-line recomputation `kpis` does.
+# Imports rule 4: the money totals are stored precisely so a later rate change
+# or edit cannot restate a printed report. A consignment with no stored total
+# contributes nothing rather than being recomputed at some other basis.
+#-------------------------------------
+
+def total_import_spend(consignments):
+    total = Decimal("0")
+    priced = 0
+
+    for consignment in consignments:
+        if consignment.pkr_total is not None:
+            total += consignment.pkr_total
+            priced += 1
+
+    return {
+        "value": total,
+        "consignments": priced,
+        "consignments_without_value": len(consignments) - priced,
+    }
+
+
+#-------------------------------------
+# DEMANDS RECEIVED / PROCESSED / IN PROCESS
+#
+# A "demand" is one consignment. Processed = it reached a terminal state
+# (arrived at works, or cancelled — a cancelled demand is finished, not
+# pending); in process = everything else. Received is simply all of them, so
+# processed + in_process always reconciles back to received.
+#-------------------------------------
+
+def demand_counts(consignments):
+    processed = 0
+
+    for consignment in consignments:
+        if consignment.current_status in TERMINAL_STATUSES:
+            processed += 1
+
+    received = len(consignments)
+    in_process = received - processed
+
+    return {
+        "received": received,
+        "processed": processed,
+        "in_process": in_process,
+        "processed_pct": _pct(processed, received),
+    }
+
+
+#-------------------------------------
+# DELAY PERCENTAGE
+#
+# A demand is late when it arrived (or is now expected) after the date it was
+# required. Arrival is the gate-out date where one exists, falling back to the
+# current ETA — so a consignment still in transit counts as late the moment its
+# ETA passes the required date, instead of dropping out of the measure until it
+# lands. Which basis each row used is reported, since the two are not equally
+# certain.
+#-------------------------------------
+
+def delay_stats(consignments):
+    late = 0
+    comparable = 0
+    on_actual = 0
+    total_days_late = 0
+
+    for consignment in consignments:
+        required = consignment.required_date
+        if required is None:
+            continue
+
+        arrival = consignment.gate_out_date
+        if arrival is not None:
+            on_actual += 1
+        else:
+            arrival = consignment.eta
+
+        if arrival is None:
+            continue
+
+        comparable += 1
+        if arrival > required:
+            late += 1
+            total_days_late += (arrival - required).days
+
+    return {
+        "delay_pct": _pct(late, comparable),
+        "delayed": late,
+        "on_time": comparable - late,
+        "basis": comparable,
+        "measured_on_actual_arrival": on_actual,
+        "avg_days_late": round(total_days_late / late, 1) if late else None,
+    }
+
+
+#-------------------------------------
+# SUPPLIER SPEND + CUMULATIVE CONTRIBUTION (the Pareto chart)
+#
+# Suppliers by spend, descending, each carrying its own share and the running
+# cumulative share — the line that makes a Pareto readable. The cumulative
+# percentage is computed over EVERY supplier before the list is truncated, so
+# the last bar shown still tells the truth about where it sits in the whole
+# book rather than summing to 100% over an arbitrary top-N.
+#-------------------------------------
+
+def supplier_spend_pareto(consignments, limit=10):
+    totals = {}
+
+    for consignment in consignments:
+        if consignment.pkr_total is None:
+            continue
+        name = consignment.supplier.name if consignment.supplier else "(no supplier)"
+        totals[name] = totals.get(name, Decimal("0")) + consignment.pkr_total
+
+    grand_total = sum(totals.values(), Decimal("0"))
+
+    ordered = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+
+    rows = []
+    running = Decimal("0")
+    for name, value in ordered:
+        running += value
+        rows.append({
+            "supplier": name,
+            "value": value,
+            "share_pct": _pct(value, grand_total),
+            "cumulative_pct": _pct(running, grand_total),
+        })
+
+    return {
+        "total": grand_total,
+        "suppliers_total": len(ordered),
+        "rows": rows[:limit],
+    }
+
+
+#-------------------------------------
+# CATEGORY DELAYS
+#
+# Replaces the chart the document flagged as wrong. Delay is a property of the
+# consignment, but category is a property of its item lines, so a consignment
+# counts once toward EVERY distinct category it carries — a mixed consignment
+# genuinely delays all of them, and splitting its delay across them would
+# understate each.
+#
+# Category comes from the item master through the line's item_id. Lines that do
+# not resolve (currently most of them) fall into "Uncategorised" rather than
+# disappearing, so the bars still account for every delayed consignment.
+#-------------------------------------
+
+UNCATEGORISED = "Uncategorised"
+
+
+def consignment_categories(consignment):
+    categories = set()
+
+    for item in consignment.items:
+        if item.is_deleted:
+            continue
+        category = item.item.category if item.item else None
+        categories.add(category or UNCATEGORISED)
+
+    return categories or {UNCATEGORISED}
+
+
+def category_delays(consignments, limit=10):
+    stats = {}
+
+    for consignment in consignments:
+        required = consignment.required_date
+        if required is None:
+            continue
+
+        arrival = consignment.gate_out_date or consignment.eta
+        if arrival is None:
+            continue
+
+        days_late = (arrival - required).days
+
+        for category in consignment_categories(consignment):
+            entry = stats.setdefault(
+                category, {"total": 0, "delayed": 0, "days_late": 0}
+            )
+            entry["total"] += 1
+            if days_late > 0:
+                entry["delayed"] += 1
+                entry["days_late"] += days_late
+
+    rows = [
+        {
+            "category": category,
+            "consignments": entry["total"],
+            "delayed": entry["delayed"],
+            "delay_pct": _pct(entry["delayed"], entry["total"]),
+            "avg_days_late": (
+                round(entry["days_late"] / entry["delayed"], 1)
+                if entry["delayed"] else None
+            ),
+        }
+        for category, entry in stats.items()
+    ]
+
+    # Ranked by the NUMBER of delayed consignments, not the percentage. Sorting
+    # on percentage puts categories with a single delayed consignment at 100%
+    # above a category with 17 delayed out of 34 — which is noise sitting on top
+    # of the real problem. Count first, then percentage to break ties.
+    rows.sort(key=lambda r: (r["delayed"], r["delay_pct"] or 0), reverse=True)
+    return rows[:limit]

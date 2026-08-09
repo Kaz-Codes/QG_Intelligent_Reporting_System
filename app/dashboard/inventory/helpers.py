@@ -4,7 +4,9 @@ from decimal import Decimal
 from sqlalchemy import select, or_, func
 from sqlalchemy.orm import joinedload
 
-from app.loading.schemas.stores_schemas import Stock, Issuance, StoreRequisition
+from app.loading.schemas.stores_schemas import (
+    Stock, Issuance, StoreRequisition, PurchasesData,
+)
 from app.masters.models import Item
 
 # How far back the consumption rate for the runway is measured.
@@ -90,6 +92,127 @@ def fetch_filtered_stock(db, branch, item, item_category, search):
         )
 
     return db.execute(query).scalars().all()
+
+
+#-------------------------------------
+# PURCHASE vs ISSUANCE BY CATEGORY  (KPI document)
+#
+# What each item category cost to buy against what it cost to consume, over the
+# same period. The two sides come from different tables (`purchases_data` and
+# `issuance`), so they are summed separately in SQL and joined on the category
+# afterwards — issuance alone is ~49k rows and must never be materialized here.
+#
+# Only the branch and category filters are applied: `item` and `search` filter
+# the STOCK screen, and carrying them across would silently narrow one side of
+# the comparison without narrowing the other.
+#
+# A category present on one side and absent on the other still appears, with
+# zero on the missing side — that gap is exactly what the chart is for.
+#-------------------------------------
+
+UNCATEGORISED = "Uncategorised"
+
+
+def _category_totals(db, model, amount_column, date_column, item_category,
+                     date_from, date_to):
+    label = func.coalesce(Item.category, UNCATEGORISED)
+
+    query = (
+        select(label, func.coalesce(func.sum(amount_column), 0))
+        .select_from(model)
+        .outerjoin(Item, Item.item_code == model.item_code)
+        .group_by(label)
+    )
+
+    if item_category:
+        query = query.where(Item.category.in_(item_category))
+
+    if date_from is not None and date_to is not None:
+        query = query.where(date_column.between(date_from, date_to))
+
+    return dict(db.execute(query).all())
+
+
+def _comparable_window(db):
+    # The two tables do not cover the same period: purchases_data currently
+    # holds ONE MONTH (2026-06-09 to 2026-07-09) while issuance holds a full
+    # YEAR. Summing each in full would compare a month of buying against a year
+    # of consuming and report every category as consuming ~10x what it buys —
+    # a conclusion about the data's coverage, dressed up as one about the
+    # business.
+    #
+    # So both sides are clipped to the window they SHARE. The window is derived
+    # rather than hard-coded, so it stays correct when more purchase history is
+    # loaded (at which point it simply widens).
+    p_min, p_max = db.execute(
+        select(func.min(PurchasesData.purchase), func.max(PurchasesData.purchase))
+    ).one()
+    i_min, i_max = db.execute(
+        select(func.min(Issuance.from_date), func.max(Issuance.from_date))
+    ).one()
+
+    if None in (p_min, p_max, i_min, i_max):
+        return None, None
+
+    start, end = max(p_min, i_min), min(p_max, i_max)
+    if start > end:
+        # No overlap at all — better to compare nothing than to compare
+        # disjoint periods.
+        return None, None
+
+    return start, end
+
+
+def purchase_vs_issuance_by_category(db, item_category=None, limit=10):
+    # NOTE: deliberately NOT filtered by branch. `purchases_data.branch` holds
+    # short codes ('QEN', 'QCL', 'QB2', …) while `issuance.branch` and
+    # `stock.branch` hold full company names ('Qadri Engineering (Pvt) Ltd.').
+    # The two vocabularies share no values, so a branch filter would match the
+    # issuance side and silently match NOTHING on the purchases side — giving a
+    # chart that reports a category as pure consumption with zero spend, which
+    # is false. Company-wide and honest beats filtered and wrong.
+    #
+    # Mapping the codes to names is not something to guess at (QE / QEN / QE-II
+    # are not self-evident); it belongs in the loader, agreed with the business.
+    date_from, date_to = _comparable_window(db)
+
+    purchased = _category_totals(
+        db, PurchasesData, PurchasesData.amount, PurchasesData.purchase,
+        item_category, date_from, date_to,
+    )
+    issued = _category_totals(
+        db, Issuance, Issuance.total_price, Issuance.from_date,
+        item_category, date_from, date_to,
+    )
+
+    rows = []
+    for category in set(purchased) | set(issued):
+        rows.append({
+            "category": category,
+            "purchased": purchased.get(category, Decimal("0")),
+            "issued": issued.get(category, Decimal("0")),
+        })
+
+    # Ranked by the larger of the two sides, so a category that is huge on
+    # consumption but barely purchased (or the reverse) still makes the chart —
+    # ranking on purchases alone would hide exactly the imbalances worth seeing.
+    rows.sort(key=lambda r: max(r["purchased"], r["issued"]), reverse=True)
+
+    for row in rows:
+        row["net"] = row["purchased"] - row["issued"]
+
+    return {
+        "categories_total": len(rows),
+        "rows": rows[:limit],
+        # The shared window both sides were clipped to. Returned so the chart
+        # can be labelled with the period it actually describes — without it a
+        # reader assumes the figures cover everything loaded, which they do not.
+        "period": {"from": date_from, "to": date_to},
+        # Tells the front end to label this chart "all branches" even when a
+        # branch filter is active on the rest of the screen, so the mismatch is
+        # visible rather than mistaken for filtered data.
+        "branch_filtered": False,
+    }
 
 
 #-------------------------------------

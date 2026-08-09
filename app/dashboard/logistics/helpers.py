@@ -12,7 +12,12 @@ from app.trucking.models import TruckingConsignment
 def fetch_orders(db):
     query = select(LogisticsConsignment).where(
         LogisticsConsignment.is_deleted == False
-    ).options(selectinload(LogisticsConsignment.items))
+    # Containers are eager-loaded too: the container-type usage chart reads
+    # them, and without this every order would lazy-load its own.
+    ).options(
+        selectinload(LogisticsConsignment.items),
+        selectinload(LogisticsConsignment.containers),
+    )
     return db.execute(query).scalars().all()
 
 
@@ -20,7 +25,12 @@ def fetch_filtered_orders(db, status, shipping_line, country, customer,
                           etd_from, etd_to, search):
     query = select(LogisticsConsignment).where(
         LogisticsConsignment.is_deleted == False
-    ).options(selectinload(LogisticsConsignment.items))
+    # Containers are eager-loaded too: the container-type usage chart reads
+    # them, and without this every order would lazy-load its own.
+    ).options(
+        selectinload(LogisticsConsignment.items),
+        selectinload(LogisticsConsignment.containers),
+    )
 
     if status:
         query = query.where(LogisticsConsignment.current_status.in_(status))

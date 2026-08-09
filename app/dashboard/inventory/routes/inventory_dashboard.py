@@ -4,7 +4,10 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_INVENTORY_DASHBOARD
-from app.dashboard.inventory.helpers import fetch_filtered_stock, consumption_map, reorder_level_map, option_lists
+from app.dashboard.inventory.helpers import (
+    fetch_filtered_stock, consumption_map, reorder_level_map, option_lists,
+    purchase_vs_issuance_by_category,
+)
 from app.dashboard.inventory.serializers import serialize_rows, serialize_inventory_dashboard
 from app.dashboard.inventory.calculations import STOCK_STATUSES, REORDER_STATUSES
 from typing import Optional
@@ -53,6 +56,12 @@ def inventory_dashboard(
             # aggregates, not shipped over the wire. Dropdown values come from
             # cheap DISTINCT queries, not from loading the whole table.
             **serialize_inventory_dashboard(rows),
+            # KPI document. Built from purchases + issuance rather than the
+            # stock rows above, so it takes only the category filter — see the
+            # helper for why branch cannot be applied to both sides.
+            "purchase_vs_issuance_by_category": purchase_vs_issuance_by_category(
+                db, category
+            ),
             "statuses": STOCK_STATUSES,
             "reorder_statuses": REORDER_STATUSES,
             **option_lists(db),

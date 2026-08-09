@@ -1,0 +1,251 @@
+"""
+Backfill the imports columns the loader never mapped.
+
+The sheet has always carried these; `load_05_consignments` simply did not read
+them, which is why the Imports KPIs (spend, demands, supplier Pareto) had
+nothing to compute from:
+
+    Demand Dt.        -> requisition_date   (~51% of consignments)
+    Req. Dt.          -> required_date      (~100%)
+    Total Value(PKR)  -> pkr_total          (~98%)
+    Total Value(FC)   -> foreign_total      (~97%)
+    S/Terms           -> incoterm           (~95%)  -- OPT-IN, see below
+
+Deliberately NOT loaded: `Lead Time` and `Actual Lead Time`.
+
+WHY A BACKFILL AND NOT A RELOAD. `load_all` is destructive — it drops and
+refills every transaction table, taking anything entered through the app with
+it. This only fills columns that are currently empty, so it is safe on a live
+database and can be re-run.
+
+WHY THE SHEET'S OWN TOTALS. `pkr_total` / `foreign_total` are normally computed
+by helpers.recompute_derived on save. Loaded rows never went through that, and
+the workbook already carries the figures finance actually used — so those are
+taken verbatim rather than reconstructed from qty x price x rate, which would
+disagree with the printed reports (see rule 4 in CLAUDE.md: never restate a
+booked figure at a different rate).
+
+INCOTERM IS OPT-IN (`--incoterm`). It is the one column here that changes
+BEHAVIOUR rather than just adding numbers: `incoterm == 'FOB'` is what makes a
+consignment eligible to be sent to Logistics/Trucking, so loading it turns ~46
+historical consignments into sendable work. Values are messy in the sheet
+("FOB SHANGHAI", "FOB-LCL", "CFR KARACHI"), so they are normalised onto the
+leading Incoterm token and anything unrecognised is skipped rather than stored
+raw.
+
+Run with:
+    python -m app.loading.scripts.backfill_import_demand_dates
+    python -m app.loading.scripts.backfill_import_demand_dates --incoterm
+    python -m app.loading.scripts.backfill_import_demand_dates --dry-run
+"""
+
+import sys
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+import app.accounts.models
+import app.masters.models
+import app.imports.models
+import app.logistics.models
+import app.trucking.models
+import app.loading.schemas.stores_schemas
+
+from app.database import SessionLocal
+from app.enums import Incoterm
+from app.loading.scripts.etl_common import (
+    read_and_concat, list_excel_files, clean_text, clean_date,
+)
+from sqlalchemy import text
+
+CURRENT_DIR = Path(__file__).resolve().parents[1]
+DIRECTORY = CURRENT_DIR / "data" / "imports"
+
+VALID_INCOTERMS = [i.value for i in Incoterm]
+
+
+def clean_money(value):
+    """Sheet money -> Decimal. Handles thousands separators and stray text;
+    returns None rather than raising, so one bad cell can't sink the run."""
+    text_value = clean_text(value)
+    if text_value is None:
+        return None
+    cleaned = str(text_value).replace(",", "").replace("Rs", "").strip()
+    try:
+        number = Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return None
+    # A zero total is indistinguishable from "not recorded" here, and writing
+    # 0 over NULL would make an unknown look like a real figure.
+    return number if number != 0 else None
+
+
+def map_incoterm(value):
+    """'FOB SHANGHAI' / 'FOB-LCL' / 'CFR KARACHI' -> the canonical enum value.
+
+    Matches the LONGEST canonical term that the cell starts with, so 'CFR' is
+    not mistaken for 'CFR - FCL' handling and 'FOB' is found inside 'FOB-LCL'.
+    Anything unrecognised returns None and is skipped — the same
+    default-rather-than-store-junk rule the logistics loader uses for statuses.
+    """
+    raw = clean_text(value)
+    if raw is None:
+        return None
+    token = str(raw).upper().replace("-", " ").replace("/", " ").strip()
+    for term in sorted(VALID_INCOTERMS, key=len, reverse=True):
+        if token == term or token.startswith(term + " "):
+            return term
+    return None
+
+
+def group_sheet_rows(df):
+    """Reproduce load_05_consignments._group exactly: rows sharing a Payment
+    Ref No are ONE consignment; a row without one stands alone; rows with no
+    Item Code are skipped. Returns the groups in the loader's own order, which
+    is what makes position -> id recoverable."""
+    order, by_ref, singleton = [], {}, 0
+
+    for _, row in df.iterrows():
+        if not clean_text(row.get("Item Code")):
+            continue
+        ref = clean_text(row.get("Payment Ref No"))
+        if ref is None:
+            key = ("noref", singleton)
+            singleton += 1
+            by_ref[key] = [row]
+            order.append(key)
+        else:
+            key = ("ref", ref)
+            if key not in by_ref:
+                by_ref[key] = []
+                order.append(key)
+            by_ref[key].append(row)
+
+    return [by_ref[k] for k in order]
+
+
+def first_value(rows, column, cleaner):
+    for row in rows:
+        value = cleaner(row.get(column))
+        if value is not None:
+            return value
+    return None
+
+
+def run(with_incoterm=False, dry_run=False):
+    files = list_excel_files(DIRECTORY)
+    if not files:
+        print(f"no workbooks in {DIRECTORY}")
+        return
+
+    df = read_and_concat("Sheet1", files)
+    groups = group_sheet_rows(df)
+    print(f"sheet: {len(df)} rows -> {len(groups)} consignment groups\n")
+
+    db = SessionLocal()
+    try:
+        # The loader gave group N the id N+1. Rather than trust that blindly,
+        # verify it against the stored instrument_number (Payment Ref No) —
+        # a silent off-by-one here would write every value onto the wrong
+        # consignment, which is far worse than not running at all.
+        stored = {
+            cid: instrument for cid, instrument in db.execute(text(
+                "SELECT id, instrument_number FROM consignments WHERE is_deleted = false"
+            )).all()
+        }
+
+        checked = matched = 0
+        for index, rows in enumerate(groups):
+            cid = index + 1
+            if cid not in stored:
+                continue
+            sheet_ref = first_value(rows, "Payment Ref No", clean_text)
+            if sheet_ref is None or stored[cid] is None:
+                continue
+            checked += 1
+            if str(sheet_ref).strip() == str(stored[cid]).strip():
+                matched += 1
+
+        rate = (matched / checked * 100) if checked else 0
+        print(f"id alignment check: {matched}/{checked} groups match on Payment Ref No ({rate:.0f}%)")
+        if checked and rate < 95:
+            print("\nABORTED — the sheet's row order no longer matches the loaded ids.")
+            print("Writing now would put values on the wrong consignments.")
+            return
+        print()
+
+        filled = {c: 0 for c in
+                  ("requisition_date", "required_date", "pkr_total", "foreign_total", "incoterm")}
+        skipped_incoterm = set()
+        touched = 0
+
+        for index, rows in enumerate(groups):
+            cid = index + 1
+            if cid not in stored:
+                continue
+
+            updates = {
+                "requisition_date": first_value(rows, "Demand Dt.", clean_date),
+                "required_date": first_value(rows, "Req. Dt.", clean_date),
+                "pkr_total": first_value(rows, "Total Value(PKR)", clean_money),
+                "foreign_total": first_value(rows, "Total Value(FC)", clean_money),
+            }
+
+            if with_incoterm:
+                raw = first_value(rows, "S/Terms", clean_text)
+                mapped = map_incoterm(raw)
+                if raw is not None and mapped is None:
+                    skipped_incoterm.add(str(raw).strip())
+                updates["incoterm"] = mapped
+
+            # COALESCE semantics: only ever fill an empty column. Anything a
+            # user has since entered through the app wins over the sheet.
+            sets, params = [], {"id": cid}
+            for column, value in updates.items():
+                if value is None:
+                    continue
+                sets.append(f"{column} = COALESCE({column}, :{column})")
+                params[column] = value
+                filled[column] += 1
+
+            if not sets:
+                continue
+            touched += 1
+            if not dry_run:
+                db.execute(text(
+                    f"UPDATE consignments SET {', '.join(sets)} WHERE id = :id"
+                ), params)
+
+        if not dry_run:
+            db.commit()
+
+        print(f"{'WOULD UPDATE' if dry_run else 'updated'} {touched} consignments")
+        for column, n in filled.items():
+            if column == "incoterm" and not with_incoterm:
+                print(f"   {column:<18} skipped (pass --incoterm to include)")
+            else:
+                print(f"   {column:<18} value available for {n}")
+
+        if skipped_incoterm:
+            print(f"\n   unmapped S/Terms values (left NULL): {sorted(skipped_incoterm)[:10]}")
+
+        if not dry_run:
+            print("\nresulting coverage:")
+            row = db.execute(text("""
+                SELECT count(*),
+                       count(requisition_date), count(required_date),
+                       count(pkr_total), count(foreign_total),
+                       count(*) FILTER (WHERE incoterm = 'FOB')
+                FROM consignments WHERE is_deleted = false
+            """)).fetchone()
+            print(f"   consignments      {row[0]}")
+            print(f"   requisition_date  {row[1]}")
+            print(f"   required_date     {row[2]}")
+            print(f"   pkr_total         {row[3]}")
+            print(f"   foreign_total     {row[4]}")
+            print(f"   incoterm = FOB    {row[5]}  <- these become sendable to Logistics/Trucking")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    run(with_incoterm="--incoterm" in sys.argv, dry_run="--dry-run" in sys.argv)

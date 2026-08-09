@@ -185,3 +185,48 @@ def monthly_value_trend(rows):
         totals[month] = totals.get(month, Decimal("0")) + _amount(row)
 
     return [{"month": month, "value": totals[month]} for month in sorted(totals)]
+
+
+#=====================================================
+# THE KPI-DOCUMENT FIGURES  (Local Procurement)
+#
+# The document asks for four: total purchase quantity, total value (PKR),
+# purchase delay and on-time rate. Two of them already exist above —
+# `kpis.total_value` and `kpis.on_time_pct` — so only the missing two are added
+# here, computed over the same filtered rows.
+#=====================================================
+
+def procurement_kpis(rows):
+    quantity = 0
+    value = Decimal("0")
+
+    # The document defines purchase delay as the average of
+    # (required date - purchase date). That is negative when a line is late, so
+    # the sign is flipped here: `avg_delay_days` is positive when purchasing ran
+    # LATE, which is how a figure labelled "delay" is read. Both the late-only
+    # average and the all-lines average are returned, because they answer
+    # different questions — how bad the late ones are, versus whether
+    # purchasing is running early or late overall.
+    late_days = []
+    all_days = []
+
+    for row in rows:
+        quantity += row.qty or 0
+        value += _amount(row)
+
+        if row.purchase is not None and row.required_d is not None:
+            days = (row.purchase - row.required_d).days
+            all_days.append(days)
+            if days > 0:
+                late_days.append(days)
+
+    avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else None
+
+    return {
+        "total_quantity": quantity,
+        "total_value": value,
+        "avg_delay_days": avg(late_days),
+        "avg_days_vs_required": avg(all_days),
+        "delayed_lines": len(late_days),
+        "basis": len(all_days),
+    }

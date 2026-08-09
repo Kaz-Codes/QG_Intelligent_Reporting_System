@@ -381,7 +381,48 @@ keeping payloads in KBs).
   (Pending/Completed/Delayed) + overdue; inventory derives stock status,
   **reorder level** (from store requisitions) and **days-of-stock runway** (from
   issuance).
-- **whole** — cross-module overview.
+- **whole** `GET /dashboard/overview` — the cross-module overview, and the one
+  dashboard that reads every module at once (imports, purchases, logistics,
+  trucking, stores). It **never materializes rows** — every figure is a single
+  SQL aggregate, so spanning ~49k issuance rows still answers in well under a
+  second. Four sections: **imports** (period value, in-process by stage, shafts),
+  **procurement** (period value, category split, delay %, cycle time),
+  **logistics** (trucking cost by movement, shipments handled) and **stores**
+  (stock value, value by store, days of stock, dead stock).
+  - **Params:** `date_from` / `date_to` — **both omitted → month to date**,
+    either given → that custom range; the resolved window is echoed back under
+    `period` so the front end labels tiles with what was actually computed, not
+    what it asked for. Plus `dead_stock_days` (default **180**).
+  - **Period vs lifetime is stated per figure**, not inferred from its name:
+    imports/procurement figures are windowed, logistics counts and stores are
+    running totals or snapshots.
+  - **Every ratio ships with its denominator** (`*_basis`), because several rest
+    on a small slice of the book and a bare percentage would read as a fact about
+    the whole table.
+  - **Gaps are surfaced, never swallowed**: `imports.period_value.undated` is the
+    money with no ETD (it falls in *no* window); trucking's NULL `movement_type`
+    jobs get an **Unclassified** bucket rather than being folded into Inbound or
+    Outbound (there is no "Local" type in the data and none can be inferred); and
+    `dead_stock.exceeds_history` warns when the threshold reaches back past the
+    issuance data, where the figure stops responding to it.
+- **The KPI document** (`Supply_Chain_KPI's.docx`) is implemented **across the
+  per-module dashboards**, added alongside each screen's original figures rather
+  than replacing them: imports gets spend/demands/delay/supplier-Pareto/category
+  delays, purchases gets quantity + delay, logistics gets dispatch KPIs, segment
+  split, container usage and customer delays (shipments) plus the packing cost
+  block, and inventory gets purchase-vs-issuance by category.
+  - **Where a figure has no data, it returns `null` with its basis — never 0.**
+    Packing has no `actual_packing_cost` at all, so savings stay null; a
+    confident Rs 0 would read as "we packed for free".
+  - Two figures the data blocks today, each unlocked by data entry and not by
+    code: **packing cost/savings** (needs `actual_packing_cost`) and the
+    **shipments segment split** (needs `department` on delivered orders — it is
+    NULL on exactly the orders that have arrival dates, so `has_segmentation`
+    comes back false).
+  - **`purchases_data.branch` holds short codes (`QEN`, `QCL`, `QB2`…) while
+    `issuance`/`stock` hold full company names.** They share no values, so the
+    purchase-vs-issuance chart is deliberately **not** branch-filtered. Mapping
+    them belongs in the loader, agreed with the business.
 - **All the formulas are in `calculations.md`.**
 
 ## reports — `/reports`
@@ -464,6 +505,16 @@ models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
   every start (and every `--reload`) silently doubled `purchases_data` (no natural
   key, and the DROP list had `purchases` instead of `purchases_data`, so the
   clear was a no-op). `app.main` only does `create_all` + seed on startup.
+- **`backfill_import_demand_dates` is standalone and must be re-run after any
+  imports reload.** It is the only source of `requisition_date`, `required_date`,
+  `pkr_total` and `foreign_total` on loaded consignments — the imports loader
+  writes none of them. It is *not* part of `load_all`, so a reload silently wipes
+  all four and every figure built on them (the overview's import value, the
+  reports spend column) reads zero without erroring. Run
+  **`python -m app.loading.scripts.backfill_import_demand_dates`** after loading
+  imports. The other backfills do not have this problem — terminal flags, stock
+  rank and the logistics/trucking close flags were folded into their loaders and
+  survive a reload on their own.
 
 ---
 
