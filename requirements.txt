@@ -36,3 +36,8 @@ openpyxl
 # Reads legacy .xls workbooks — several source files under
 # app/loading/data/items_database are that older format.
 xlrd
+
+# --- chatbot proxy ---
+# app/chatbot_proxy.py forwards /chatbot/* to chatbot_backend/ (a separate
+# service on its own port) so the frontend only needs this app's own base URL.
+httpx

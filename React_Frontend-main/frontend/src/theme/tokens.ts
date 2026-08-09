@@ -4,17 +4,21 @@
  * (JS values are needed for Recharts, which can't read Tailwind classes).
  */
 
-export const BRAND = '#0369A1'
-export const BRAND_DEEP = '#075985'
-export const BRAND_LIGHT = '#7DC4EA'
-/** Retained name for call-site compatibility; now a deep navy rather than a
- * violet — used as the third chart hue and the trend-line dot. */
-export const VIOLET = '#1E3A5F'
-export const GOLD = '#A16207'
+export const BRAND = '#A16207'
+export const BRAND_DEEP = '#7C4A05'
+export const BRAND_LIGHT = '#E0A50B'
+/** Retained name for call-site compatibility; now warm graphite — used as the
+ * third chart hue and the trend-line dot. */
+export const VIOLET = '#3B4654'
+/** The literal Qadri Group logo gold. Accent bars, focus rings and fills with
+ * dark text only — 1.42:1 on white, so never for text or white-on-gold. */
+export const GOLD = '#F8D807'
 
-/** Steel blue -> brass -> navy -> supporting tints. Six hues that stay
- * distinguishable in a stacked bar without turning a report into a rainbow. */
-export const CHART_SEQUENCE = [BRAND, GOLD, VIOLET, '#0E7490', '#8C6D1F', '#7C93AD']
+/** Gold leads (brand), then maximally-separated hues. A six-step warm ramp
+ * would be on-brand and unreadable — categorical series need hue separation
+ * more than they need to match the logo. Chart gold is darkened to #B87F09
+ * so bars clear 3:1 against the canvas. */
+export const CHART_SEQUENCE = ['#B87F09', '#0F766E', '#3B4654', '#B4531A', '#3E6E9E', '#8A6E2F']
 
 export type PageKey =
   | 'dashboard'
@@ -30,22 +34,23 @@ export type PageKey =
   | 'assistant'
   | 'userManagement'
 
-/** Restrained industrial set — steel blue, petrol, brass, navy, slate.
+/** Restrained industrial set anchored on brand gold — gold, burnt orange,
+ * petrol, steel, graphite, bronze.
  * Every module still reads as distinct, but the palette holds together as
  * one system instead of twelve unrelated hues. */
 export const MODULE_ACCENTS: Record<PageKey, string> = {
   dashboard: BRAND,
-  purchases: '#A16207',
+  purchases: '#B4531A',
   inventory: '#0F766E',
-  imports: '#0E7490',
-  importsStatus: '#1E3A5F',
-  logisticsStatus: '#475569',
-  truckingStatus: '#7C4A11',
-  dataEntry: '#0E7490',
-  logistics: '#1E3A5F',
-  reports: '#475569',
-  assistant: '#0369A1',
-  userManagement: '#64748B',
+  imports: '#3E6E9E',
+  importsStatus: '#3B4654',
+  logisticsStatus: '#5C5346',
+  truckingStatus: '#8A6E2F',
+  dataEntry: '#0F766E',
+  logistics: '#3B4654',
+  reports: '#5C5346',
+  assistant: BRAND,
+  userManagement: '#6B6156',
 }
 
 export interface Palette {
@@ -71,18 +76,18 @@ export interface Palette {
 }
 
 export const LIGHT: Palette = {
-  navy: '#0F172A', navyDeep: '#020617', goldSoft: '#F0E4BE', brandSoft: '#E0F2FE',
-  ink: '#0F172A', muted: '#475569', line: '#DDE3EC',
-  surface: '#FFFFFF', canvas: '#F8FAFC', canvasAlt: '#EEF2F7', sidebarBg: '#FFFFFF',
-  risk: '#B42318', riskBg: '#FEF0EF', watch: '#A15C07', watchBg: '#FEF6E7',
-  healthy: '#17694A', healthyBg: '#E7F5EF', info: '#0F5C8F', infoBg: '#EAF3FA',
+  navy: '#1A1614', navyDeep: '#0A0806', goldSoft: '#FDF4D3', brandSoft: '#FBF0D9',
+  ink: '#1A1614', muted: '#6B6156', line: '#E6DFD2',
+  surface: '#FFFFFF', canvas: '#FAF8F5', canvasAlt: '#F3EFE8', sidebarBg: '#FFFFFF',
+  risk: '#B42318', riskBg: '#FBEBE9', watch: '#C2410C', watchBg: '#FDF2E3',
+  healthy: '#17694A', healthyBg: '#E7F5EF', info: '#1F5F8B', infoBg: '#E9F1F7',
 }
 
 export const DARK: Palette = {
-  navy: '#E6EDF6', navyDeep: '#020617', goldSoft: '#7A5B14', brandSoft: '#0C2A3D',
-  ink: '#E6EDF6', muted: '#94A3B8', line: '#253044',
-  surface: '#131A26', canvas: '#080B12', canvasAlt: '#1A2130', sidebarBg: '#0D131E',
-  risk: '#F58F82', riskBg: '#2A1B1A', watch: '#E3AC55', watchBg: '#2A2317',
+  navy: '#F2EDE4', navyDeep: '#0A0806', goldSoft: '#4A3708', brandSoft: '#2E2208',
+  ink: '#F2EDE4', muted: '#A79A88', line: '#332C21',
+  surface: '#17140F', canvas: '#0A0908', canvasAlt: '#211C15', sidebarBg: '#100E0A',
+  risk: '#F58F82', riskBg: '#2A1A18', watch: '#F0A868', watchBg: '#2A2015',
   healthy: '#4FD394', healthyBg: '#14281F', info: '#7FC0EA', infoBg: '#10222F',
 }
 

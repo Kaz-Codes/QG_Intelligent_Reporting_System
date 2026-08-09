@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Sparkles, Trash2 } from 'lucide-react'
-import { DataTable } from '@/components/DataTable'
-import { Donut } from '@/components/charts/Donut'
-import { askQadriBot, SUGGESTED_QUERIES, type BotAnswer } from '@/lib/mockData/assistant'
+import { AssistantChart } from '@/components/assistant/AssistantChart'
+import { AssistantDataTable } from '@/components/assistant/AssistantDataTable'
+import { AssistantMarkdown } from '@/components/assistant/AssistantMarkdown'
+import { ClarifyOptions } from '@/components/assistant/ClarifyOptions'
+import { DevDetailsPanel } from '@/components/assistant/DevDetailsPanel'
+import { useChat } from '@/lib/chatbot/useChat'
+import { useChatHealth } from '@/lib/chatbot/useHealth'
+import type { AssistantMessage } from '@/lib/chatbot/types'
 import logo from '@/assets/qg_logo_transparent.webp'
 import { cn } from '@/lib/utils'
 
 const BOT_NAME = 'QG-IRS'
 
-interface Message {
-  role: 'user' | 'bot'
-  text: string
-  answer?: BotAnswer
-}
+const SUGGESTED_QUERIES = [
+  'Which purchase orders are delayed?',
+  'Which supplier has the most delays?',
+  'Which items are below reorder level?',
+  'Show imports pending clearance',
+]
 
 // The mark is a transparent cut-out, so it gets no tile treatment — a rounded
 // card + ring + shadow would draw a box around the empty space in the logo's
@@ -44,60 +50,74 @@ function TypingDots() {
   )
 }
 
-function BotResult({ answer }: { answer: BotAnswer }) {
+function AssistantResult({
+  message,
+  onOptionClick,
+  disabled,
+}: {
+  message: AssistantMessage
+  onOptionClick: (option: string) => void
+  disabled: boolean
+}) {
+  const { content, meta, rows = [], columns, charts = [], clarificationOptions = [] } = message
+  const hasData = rows.length > 0
+  const chartList = hasData ? charts.filter((c) => c && c.type && c.type !== 'none') : []
+  const computedTable =
+    meta?.computationResult &&
+    typeof meta.computationResult === 'object' &&
+    (meta.computationResult as { kind?: string }).kind === 'table'
+      ? (meta.computationResult as { columns?: string[]; rows?: Record<string, unknown>[] })
+      : null
+
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm leading-relaxed text-ink" dangerouslySetInnerHTML={{ __html: mdBold(answer.text) }} />
-      {answer.table && (
-        <DataTable columns={answer.table.columns} rows={answer.table.rows} height={320} />
-      )}
-      {answer.chart && (
-        <div className="rounded-xl border border-line p-2">
-          <Donut labels={answer.chart.labels} values={answer.chart.values} height={260} />
+      <AssistantMarkdown content={content} />
+
+      <ClarifyOptions options={clarificationOptions} onPick={onOptionClick} disabled={disabled} />
+
+      {chartList.map((spec, i) => (
+        <AssistantChart key={i} spec={spec} rows={rows} />
+      ))}
+
+      {hasData && <AssistantDataTable columns={columns} rows={rows} />}
+
+      {computedTable && (
+        <div>
+          <p className="mb-1 text-xs font-medium text-muted">
+            Computed result{meta?.computationExplanation ? ` — ${meta.computationExplanation}` : ''}
+          </p>
+          <AssistantDataTable columns={computedTable.columns} rows={computedTable.rows ?? []} />
         </div>
       )}
+
+      {meta && <DevDetailsPanel meta={meta} />}
     </div>
   )
 }
 
-// Tiny **bold** -> <strong> so canned answers can emphasize numbers without a
-// full markdown dependency. Input is our own trusted mock text, not user input.
-function mdBold(text: string): string {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-}
-
 export function Assistant() {
-  const [messages, setMessages] = useState<Message[]>([])
+  const { messages, isSending, status, error, send, resetConversation } = useChat()
+  const { status: connection } = useChatHealth()
   const [input, setInput] = useState('')
-  const [thinking, setThinking] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, thinking])
+  }, [messages, status])
 
-  function send(question: string) {
-    const q = question.trim()
-    if (!q || thinking) return
+  function handleSend(question: string) {
     setInput('')
-    setMessages((m) => [...m, { role: 'user', text: q }])
-    setThinking(true)
-    // Simulated latency so the typing indicator reads as "working," not instant.
-    window.setTimeout(() => {
-      const answer = askQadriBot(q)
-      setMessages((m) => [...m, { role: 'bot', text: answer.text, answer }])
-      setThinking(false)
-    }, 650)
+    void send(question)
   }
 
   const empty = messages.length === 0
 
   const inputBar = (
     <form
-      onSubmit={(e) => { e.preventDefault(); send(input) }}
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (input.trim()) handleSend(input)
+      }}
       className="flex items-center gap-2 rounded-2xl border border-line bg-surface p-2 shadow-sm focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20"
     >
       <Sparkles size={18} className="ml-2 shrink-0 text-brand-light" />
@@ -110,7 +130,7 @@ export function Assistant() {
       />
       <button
         type="submit"
-        disabled={!input.trim() || thinking}
+        disabled={!input.trim() || isSending}
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand text-white transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <ArrowUp size={18} />
@@ -119,10 +139,9 @@ export function Assistant() {
   )
 
   // Landing state — one centered block (logo, name, the input itself, a few
-  // quick-start prompts) filling the whole page, nothing else. No header,
-  // no chrome: the Google-homepage moment for the app's default landing
-  // page. It switches to the full chat layout below the instant a message
-  // is sent.
+  // quick-start prompts) filling the whole page, nothing else. No header, no
+  // chrome. Switches to the full chat layout below the instant a message is
+  // sent.
   if (empty) {
     return (
       <div className="flex h-[calc(100vh-4rem)] flex-col items-center justify-center px-4">
@@ -141,7 +160,7 @@ export function Assistant() {
             {SUGGESTED_QUERIES.map((s) => (
               <button
                 key={s}
-                onClick={() => send(s)}
+                onClick={() => handleSend(s)}
                 className="rounded-xl border border-line bg-surface px-4 py-3 text-left text-sm text-ink shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-light hover:shadow-md"
               >
                 {s}
@@ -162,15 +181,25 @@ export function Assistant() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="font-display text-xl font-bold text-navy">{BOT_NAME}</h1>
-              <span className="inline-flex items-center gap-1 rounded-full bg-healthy-bg px-2 py-0.5 text-xs font-semibold text-healthy">
-                <span className="h-1.5 w-1.5 rounded-full bg-healthy" /> Online
-              </span>
+              {connection === 'online' ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-healthy-bg px-2 py-0.5 text-xs font-semibold text-healthy">
+                  <span className="h-1.5 w-1.5 rounded-full bg-healthy" /> Online
+                </span>
+              ) : connection === 'offline' ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-risk-bg px-2 py-0.5 text-xs font-semibold text-risk">
+                  <span className="h-1.5 w-1.5 rounded-full bg-risk" /> Offline
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-watch-bg px-2 py-0.5 text-xs font-semibold text-watch">
+                  <span className="h-1.5 w-1.5 rounded-full bg-watch" /> Connecting…
+                </span>
+              )}
             </div>
-            <p className="text-xs text-muted">Supply-chain assistant · sample data</p>
+            <p className="text-xs text-muted">Purchases, inventory, imports and logistics — live from the database</p>
           </div>
         </div>
         <button
-          onClick={() => setMessages([])}
+          onClick={resetConversation}
           className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-canvas-alt hover:text-risk"
         >
           <Trash2 size={13} /> Clear
@@ -180,37 +209,43 @@ export function Assistant() {
       {/* Conversation */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="flex flex-col gap-5 pb-4">
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={cn('animate-fade-in-up flex gap-3', m.role === 'user' ? 'justify-end' : 'justify-start')}
-            >
-              {m.role === 'bot' && <BotAvatar />}
-              <div
-                className={cn(
-                  'max-w-[85%] rounded-2xl px-4 py-3',
-                  m.role === 'user'
-                    ? 'bg-brand text-white'
-                    : 'border border-line bg-surface',
-                )}
-              >
-                {m.role === 'user'
-                  ? <p className="text-sm leading-relaxed">{m.text}</p>
-                  : m.answer && <BotResult answer={m.answer} />}
+          {messages.map((m) => {
+            const isUser = m.role === 'user'
+            // An assistant message exists from the moment the stream starts;
+            // don't render an empty bubble before the first token arrives.
+            if (!isUser && m.streaming && !m.content) return null
+            return (
+              <div key={m.id} className={cn('animate-fade-in-up flex gap-3', isUser ? 'justify-end' : 'justify-start')}>
+                {!isUser && <BotAvatar />}
+                <div
+                  className={cn(
+                    'max-w-[85%] rounded-2xl px-4 py-3',
+                    isUser ? 'bg-brand text-white' : m.failed ? 'border border-risk/40 bg-risk-bg' : 'border border-line bg-surface',
+                  )}
+                >
+                  {isUser ? (
+                    <p className="text-sm leading-relaxed">{m.content}</p>
+                  ) : m.failed ? (
+                    <span className="text-sm text-risk">That message could not be answered. Please try again.</span>
+                  ) : (
+                    <AssistantResult message={m} onOptionClick={handleSend} disabled={isSending} />
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
-          {thinking && (
+            )
+          })}
+          {isSending && !messages[messages.length - 1]?.content && (
             <div className="animate-fade-in flex gap-3">
               <BotAvatar />
               <div className="rounded-2xl border border-line bg-surface px-4 py-3">
-                <TypingDots />
+                {status ? <p className="text-xs text-muted">{status}</p> : <TypingDots />}
               </div>
             </div>
           )}
         </div>
       </div>
 
+      {error && <p className="mb-2 text-xs text-risk">{error}</p>}
       <div className="mt-3">{inputBar}</div>
     </div>
   )

@@ -5,62 +5,67 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* Enterprise palette — navy ink + steel-blue interactive + brass accent.
-     Replaces the previous indigo/violet SaaS-template scheme, which reads as
-     a product demo rather than a system of record. */
-  --navy: #0F172A;
-  --navy-deep: #020617;
-  --gold-soft: #F0E4BE;
-  --brand-soft: #E0F2FE;
-  --ink: #0F172A;
-  --muted: #475569;
-  --line: #DDE3EC;
+  /* Qadri Group brand palette — logo gold + warm graphite ink.
+     Derived from qadri_logo.png (gold #F8D807 -> red #DC2827 ring on black).
+     Logo gold measures 1.42:1 on white, so it can never carry text or act as
+     a filled button: --gold holds the literal logo hue for accent bars and
+     focus rings, while --brand is the accessible end of the same ramp
+     (4.92:1 on white). Replaces the previous steel-blue enterprise scheme. */
+  --navy: #1A1614;
+  --navy-deep: #0A0806;
+  --gold-soft: #FDF4D3;
+  --brand-soft: #FBF0D9;
+  --ink: #1A1614;
+  --muted: #6B6156;
+  --line: #E6DFD2;
   --surface: #FFFFFF;
-  --canvas: #F8FAFC;
-  --canvas-alt: #EEF2F7;
+  --canvas: #FAF8F5;
+  --canvas-alt: #F3EFE8;
   --sidebar-bg: #FFFFFF;
   --risk: #B42318;
-  --risk-bg: #FEF0EF;
-  --watch: #A15C07;
-  --watch-bg: #FEF6E7;
+  --risk-bg: #FBEBE9;
+  --watch: #C2410C;
+  --watch-bg: #FDF2E3;
   --healthy: #17694A;
   --healthy-bg: #E7F5EF;
-  --info: #0F5C8F;
-  --info-bg: #EAF3FA;
+  --info: #1F5F8B;
+  --info-bg: #E9F1F7;
 
-  --brand: #0369A1;
-  --brand-deep: #075985;
-  --brand-light: #7DC4EA;
-  --violet: #1E3A5F;
-  --gold: #A16207;
+  --brand: #A16207;
+  --brand-deep: #7C4A05;
+  --brand-light: #E0A50B;
+  --violet: #3B4654;
+  --gold: #F8D807;
 }
 
 .dark {
-  --navy: #E6EDF6;
-  --navy-deep: #020617;
-  --gold-soft: #7A5B14;
-  --brand-soft: #0C2A3D;
-  --ink: #E6EDF6;
-  --muted: #94A3B8;
-  --line: #253044;
-  --surface: #131A26;
-  --canvas: #080B12;
-  --canvas-alt: #1A2130;
-  --sidebar-bg: #0D131E;
+  --navy: #F2EDE4;
+  --navy-deep: #0A0806;
+  --gold-soft: #4A3708;
+  --brand-soft: #2E2208;
+  --ink: #F2EDE4;
+  --muted: #A79A88;
+  --line: #332C21;
+  --surface: #17140F;
+  --canvas: #0A0908;
+  --canvas-alt: #211C15;
+  --sidebar-bg: #100E0A;
   --risk: #F58F82;
-  --risk-bg: #2A1B1A;
-  --watch: #E3AC55;
-  --watch-bg: #2A2317;
+  --risk-bg: #2A1A18;
+  --watch: #F0A868;
+  --watch-bg: #2A2015;
   --healthy: #4FD394;
   --healthy-bg: #14281F;
   --info: #7FC0EA;
   --info-bg: #10222F;
 
-  --brand: #38BDF8;
-  --brand-deep: #0EA5E9;
-  --brand-light: #7DD3FC;
-  --violet: #94B4D4;
-  --gold: #D3A83A;
+  /* On dark surfaces the literal logo gold finally clears contrast
+     (12.2:1 on --canvas), so --brand can be the real brand hue here. */
+  --brand: #F5C518;
+  --brand-deep: #E0A50B;
+  --brand-light: #FBD75B;
+  --violet: #8FA0B4;
+  --gold: #F8D807;
 }
 
 @theme inline {
