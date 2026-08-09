@@ -352,6 +352,7 @@ export function LogisticsStatusList() {
                     key={o.id}
                     className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${inMoGroup ? 'border-l-2 border-l-brand' : ''}`}
                     onClick={() => navigate(`/logistics-status/${o.id}`)}
+                    style={o.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
                   >
                     <td className="px-3 py-2">
                       <div className="tabular-nums font-semibold">
@@ -360,6 +361,14 @@ export function LogisticsStatusList() {
                           <span className="ml-1 font-normal text-muted">({batchDisplayLabel(o.batchNo, o.batchLabel)})</span>
                         )}
                       </div>
+                      {o.missingFields.length > 0 && (
+                        <span
+                          className="mt-0.5 inline-block rounded bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[10.5px] text-[var(--color-watch)]"
+                          title={`Missing: ${o.missingFields.join(', ')}`}
+                        >
+                          {o.missingFields.length} field{o.missingFields.length > 1 ? 's' : ''} missing
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2">{orderTypeLabel(o.department, o.orderType)}</td>
                     <td className="px-3 py-2 text-[13px]">{o.shipmentMode ?? '—'}</td>
