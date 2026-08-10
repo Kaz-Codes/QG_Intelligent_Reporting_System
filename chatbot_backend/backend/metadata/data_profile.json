@@ -1,21 +1,21 @@
 {
-  "fingerprint": "items:27749|suppliers:67|branches:5|ports:39|clearing_agents:5|stock:6070|issuance:260715|store_requisition:7075|purchases_data:68298|consignments:206|consignment_items:451|payments:0|logistics_consignments:1424|logistics_items:1399|logistics_packages:962|logistics_containers:157|trucking_consignments:399|trucking_vehicles:464",
+  "fingerprint": "items:27747|suppliers:65|branches:4|ports:24|clearing_agents:5|stock:6070|issuance:245094|store_requisition:7075|purchases_data:65520|consignments:178|consignment_items:450|payments:0|logistics_consignments:1424|logistics_items:1399|logistics_packages:962|logistics_containers:157|trucking_consignments:399|trucking_vehicles:464",
   "tables": {
     "items": {
-      "rows": 27749,
+      "rows": 27747,
       "vocabularies": {
         "default_unit_of_measurement": [
           {
             "value": "No.",
-            "rows": 17427
+            "rows": 17424
           },
           {
             "value": "kg",
-            "rows": 5206
+            "rows": 5203
           },
           {
             "value": "Ft.",
-            "rows": 1376
+            "rows": 1374
           },
           {
             "value": "Sets",
@@ -90,12 +90,12 @@
       "patchy": {}
     },
     "suppliers": {
-      "rows": 67,
+      "rows": 65,
       "vocabularies": {
         "country": [
           {
             "value": "China",
-            "rows": 39
+            "rows": 38
           },
           {
             "value": "UAE",
@@ -107,7 +107,7 @@
           },
           {
             "value": "Turkey",
-            "rows": 3
+            "rows": 2
           },
           {
             "value": "Tanzania",
@@ -252,6 +252,10 @@
             "rows": 1
           },
           {
+            "value": "Jinancity",
+            "rows": 1
+          },
+          {
             "value": "Seoul",
             "rows": 1
           },
@@ -264,7 +268,7 @@
       "patchy": {}
     },
     "branches": {
-      "rows": 5,
+      "rows": 4,
       "vocabularies": {
         "name": [
           {
@@ -280,10 +284,6 @@
             "rows": 1
           },
           {
-            "value": "QH",
-            "rows": 1
-          },
-          {
             "value": "QCL",
             "rows": 1
           }
@@ -292,22 +292,120 @@
       "patchy": {}
     },
     "ports": {
-      "rows": 39,
+      "rows": 24,
       "vocabularies": {
+        "name": [
+          {
+            "value": "Norfolk",
+            "rows": 1
+          },
+          {
+            "value": "Busan",
+            "rows": 1
+          },
+          {
+            "value": "New York",
+            "rows": 1
+          },
+          {
+            "value": "Aliaga",
+            "rows": 1
+          },
+          {
+            "value": "XINGANG",
+            "rows": 1
+          },
+          {
+            "value": "Houston",
+            "rows": 1
+          },
+          {
+            "value": "NEW YORK,USA",
+            "rows": 1
+          },
+          {
+            "value": "Tianjin",
+            "rows": 1
+          },
+          {
+            "value": "Qingdao",
+            "rows": 1
+          },
+          {
+            "value": "Port Qasim",
+            "rows": 1
+          },
+          {
+            "value": "Montreal",
+            "rows": 1
+          },
+          {
+            "value": "Shnaghai",
+            "rows": 1
+          },
+          {
+            "value": "HAIPHONG PORT",
+            "rows": 1
+          },
+          {
+            "value": "Guangzhou",
+            "rows": 1
+          },
+          {
+            "value": "Lahore",
+            "rows": 1
+          },
+          {
+            "value": "Shanghai",
+            "rows": 1
+          },
+          {
+            "value": "QINGDAO",
+            "rows": 1
+          },
+          {
+            "value": "Durban",
+            "rows": 1
+          },
+          {
+            "value": "Karachi",
+            "rows": 1
+          },
+          {
+            "value": "Busan Port",
+            "rows": 1
+          },
+          {
+            "value": "Fremantle",
+            "rows": 1
+          },
+          {
+            "value": "Ningbo",
+            "rows": 1
+          },
+          {
+            "value": "Gdynia, Poland",
+            "rows": 1
+          },
+          {
+            "value": "Damam",
+            "rows": 1
+          }
+        ],
         "port_type": [
           {
             "value": "Sea",
-            "rows": 39
+            "rows": 24
           }
         ],
         "used_as": [
           {
             "value": "Loading",
-            "rows": 34
+            "rows": 21
           },
           {
             "value": "Delivery",
-            "rows": 5
+            "rows": 3
           }
         ]
       },
@@ -361,6 +459,20 @@
             "value": "Qadri Brothers (Pvt.) Ltd. (Unit-II)",
             "rows": 763
           }
+        ],
+        "rank": [
+          {
+            "value": "C",
+            "rows": 5702
+          },
+          {
+            "value": "A",
+            "rows": 202
+          },
+          {
+            "value": "B",
+            "rows": 166
+          }
         ]
       },
       "patchy": {
@@ -368,28 +480,28 @@
       }
     },
     "issuance": {
-      "rows": 260715,
+      "rows": 245094,
       "vocabularies": {
         "branch": [
           {
-            "value": "Qadri Engineering (Pvt) Ltd.",
-            "rows": 76377
+            "value": "Qadbros Engineering (Pvt) Ltd.",
+            "rows": 65467
           },
           {
-            "value": "Qadbros Engineering (Pvt) Ltd.",
-            "rows": 68565
+            "value": "Qadri Engineering (Pvt) Ltd.",
+            "rows": 65239
           },
           {
             "value": "Qadcast (Pvt) Ltd.",
-            "rows": 56347
+            "rows": 55570
           },
           {
             "value": "Qadri Brothers (Pvt.) Ltd. (Unit-II)",
-            "rows": 52657
+            "rows": 51910
           },
           {
             "value": "Qadri Brothers (Pvt) Ltd.",
-            "rows": 6769
+            "rows": 6908
           }
         ],
         "issue_to_others": [
@@ -402,11 +514,11 @@
             "rows": 5
           },
           {
-            "value": "Riaz Qadri Sb",
+            "value": "Popu Butt",
             "rows": 3
           },
           {
-            "value": "Popu Butt",
+            "value": "Riaz Qadri Sb",
             "rows": 3
           },
           {
@@ -423,7 +535,7 @@
           },
           {
             "value": "Malik Saleem",
-            "rows": 2
+            "rows": 1
           },
           {
             "value": "Qadri Brother (Ltd.) Pvt.",
@@ -457,15 +569,15 @@
         "status": [
           {
             "value": "Issue",
-            "rows": 256983
+            "rows": 241766
           },
           {
             "value": "HoldIssuence",
-            "rows": 3486
+            "rows": 3163
           },
           {
             "value": "Hold",
-            "rows": 234
+            "rows": 153
           }
         ]
       },
@@ -632,50 +744,50 @@
       "patchy": {}
     },
     "purchases_data": {
-      "rows": 68298,
+      "rows": 65520,
       "vocabularies": {
         "branch": [
           {
             "value": "QE",
-            "rows": 25980
+            "rows": 25067
           },
           {
             "value": "QEN",
-            "rows": 20208
+            "rows": 19148
           },
           {
             "value": "QCL",
-            "rows": 9936
+            "rows": 9514
           },
           {
             "value": "QB2",
-            "rows": 9517
+            "rows": 9218
           },
           {
             "value": "QBL",
-            "rows": 1521
+            "rows": 1463
           },
           {
             "value": "IOL",
-            "rows": 569
+            "rows": 560
           },
           {
             "value": "QE-II",
-            "rows": 567
+            "rows": 550
           }
         ],
         "mop": [
           {
             "value": "On Credit",
-            "rows": 46693
+            "rows": 44414
           },
           {
             "value": "By Cash",
-            "rows": 16720
+            "rows": 16416
           },
           {
             "value": "On Advance",
-            "rows": 4838
+            "rows": 4643
           },
           {
             "value": "Payment after Delivery",
@@ -689,35 +801,35 @@
           },
           {
             "value": "Adnan Shami",
-            "rows": 9793
+            "rows": 9390
           },
           {
             "value": "Muhammad Adeel Ahmed",
-            "rows": 9767
+            "rows": 9107
           },
           {
             "value": "Nazim Maqbool Butt",
-            "rows": 8707
+            "rows": 8293
           },
           {
             "value": "Muhammad Usman",
-            "rows": 7776
-          },
-          {
-            "value": "Ghulam Mustafa",
-            "rows": 3729
+            "rows": 7529
           },
           {
             "value": "Sumair Fazil",
             "rows": 3590
           },
           {
+            "value": "Ghulam Mustafa",
+            "rows": 3344
+          },
+          {
             "value": "Hamza Ahmad",
-            "rows": 3275
+            "rows": 3210
           },
           {
             "value": "Muhammad Sajawal Khan",
-            "rows": 2979
+            "rows": 2793
           },
           {
             "value": "Abdul Manan",
@@ -728,20 +840,20 @@
             "rows": 1167
           },
           {
-            "value": "Muhammad Moeeb",
-            "rows": 1071
-          },
-          {
             "value": "Umer Siddique",
             "rows": 1024
           },
           {
+            "value": "Muhammad Moeeb",
+            "rows": 937
+          },
+          {
             "value": "Asad Tariq",
-            "rows": 876
+            "rows": 875
           },
           {
             "value": "Muhammad Ahmad Raza",
-            "rows": 553
+            "rows": 308
           },
           {
             "value": "Syed Muhammad Waqas Javed",
@@ -756,16 +868,16 @@
       "patchy": {}
     },
     "consignments": {
-      "rows": 206,
+      "rows": 178,
       "vocabularies": {
         "origin": [
           {
             "value": "China",
-            "rows": 116
+            "rows": 91
           },
           {
             "value": "Turkey",
-            "rows": 17
+            "rows": 16
           },
           {
             "value": "UAE",
@@ -777,11 +889,15 @@
           },
           {
             "value": "South Africa",
-            "rows": 8
+            "rows": 7
           },
           {
             "value": "USA",
             "rows": 6
+          },
+          {
+            "value": "South Korea",
+            "rows": 4
           },
           {
             "value": "Canada",
@@ -793,10 +909,6 @@
           },
           {
             "value": "Hong Kong",
-            "rows": 3
-          },
-          {
-            "value": "South Korea",
             "rows": 3
           },
           {
@@ -843,11 +955,11 @@
         "currency": [
           {
             "value": "USD",
-            "rows": 102
+            "rows": 99
           },
           {
             "value": "JPY",
-            "rows": 57
+            "rows": 34
           },
           {
             "value": "EUR",
@@ -861,17 +973,17 @@
         "consignment_type": [
           {
             "value": "Regular import",
-            "rows": 49
+            "rows": 54
           },
           {
             "value": "EFS",
-            "rows": 22
+            "rows": 25
           }
         ],
         "mode_of_shipment": [
           {
             "value": "Sea",
-            "rows": 118
+            "rows": 93
           },
           {
             "value": "By Sea",
@@ -937,15 +1049,15 @@
         "payment_instrument": [
           {
             "value": "Advance",
-            "rows": 73
+            "rows": 71
           },
           {
             "value": "LC",
-            "rows": 62
+            "rows": 64
           },
           {
             "value": "CAD",
-            "rows": 42
+            "rows": 17
           },
           {
             "value": "FOC",
@@ -971,80 +1083,67 @@
         "current_status": [
           {
             "value": "Arrived at Works",
-            "rows": 119
-          },
-          {
-            "value": "Under Production",
-            "rows": 42
+            "rows": 142
           },
           {
             "value": "In Transit",
-            "rows": 19
-          },
-          {
-            "value": "Ready Awaiting Sailing",
-            "rows": 9
+            "rows": 13
           },
           {
             "value": "Order Cancelled",
+            "rows": 6
+          },
+          {
+            "value": "Ready Awaiting Sailing",
+            "rows": 6
+          },
+          {
+            "value": "Under Production",
             "rows": 5
           },
           {
-            "value": "Under Custom Clearance",
-            "rows": 4
+            "value": "On Road",
+            "rows": 5
           },
           {
-            "value": "LC in Process",
-            "rows": 2
-          },
-          {
-            "value": "Costing in Process",
-            "rows": 2
-          },
-          {
-            "value": "T/T in Process",
-            "rows": 2
-          },
-          {
-            "value": "Under De-Stuffing",
-            "rows": 1
-          },
-          {
-            "value": "TT/LC in Process",
+            "value": "Under Examination",
             "rows": 1
           }
         ],
         "record_state": [
           {
+            "value": "submitted",
+            "rows": 148
+          },
+          {
             "value": "draft",
-            "rows": 206
+            "rows": 30
           }
         ]
       },
       "patchy": {
-        "exchange_rate": 0.9078,
-        "foreign_total": 0.0,
-        "pkr_total": 0.0,
-        "free_days_allowed": 0.1068,
+        "exchange_rate": 0.9045,
+        "pkr_total": 0.8989,
+        "free_days_allowed": 0.1236,
         "demurrage_or_detention_paid": 0.0,
         "container_detention": 0.0
       }
     },
     "consignment_items": {
-      "rows": 451,
+      "rows": 450,
       "vocabularies": {
         "unit_of_measurement": [
           {
             "value": "Pcs",
-            "rows": 233
+            "rows": 235
           },
           {
             "value": "Ton",
-            "rows": 99
+            "rows": 98
           },
           {
             "value": "Kg",
-            "rows": 36
+            "rows": 35
           },
           {
             "value": "Kgs",
@@ -1077,12 +1176,12 @@
         ],
         "batch_no": [
           {
-            "value": "B2",
-            "rows": 22
+            "value": "B1",
+            "rows": 27
           },
           {
-            "value": "B1",
-            "rows": 21
+            "value": "B2",
+            "rows": 26
           },
           {
             "value": "B3",
@@ -1095,6 +1194,10 @@
         ],
         "mo_number": [
           {
+            "value": "SL26-MO-2554",
+            "rows": 4
+          },
+          {
             "value": "CE26-MO-0162",
             "rows": 4
           },
@@ -1103,17 +1206,50 @@
             "rows": 2
           },
           {
-            "value": "CE26-MO-0147",
+            "value": "CE26-MO-0174",
+            "rows": 2
+          },
+          {
+            "value": "SL26-MO-2570",
+            "rows": 1
+          },
+          {
+            "value": "SL26-MO-2580",
             "rows": 1
           },
           {
             "value": "CE26-MO-0153",
             "rows": 1
+          },
+          {
+            "value": "SL26-MO-2578",
+            "rows": 1
+          },
+          {
+            "value": "CL25-MO-1099",
+            "rows": 1
+          },
+          {
+            "value": "SL26-MO-2579",
+            "rows": 1
+          },
+          {
+            "value": "CL-IDM-25-116",
+            "rows": 1
+          },
+          {
+            "value": "CL26-MO-1154",
+            "rows": 1
           }
         ]
       },
       "patchy": {
-        "unit_price": 0.9002,
+        "unit_price": 0.9022,
+        "net_weight": 0.0,
+        "gross_weight": 0.0,
+        "length": 0.0,
+        "width": 0.0,
+        "height": 0.0,
         "elc": 0.0,
         "alc": 0.0,
         "variance_absolute": 0.0,
@@ -1146,6 +1282,12 @@
           {
             "value": "Cement",
             "rows": 330
+          }
+        ],
+        "job_kind": [
+          {
+            "value": "standard",
+            "rows": 1424
           }
         ],
         "incoterm": [
@@ -1212,12 +1354,20 @@
             "rows": 2
           },
           {
+            "value": "AIG",
+            "rows": 2
+          },
+          {
             "value": "Eastern",
             "rows": 2
           },
           {
-            "value": "AIG",
-            "rows": 2
+            "value": "DLI",
+            "rows": 1
+          },
+          {
+            "value": "EASTERN",
+            "rows": 1
           },
           {
             "value": "DSV",
@@ -1228,19 +1378,11 @@
             "rows": 1
           },
           {
-            "value": "DLI",
-            "rows": 1
-          },
-          {
             "value": "FOB",
             "rows": 1
           },
           {
             "value": "CMA CGM",
-            "rows": 1
-          },
-          {
-            "value": "EASTERN",
             "rows": 1
           }
         ],
@@ -1277,7 +1419,11 @@
         "record_state": [
           {
             "value": "draft",
-            "rows": 1424
+            "rows": 1313
+          },
+          {
+            "value": "submitted",
+            "rows": 111
           }
         ]
       },
@@ -1490,11 +1636,11 @@
             "rows": 11
           },
           {
-            "value": "Manj Goods",
+            "value": "Taqwa Goods",
             "rows": 10
           },
           {
-            "value": "Taqwa Goods",
+            "value": "Manj Goods",
             "rows": 10
           },
           {
@@ -1514,7 +1660,7 @@
             "rows": 2
           },
           {
-            "value": "N.Sulehri Goods",
+            "value": "M.N Sulehri Goods",
             "rows": 1
           },
           {
@@ -1526,7 +1672,7 @@
             "rows": 1
           },
           {
-            "value": "M.N Sulehri Goods",
+            "value": "N.Sulehri Goods",
             "rows": 1
           },
           {
@@ -1589,7 +1735,11 @@
         "record_state": [
           {
             "value": "draft",
-            "rows": 399
+            "rows": 203
+          },
+          {
+            "value": "submitted",
+            "rows": 196
           }
         ]
       },

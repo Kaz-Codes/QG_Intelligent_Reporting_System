@@ -112,12 +112,12 @@ export function LoginPage() {
             style={{ boxShadow: '0 30px 70px -20px rgba(26,22,20,0.35), 0 10px 30px -10px rgba(0,0,0,0.15)' }}
           >
             <div className="flex flex-col items-center text-center">
-              <span className="mb-5 inline-flex items-center gap-1.5 rounded-full border border-brand/25 bg-brand-soft px-4 py-1.5 text-sm font-extrabold tracking-tight text-brand">
-                <Sparkles size={14} />
+              <span className="mb-5 inline-flex items-center gap-1.5 rounded-full border border-brand/25 bg-brand-soft px-4 py-1.5 text-lg font-extrabold tracking-tight text-brand">
+                <Sparkles size={16} />
                 Intelligent Reporting System
               </span>
               <h1
-                className="font-display bg-gradient-to-r from-navy via-brand to-navy bg-clip-text text-6xl font-extrabold leading-[1.05] tracking-tight text-transparent lg:text-7xl"
+                className="font-display bg-gradient-to-r from-navy via-brand to-navy bg-clip-text text-5xl font-extrabold leading-[1.05] tracking-tight text-transparent lg:text-6xl"
               >
                 QG-IRS
               </h1>

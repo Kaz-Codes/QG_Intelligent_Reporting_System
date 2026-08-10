@@ -22,7 +22,7 @@ export interface PageDef {
 // Purchases/Inventory/Imports/Logistics aren't separate entries — they live
 // as tabs inside Dashboard (see Dashboard.tsx's own tab bar).
 export const PAGE_DEFS: PageDef[] = [
-  { key: 'assistant', label: 'Assistant', path: '/assistant', icon: MessageSquare },
+  { key: 'assistant', label: 'AI-Assistant', path: '/assistant', icon: MessageSquare },
   { key: 'dashboard', label: 'Dashboards', path: '/dashboard', icon: Gauge },
   { key: 'reports', label: 'Customize Reports', path: '/reports', icon: BarChart3 },
   // Kept separate from the reporting pages above (its own section in the

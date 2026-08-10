@@ -435,5 +435,41 @@
     "created_at": "2026-08-08T11:14:25",
     "last_used": "2026-08-08T11:14:25",
     "hits": 0
+  },
+  {
+    "fingerprint": "66b23fc7dac971313bde",
+    "question": "All available dates",
+    "normalised": "all available dates",
+    "entity_key": "",
+    "sql": "WITH supplier_delays AS (\n    SELECT\n        p.supplier,\n        COUNT(*) AS delayed_purchase_count\n    FROM purchases_data p\n    WHERE p.purchase IS NOT NULL\n      AND p.required_d IS NOT NULL\n      AND p.purchase > p.required_d\n    GROUP BY p.supplier\n)\nSELECT\n    sd.supplier,\n    sd.delayed_purchase_count,\n    COUNT(*) OVER (PARTITION BY sd.delayed_purchase_count) AS tie_count\nFROM supplier_delays sd\nORDER BY sd.delayed_purchase_count DESC, sd.supplier NULLS LAST",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "829860c4e656bdfe",
+    "created_at": "2026-08-10T16:54:05",
+    "last_used": "2026-08-10T16:57:33",
+    "hits": 1
+  },
+  {
+    "fingerprint": "a9e82568fd0a0f060146",
+    "question": "Overall status",
+    "normalised": "overall status",
+    "entity_key": "item=resin",
+    "sql": "SELECT 'Import' AS source,\n       c.instrument_number AS reference,\n       CASE\n           WHEN ci.item_name ~* '[[:<:]]resins?[[:>:]]' THEN ci.item_name\n           ELSE ci.description\n       END AS matched_item,\n       c.current_status AS status,\n       c.effective_date AS status_date\nFROM consignments c\nJOIN consignment_items ci\n  ON ci.consignment_id = c.id\n AND ci.is_deleted = false\nLEFT JOIN items i\n  ON i.id = ci.item_id\nWHERE c.is_deleted = false\n  AND (\n      ci.item_name ~* '[[:<:]]resins?[[:>:]]'\n      OR ci.description ~* '[[:<:]]resins?[[:>:]]'\n      OR i.name ~* '[[:<:]]resins?[[:>:]]'\n  )\nUNION ALL\nSELECT 'Export' AS source,\n       lc.mo_no AS reference,\n       li.item_detail AS matched_item,\n       lc.current_status AS status,\n       lc.effective_date AS status_date\nFROM logistics_consignments lc\nJOIN logistics_items li\n  ON li.consignment_id = lc.id\n AND li.is_deleted = false\nWHERE lc.is_deleted = false\n  AND li.item_detail ~* '[[:<:]]resins?[[:>:]]'\nUNION ALL\nSELECT 'Road' AS source,\n       tc.reference_no AS reference,\n       tc.item_details AS matched_item,\n       tv.tracking_status AS status,\n       tc.execution_date AS status_date\nFROM trucking_consignments tc\nJOIN trucking_vehicles tv\n  ON tv.consignment_id = tc.id\n AND tv.is_deleted = false\nWHERE tc.is_deleted = false\n  AND tc.item_details ~* '[[:<:]]resins?[[:>:]]'",
+    "tables_used": [
+      "consignments",
+      "consignment_items",
+      "items",
+      "logistics_consignments",
+      "logistics_items",
+      "trucking_consignments",
+      "trucking_vehicles"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "829860c4e656bdfe",
+    "created_at": "2026-08-10T16:58:47",
+    "last_used": "2026-08-10T16:58:47",
+    "hits": 0
   }
 ]

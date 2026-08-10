@@ -19,6 +19,8 @@ import inventoryLight from '@/assets/inventory-hero-light.webp'
 import inventoryDark from '@/assets/inventory-hero-dark.webp'
 import loginLight from '@/assets/login-hero-light.webp'
 import loginDark from '@/assets/login-hero-dark.webp'
+import assistantLight from '@/assets/assistant-hero-light.webp'
+import assistantDark from '@/assets/assistant-hero-dark.webp'
 
 /**
  * Ambient, subject-related backdrop: a slow, soft "smoke" of blurred,
@@ -101,6 +103,14 @@ const MODULE_PHOTOS: Partial<Record<PageKey | 'login', ModulePhotoSet>> = {
   purchases: { light: purchasesLight, dark: purchasesDark, scrim: DENSE_SCRIM, dull: true },
   inventory: { light: inventoryLight, dark: inventoryDark, scrim: DENSE_SCRIM, dull: true },
   login: { light: loginLight, dark: loginDark },
+  // Chat history is as text-dense as any of the module dashboards once a
+  // conversation is underway, so this doesn't get login's full-strength
+  // treatment — but the source photos are already heavily pre-faded
+  // (unlike the other modules' saturated originals), so DENSE_SCRIM's 0.80
+  // white wash in light mode compounded into "not visible" (reported by
+  // design review). Scrim is tuned down instead of reusing DENSE_SCRIM, and
+  // `dull` is skipped since the photo has no vibrance left to tone down.
+  assistant: { light: assistantLight, dark: assistantDark, scrim: { light: 0.32, dark: 0.76 } },
 }
 
 function ModulePhoto({ photo, className }: { photo: ModulePhotoSet; className?: string }) {
