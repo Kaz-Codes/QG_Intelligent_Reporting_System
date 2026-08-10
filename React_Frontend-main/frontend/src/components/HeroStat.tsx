@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ArrowUpRight, ArrowDownRight, Sparkles, type LucideIcon } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, type LucideIcon } from 'lucide-react'
 import { Card, CardContent } from './ui/card'
 import { TrendLine } from './charts/TrendLine'
 import { useTheme } from '@/theme/ThemeContext'
@@ -29,7 +29,7 @@ interface Props {
  * card (see ui/card.tsx), so it sits quietly over a module's photo
  * backdrop instead of competing with it as its own solid gradient block. */
 export function HeroStat({
-  label, value, delta, direction = 'up', icon: Icon = Sparkles, trendData, trendX, trendY, caption,
+  label, value, delta, direction = 'up', trendData, trendX, trendY, caption,
   trendHeight = 200, header, trendUnit,
 }: Props) {
   const { colors } = useTheme()
@@ -60,11 +60,10 @@ export function HeroStat({
               </span>
             )}
           </div>
-          {!header && (
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-soft text-brand">
-              <Icon size={20} />
-            </span>
-          )}
+          {/* The decorative glyph that used to sit here is gone. It was pure
+              ornament in the top-right of a chart card — it carried no
+              information, and on a screen whose whole point is that every mark
+              means something, a symbol that means nothing is noise. */}
         </div>
         <div className="mt-2">
           <TrendLine data={trendData} x={trendX} y={trendY} height={trendHeight} unit={trendUnit} />

@@ -83,25 +83,30 @@ export function Imports() {
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
             <KpiCard label="Consignments" value={c.kpis.consignments_shown.toLocaleString()}
+              sub="still in progress" refs={c.references}
               help={IMPORTS_HELP.consignments} />
             <KpiCard label="Shafts Value" value={money(c.shafts.value)}
               sub={`across ${c.shafts.consignments} consignments`}
+              refs={c.shafts.references}
               help={withBasis(IMPORTS_HELP.shaftsValue,
                 c.shafts.incomplete_consignments
                   ? `${c.shafts.incomplete_consignments} consignment(s) have a shaft row with no price or booked rate, so the total is short by that much.`
                   : undefined)} />
             <KpiCard label="EFS Shipments" value={c.efs_split.efs.toLocaleString()}
               sub={`${c.efs_split.regular} regular · ${c.efs_split.not_stated} not stated`}
+              refs={c.efs_split.efs_references}
               help={withBasis(IMPORTS_HELP.efs,
                 `${c.efs_split.efs_pct_of_stated ?? 0}% of the ${c.efs_split.stated_basis} consignments that state it. ${c.efs_split.not_stated} do not say.`)} />
-            <KpiCard label="In Process" value={c.demands.in_process.toLocaleString()}
-              sub={`${c.demands.processed} processed`}
-              help={IMPORTS_HELP.inProcess} />
+            <KpiCard label="Cancelled" value={(c.demands.processed).toLocaleString()}
+              sub="excluded from delay figures"
+              help={IMPORTS_HELP.cancelled} />
             <KpiCard label="Delivery Delay"
               value={c.delivery_delay.delay_pct != null ? `${c.delivery_delay.delay_pct}%` : '—'}
+              sub={`more than ${c.delivery_delay.grace_days} days late`}
               direction={c.delivery_delay.delayed ? 'up' : null} goodWhen="down"
+              refs={c.delivery_delay.delayed_references}
               help={withBasis(IMPORTS_HELP.deliveryDelay,
-                `Measured on ${c.delivery_delay.basis} of ${c.kpis.consignments_shown} consignments; ${c.delivery_delay.not_measurable} lack one of the two dates.`)} />
+                `Measured on ${c.delivery_delay.basis} of ${c.kpis.consignments_shown} consignments; ${c.delivery_delay.not_measurable} lack one of the two dates. ${c.delivery_delay.within_grace} arrived late but inside the ${c.delivery_delay.grace_days}-day grace and count as on time.`)} />
             <KpiCard label="Avg Days Late"
               value={c.delivery_delay.avg_days_late != null ? `${c.delivery_delay.avg_days_late}` : '—'}
               sub={c.delivery_delay.worst_days_late != null ? `worst ${c.delivery_delay.worst_days_late} days` : undefined}

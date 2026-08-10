@@ -1,5 +1,6 @@
 import { Check, TriangleAlert, Circle, type LucideIcon } from 'lucide-react'
 import { MetricInfo, type MetricHelp } from './MetricInfo'
+import { ReferenceList, type ReferenceSet } from './ReferenceList'
 import { Card, CardContent } from './ui/card'
 import { useTheme } from '@/theme/ThemeContext'
 import { BRAND } from '@/theme/tokens'
@@ -22,6 +23,10 @@ export interface KpiData {
    * a dashboard should carry one — an unexplained number is a number nobody can
    * act on. */
   help?: MetricHelp
+  /** The records behind the number. Renders a small list button that opens a
+   *  scrollable panel of their reference numbers — a count nobody can trace
+   *  back to actual records cannot be acted on. */
+  refs?: ReferenceSet
 }
 
 function Sparkline({ values, color, gradientId }: { values: number[]; color: string; gradientId: string }) {
@@ -54,7 +59,7 @@ function Sparkline({ values, color, gradientId }: { values: number[]; color: str
   )
 }
 
-export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon, help }: KpiData) {
+export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon, help, refs }: KpiData) {
   const { colors } = useTheme()
   const hasDirection = direction === 'up' || direction === 'down'
   const isGood = hasDirection && direction === goodWhen
@@ -83,6 +88,7 @@ export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub
                 {direction === 'up' ? '▲' : '▼'} {delta}
               </span>
             )}
+            {refs && <ReferenceList label={label} refs={refs} />}
             {help && <MetricInfo help={help} label={label} />}
           </span>
         </div>

@@ -36,9 +36,14 @@ export const IMPORTS_HELP: Record<string, MetricHelp> = {
     differs: 'Shafts Value covers only the shaft item lines; this covers everything imported.',
   },
   consignments: {
-    what: 'How many import consignments fall in this period.',
-    how: 'Counted on ETA Works — when the goods reach the factory.',
-    differs: 'Demands Received counts the same records; In Process counts only those not yet finished.',
+    what: 'How many consignments are still in progress in this period.',
+    how: 'Counted on ETA Works — when the goods reach the factory. Consignments that have already arrived at works are excluded from this screen entirely: it is an operational view of what is still moving.',
+    differs: 'This is not the total ever imported — landed consignments have dropped off.',
+  },
+  cancelled: {
+    what: 'Consignments cancelled rather than delivered.',
+    how: 'Status is "Order Cancelled". They are still shown because the order existed, but they carry no arrival date so they never enter the delay figures.',
+    differs: 'Consignments counts everything on the screen, cancelled ones included.',
   },
   shaftsValue: {
     what: 'What the shaft items specifically are worth — the material the business tracks most closely.',
@@ -61,9 +66,9 @@ export const IMPORTS_HELP: Record<string, MetricHelp> = {
     differs: 'In Process is the unfinished subset of this figure.',
   },
   deliveryDelay: {
-    what: 'How often imports reach the factory later than they were needed.',
-    how: 'ETA Works minus the required date. More than 0 days is late; 0 or less is on time. Only consignments carrying both dates can be measured.',
-    differs: 'Average Days Late describes only the late ones — how bad they are, not how often.',
+    what: 'How often imports reach the factory meaningfully later than they were needed.',
+    how: 'ETA Works minus the required date. More than SEVEN days late counts as delayed; anything from arriving early up to a week late is on time, because a day or two of slip is normal port and sailing scheduling rather than a problem to chase. Only consignments carrying both dates can be measured.',
+    differs: 'Average Days Late describes only the delayed ones — how bad they are, not how often.',
   },
   avgDaysLate: {
     what: 'When an import is late, how late it typically is.',

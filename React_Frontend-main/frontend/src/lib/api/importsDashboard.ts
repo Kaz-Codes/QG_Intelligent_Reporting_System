@@ -1,5 +1,6 @@
 import { apiFetch } from './client'
 import type { Coverage, ResolvedPeriod } from '@/components/PeriodFilter'
+import type { ReferenceSet } from '@/components/ReferenceList'
 
 // Index signatures so these can go straight into the generic chart
 // components (RankedBar/TrendLine take Record<string, unknown>[]) without a
@@ -46,6 +47,7 @@ export interface ImportsDashboardKpis {
 export interface ShaftsValue {
   value: number
   consignments: number
+  references: ReferenceSet
   /** Consignments whose shaft rows were missing a price or a booked rate, so a
    *  short total is explained rather than silently short. */
   incomplete_consignments: number
@@ -62,6 +64,7 @@ export interface EfsSplit {
   not_stated: number
   efs_pct_of_stated: number | null
   stated_basis: number
+  efs_references: ReferenceSet
 }
 
 export interface DemandCounts {
@@ -81,6 +84,11 @@ export interface DeliveryDelay {
   avg_days_late: number | null
   worst_days_late: number | null
   definition: string
+  /** Late, but inside the grace — so "on time" is not read as "arrived by the
+   *  required date". */
+  within_grace: number
+  grace_days: number
+  delayed_references: ReferenceSet
 }
 
 export interface SupplierParetoRow {
@@ -106,6 +114,8 @@ export interface CategoryDelay {
 
 export interface ImportsDashboardData {
   kpis: ImportsDashboardKpis
+  /** Every consignment on the screen, behind the headline count. */
+  references: ReferenceSet
   status_split: ValueRow[]
   value_by_country: ValueRow[]
   value_by_branch: ValueRow[]

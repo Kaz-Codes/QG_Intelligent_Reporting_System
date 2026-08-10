@@ -11,13 +11,13 @@ from app.dashboard.period import build_trend
 #
 # Status is derived, not a column:
 #   * no purchase date yet          -> Pending
-#   * purchased on/before required  -> Completed
+#   * purchased on/before required  -> On Time
 #   * required date < purchase date -> Delayed (purchased late)
 # days_overdue is how many days late a Delayed row is.
 #-----------------------------------------------------
 
 STATUS_PENDING = "Pending"
-STATUS_COMPLETED = "Completed"
+STATUS_COMPLETED = "On Time"
 STATUS_DELAYED = "Delayed"
 PURCHASE_STATUSES = [STATUS_PENDING, STATUS_COMPLETED, STATUS_DELAYED]
 
@@ -101,7 +101,7 @@ def order_status(lines):
     outstanding:
       * any line not yet purchased  -> Pending
       * else any line bought late   -> Delayed
-      * else                        -> Completed
+      * else                        -> On Time
     """
     if any(line.purchase is None for line in lines):
         return STATUS_PENDING

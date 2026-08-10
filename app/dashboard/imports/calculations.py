@@ -223,6 +223,48 @@ def value_trend(consignments, period_from, period_to):
 TERMINAL_STATUSES = (Status.ARRIVED_AT_WORKS.value, Status.ORDER_CANCELLED.value)
 
 
+#-------------------------------------
+# WHICH CONSIGNMENTS IS THIS NUMBER ABOUT?
+#
+# Every headline count is an aggregate, and an aggregate on its own cannot be
+# checked or acted on: "42 delayed" gives nobody anything to chase. Each KPI
+# therefore carries the REFERENCES of the records behind it, so the screen can
+# open a list and somebody can go and look them up.
+#
+# The payment reference is the number the business actually files against (the
+# LC or TT number); the GD number, supplier and works come along because a
+# consignment is just as often looked up by those. `id` is there so the row can
+# be opened in the imports module later.
+#
+# Capped: a KPI covering hundreds of records does not need to ship them all to
+# a popover, and the count is already on the tile. The cap is reported so the
+# list can say it is showing the first N.
+#-------------------------------------
+
+REFERENCE_LIMIT = 200
+
+
+def consignment_reference(consignment):
+    return {
+        "id": consignment.id,
+        "reference": consignment.instrument_number or f"IMP-{consignment.id}",
+        "gd_number": consignment.gd_number,
+        "supplier": consignment.supplier.name if consignment.supplier else None,
+        "works": consignment.branch.name if consignment.branch else None,
+        "status": consignment.current_status,
+    }
+
+
+def references(consignments, limit=REFERENCE_LIMIT):
+    """{total, shown, items} for the consignments behind a figure."""
+    rows = list(consignments)
+    return {
+        "total": len(rows),
+        "shown": min(len(rows), limit),
+        "items": [consignment_reference(c) for c in rows[:limit]],
+    }
+
+
 def _pct(part, whole, digits=1):
     if not whole:
         return None
@@ -270,6 +312,7 @@ def shafts_value(consignments):
     total = Decimal("0")
     carriers = 0
     incomplete = 0
+    carrier_consignments = []
 
     for consignment in consignments:
         shaft_lines = [i for i in consignment.items if not i.is_deleted and is_shaft(i)]
@@ -277,6 +320,7 @@ def shafts_value(consignments):
             continue
 
         carriers += 1
+        carrier_consignments.append(consignment)
         missing = False
 
         for item in shaft_lines:
@@ -294,6 +338,7 @@ def shafts_value(consignments):
         "consignments": carriers,
         "incomplete_consignments": incomplete,
         "item_names": SHAFT_NAMES,
+        "references": references(carrier_consignments),
     }
 
 
@@ -314,11 +359,12 @@ EFS_CLASSES = [EFS, REGULAR, NOT_STATED]
 
 def efs_split(consignments):
     counts = {c: 0 for c in EFS_CLASSES}
+    by_class = {c: [] for c in EFS_CLASSES}
 
     for consignment in consignments:
-        counts[consignment.consignment_type or NOT_STATED] = (
-            counts.get(consignment.consignment_type or NOT_STATED, 0) + 1
-        )
+        name = consignment.consignment_type or NOT_STATED
+        counts[name] = counts.get(name, 0) + 1
+        by_class.setdefault(name, []).append(consignment)
 
     total = len(consignments)
     stated = counts[EFS] + counts[REGULAR]
@@ -332,6 +378,8 @@ def efs_split(consignments):
             }
             for name in EFS_CLASSES
         ],
+        # The EFS consignments themselves, so the tile can list them.
+        "efs_references": references(by_class[EFS]),
         "efs": counts[EFS],
         "regular": counts[REGULAR],
         "not_stated": counts[NOT_STATED],
@@ -373,23 +421,33 @@ def demand_counts(consignments):
 # DELIVERY DELAY
 #-------------------------------------
 
-def delivery_delay(consignments):
-    """Delay = ETA Works - required date, in days.
+# A consignment is not "late" for slipping a day or two — port scheduling and
+# sailing dates move by that much routinely. Only a slip of MORE THAN A WEEK
+# counts as a delay; anything inside the week is on time.
+DELAY_GRACE_DAYS = 7
 
-    Positive means it reached works AFTER it was needed. Zero or negative is on
-    time — arriving early is not a negative delay to be averaged against the
-    late ones, so `avg_days_late` covers the late consignments only.
+
+def delivery_delay(consignments):
+    """Delay = ETA Works - required date, in days, beyond a 7-day grace.
+
+    More than 7 days past the required date is delayed. Anything from arriving
+    early up to a week late is ON TIME — a couple of days' slip is normal
+    scheduling noise, and counting it as a delay made the figure describe the
+    shipping calendar rather than a problem worth acting on.
 
     ETA Works is the arrival at the factory, which is the date the business
     actually cares about — not the port arrival or the gate-out.
 
-    Only consignments carrying BOTH dates can be measured (95 of 178 today), so
-    the basis travels with the percentage.
+    `avg_days_late` covers the delayed consignments only: arriving early is not
+    a negative delay to be averaged against them. Only consignments carrying
+    BOTH dates can be measured, so the basis travels with the percentage.
     """
     late = 0
     on_time = 0
+    within_grace = 0
     total_days_late = 0
     worst = None
+    late_consignments = []
 
     for consignment in consignments:
         required = consignment.required_date
@@ -400,12 +458,15 @@ def delivery_delay(consignments):
 
         days = (arrival - required).days
 
-        if days > 0:
+        if days > DELAY_GRACE_DAYS:
             late += 1
+            late_consignments.append(consignment)
             total_days_late += days
             worst = days if worst is None else max(worst, days)
         else:
             on_time += 1
+            if days > 0:
+                within_grace += 1
 
     comparable = late + on_time
 
@@ -413,11 +474,20 @@ def delivery_delay(consignments):
         "delay_pct": _pct(late, comparable),
         "delayed": late,
         "on_time": on_time,
+        # The actual delayed consignments, so the tile can list what to chase.
+        "delayed_references": references(late_consignments),
+        # Late, but inside the grace — reported so "on time" is not mistaken
+        # for "arrived by the required date".
+        "within_grace": within_grace,
+        "grace_days": DELAY_GRACE_DAYS,
         "basis": comparable,
         "not_measurable": len(consignments) - comparable,
         "avg_days_late": round(total_days_late / late, 1) if late else None,
         "worst_days_late": worst,
-        "definition": "ETA Works minus required date; 0 or less is on time",
+        "definition": (
+            f"ETA Works minus required date; more than {DELAY_GRACE_DAYS} days "
+            f"late counts as delayed, anything less is on time"
+        ),
     }
 
 
@@ -432,14 +502,20 @@ def delivery_delay(consignments):
 #-------------------------------------
 
 def supplier_spend_pareto(consignments, limit=10):
+    """Suppliers by spend, with the running cumulative share.
+
+    Valued with consignment_value_pkr — the SAME basis as every other chart on
+    this screen. It used to read the stored `pkr_total` instead, which is
+    populated on fewer consignments (160 of 178), so this chart went empty while
+    the country and works charts beside it showed data from the same rows. Two
+    money bases on one screen is a bug whichever way the numbers land.
+    """
     totals = {}
     counts = {}
 
     for consignment in consignments:
-        if consignment.pkr_total is None:
-            continue
         name = consignment.supplier.name if consignment.supplier else "(no supplier)"
-        totals[name] = totals.get(name, Decimal("0")) + consignment.pkr_total
+        totals[name] = totals.get(name, Decimal("0")) + consignment_value_pkr(consignment)
         counts[name] = counts.get(name, 0) + 1
 
     grand_total = sum(totals.values(), Decimal("0"))
@@ -516,7 +592,10 @@ def category_delays(consignments, limit=10):
                 category, {"total": 0, "delayed": 0, "days_late": 0}
             )
             entry["total"] += 1
-            if days_late > 0:
+            # Same 7-day grace as the headline delay figure, so a category
+            # cannot read as delayed on this chart while the KPI beside it
+            # calls the very same consignment on time.
+            if days_late > DELAY_GRACE_DAYS:
                 entry["delayed"] += 1
                 entry["days_late"] += days_late
 

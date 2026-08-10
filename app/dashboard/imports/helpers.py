@@ -3,6 +3,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.imports.models import Consignment, ConsignmentItem
 from app.masters.models import Supplier, Item, Branch
+from app.enums import Status
 from app.dashboard.period import coverage
 
 
@@ -38,17 +39,22 @@ def source_coverage(db, date_from, date_to):
     Windowed on ETA Works — the arrival at the factory, which is the date the
     imports screen is about and the one the delivery-delay figure uses.
     """
+    # Arrived-at-works rows are excluded here too, so the denominator matches
+    # the population the screen actually shows.
+    live = Consignment.current_status != Status.ARRIVED_AT_WORKS.value
+
     earliest, latest, total = db.execute(
         select(
             func.min(Consignment.eta_works),
             func.max(Consignment.eta_works),
             func.count(Consignment.id),
-        ).where(Consignment.is_deleted == False)
+        ).where(Consignment.is_deleted == False).where(live)
     ).one()
 
     in_period = db.execute(
         select(func.count(Consignment.id))
         .where(Consignment.is_deleted == False)
+        .where(live)
         .where(Consignment.eta_works.between(date_from, date_to))
     ).scalar_one()
 
@@ -72,6 +78,12 @@ def fetch_filtered_consigments(
     # per line in every figure on the screen.
     query = select(Consignment).where(
         Consignment.is_deleted == False
+    ).where(
+        # "Arrived at Works" is finished business. This is an OPERATIONAL
+        # screen — what is still moving and what is late — so a consignment
+        # that has landed drops off it entirely rather than padding every
+        # count and diluting every delay percentage with work already done.
+        Consignment.current_status != Status.ARRIVED_AT_WORKS.value
     ).options(
         selectinload(Consignment.items).joinedload(ConsignmentItem.item),
         joinedload(Consignment.supplier),

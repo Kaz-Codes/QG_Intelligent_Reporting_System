@@ -1,7 +1,7 @@
 from app.dashboard.imports.calculations import (
     kpis, value_trend, status_split, value_by_branch,
     value_by_country, value_by_supplier,
-    shafts_value, efs_split, demand_counts, delivery_delay,
+    shafts_value, efs_split, demand_counts, delivery_delay, references,
     supplier_spend_pareto, category_delays,
 )
 
@@ -34,6 +34,8 @@ def serialize_imports_dashboard(consignments, period_from, period_to):
         "value_by_branch": value_by_branch(consignments),
         "value_trend": value_trend(consignments, period_from, period_to),
 
+        # Every consignment on the screen, so the headline count can list them.
+        "references": references(consignments),
         "shafts": shafts_value(consignments),
         "efs_split": efs_split(consignments),
         "demands": demand_counts(consignments),
