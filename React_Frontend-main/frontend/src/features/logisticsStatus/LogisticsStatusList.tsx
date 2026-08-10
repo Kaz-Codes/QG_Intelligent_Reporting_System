@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Truck } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -92,6 +92,7 @@ export function LogisticsStatusList() {
   const [gateOutFrom, setGateOutFrom] = useState('')
   const [gateOutTo, setGateOutTo] = useState('')
   const [page, setPage] = useState(1)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
   // --- data ---
   const [rowsRaw, setRowsRaw] = useState<LogisticsListRow[]>([])
@@ -347,15 +348,18 @@ export function LogisticsStatusList() {
                 const inMoGroup = !!o.moNo && (moCounts.get(o.moNo) ?? 0) > 1
                 const works = o.packages.find((p) => p.packingWorks)?.packingWorks
                 const colours = [...new Set(o.packages.map((p) => p.colourCode).filter(Boolean))]
+                const isOpen = expandedId === o.id
                 return (
+                  <Fragment key={o.id}>
                   <tr
-                    key={o.id}
-                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${inMoGroup ? 'border-l-2 border-l-brand' : ''}`}
-                    onClick={() => navigate(`/logistics-status/${o.id}`)}
+                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${inMoGroup ? 'border-l-2 border-l-brand' : ''} ${isOpen ? 'bg-canvas-alt' : ''}`}
+                    onClick={() => setExpandedId(isOpen ? null : o.id)}
+                    aria-expanded={isOpen}
                     style={o.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
                   >
                     <td className="px-3 py-2">
                       <div className="tabular-nums font-semibold">
+                        <span className={`mr-1.5 inline-block text-[10px] text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
                         {o.systemId}
                         {o.batchNo > 1 && (
                           <span className="ml-1 font-normal text-muted">({batchDisplayLabel(o.batchNo, o.batchLabel)})</span>
@@ -459,6 +463,14 @@ export function LogisticsStatusList() {
                       </div>
                     </td>
                   </tr>
+                  {isOpen && (
+                    <tr className="border-t border-line bg-canvas-alt/60">
+                      <td colSpan={20} className="px-3 py-3">
+                        <LogisticsRowDetails order={o} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>
@@ -489,6 +501,51 @@ export function LogisticsStatusList() {
         onConfirm={() => confirmReopen && void handleReopen(confirmReopen)}
         onCancel={() => setConfirmReopen(null)}
       />
+    </div>
+  )
+}
+
+
+/** Single-click expansion for a logistics order row: the job numbers on the
+ *  order and every item line with its quantity. */
+function LogisticsRowDetails({ order }: { order: LogisticsListRow }) {
+  const jobNos = jobNumbers(order.items)
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        <span className="font-semibold text-muted">Job numbers:</span>
+        {jobNos.length === 0
+          ? <span className="text-muted">none entered</span>
+          : jobNos.map((j, i) => (
+              <span key={i} className="rounded bg-surface px-1.5 py-0.5 tabular-nums">{j}</span>
+            ))}
+      </div>
+      {order.items.length === 0 ? (
+        <div className="text-xs text-muted">No item lines on this order.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-xs">
+            <thead className="text-muted">
+              <tr>
+                <th className="py-1 pr-3 text-left">#</th>
+                <th className="py-1 pr-3 text-left">Job no.</th>
+                <th className="py-1 pr-3 text-left">Item</th>
+                <th className="py-1 pr-3 text-right">Qty</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink">
+              {order.items.map((it, i) => (
+                <tr key={i} className="border-t border-line/60">
+                  <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
+                  <td className="py-1 pr-3 tabular-nums">{it.jobNo || '—'}</td>
+                  <td className="py-1 pr-3 font-medium">{it.itemDetail || <span className="italic text-muted">Not named</span>}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{it.quantity ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

@@ -254,6 +254,9 @@ export function ImportsStatusList() {
         if (!first) return <span className="text-muted">—</span>
         return (
           <div>
+            {first.placeholderName && (
+              <div className="text-[11px] text-muted italic">“{first.placeholderName}”</div>
+            )}
             <div>{first.itemName || '—'}</div>
             <div className="text-[11px] text-muted tabular-nums">
               {first.quantity !== null ? `${num(first.quantity)} ${first.uom}` : 'qty not recorded'}
@@ -641,7 +644,8 @@ export function ImportsStatusList() {
         columns={columns}
         rows={rows}
         flagged={(r) => r.missing.length > 0}
-        onRowClick={(r) => navigate(`/imports-status/${r.id}`)}
+        rowKey={(r) => String(r.id)}
+        renderExpanded={(r) => <ConsignmentItemsPanel row={r} />}
         initialSort={{ key: 'systemId', dir: 'desc' }}
         serverPagination={{
           page,
@@ -777,6 +781,48 @@ function ForwardedPanel({ onNavigate }: { onNavigate: (to: string) => void }) {
                   Open
                 </button>
               </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** Expansion panel for a consignment row: lists every item line, showing the
+ *  placeholder nickname (imports-only) alongside the real item name. */
+function ConsignmentItemsPanel({ row }: { row: ImportsListRow }) {
+  if (!row.items.length) {
+    return <div className="text-xs text-muted">No item lines on this consignment.</div>
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] text-xs">
+        <thead className="text-muted">
+          <tr>
+            <th className="py-1 pr-3 text-left">#</th>
+            <th className="py-1 pr-3 text-left">Placeholder</th>
+            <th className="py-1 pr-3 text-left">Item name</th>
+            <th className="py-1 pr-3 text-left">Item code</th>
+            <th className="py-1 pr-3 text-right">Qty</th>
+            <th className="py-1 pr-3 text-left">UoM</th>
+            <th className="py-1 pr-3 text-left">Requisition</th>
+          </tr>
+        </thead>
+        <tbody className="text-ink">
+          {row.items.map((it, i) => (
+            <tr key={i} className="border-t border-line/60">
+              <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
+              <td className="py-1 pr-3">
+                {it.placeholderName
+                  ? <span className="rounded bg-canvas-alt px-1.5 py-0.5 text-[11px] text-muted">{it.placeholderName}</span>
+                  : <span className="text-muted">—</span>}
+              </td>
+              <td className="py-1 pr-3 font-medium">{it.itemName || <span className="italic text-muted">Not named</span>}</td>
+              <td className="py-1 pr-3 tabular-nums">{it.itemCode || '—'}</td>
+              <td className="py-1 pr-3 text-right tabular-nums">{it.quantity ?? '—'}</td>
+              <td className="py-1 pr-3">{it.uom || '—'}</td>
+              <td className="py-1 pr-3">{it.requisitionType || '—'}</td>
             </tr>
           ))}
         </tbody>

@@ -138,6 +138,10 @@ export const consignmentItemSchema = z.object({
   // item
   itemId: optionalText,              // FK to item master once one exists
   itemName: z.string().default(''),
+  /** A user-facing nickname / short label for the item (imports only). Purely
+   *  a display aid shown alongside the real item name in the list; never
+   *  required and NOT counted as a missing field when left blank. */
+  placeholderName: optionalText,
   itemCode: z.string().default(''),
   specification: optionalText,
   quantity: optionalNumber,
@@ -436,7 +440,7 @@ export const emptyItem = (id: string): ConsignmentItem => ({
   backendId: undefined,
   requisitionType: undefined,
   referenceNo: '', jobNo: '', moNo: '', othersDescription: '',
-  itemId: '', itemName: '', itemCode: '', specification: '',
+  itemId: '', itemName: '', placeholderName: '', itemCode: '', specification: '',
   quantity: undefined, uom: '', batchNo: '', hsCode: '',
   netWeight: undefined, grossWeight: undefined, length: undefined, width: undefined, height: undefined,
   foreignUnitPrice: undefined,

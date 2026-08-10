@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, Fragment } from 'react'
 
 /**
  * A sortable table for the Imports Status sheet.
@@ -34,6 +34,14 @@ interface Props<T> {
   /** Rows per page. Omit or 0 to disable pagination (show all). */
   pageSize?: number
   /**
+   * Make rows single-click expandable. When provided, a click toggles an
+   * expansion panel (spanning all columns) rendered by this function, instead
+   * of firing onRowClick. Use rowKey to give each row a stable identity so the
+   * open/closed state survives re-sorts and re-renders.
+   */
+  renderExpanded?: (row: T) => ReactNode
+  rowKey?: (row: T) => string
+  /**
    * Hand pagination to the caller — for a list whose rows come from the server
    * one page at a time. `rows` is then just the current page, and the footer
    * below drives the caller instead of slicing locally. Without this the table
@@ -52,10 +60,11 @@ interface Props<T> {
 
 export function SortableTable<T>({
   columns, rows, flagged, onRowClick, initialSort, empty, maxHeight = 560, pageSize = 10,
-  serverPagination,
+  serverPagination, renderExpanded, rowKey,
 }: Props<T>) {
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(initialSort ?? null)
   const [page, setPage] = useState(1)
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   const sorted = (() => {
     if (!sort) return rows
@@ -139,26 +148,49 @@ export function SortableTable<T>({
               </td>
             </tr>
           )}
-          {visible.map((row, i) => (
-            <tr
-              key={i}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-              className={[
-                'border-t border-line align-top',
-                onRowClick ? 'cursor-pointer hover:bg-canvas-alt' : '',
-                flagged?.(row) ? 'shadow-[inset_3px_0_0_var(--color-warning)]' : '',
-              ].join(' ')}
-            >
-              {columns.map((col) => (
-                <td
-                  key={col.key}
-                  className={`px-3 py-2.5 ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+          {visible.map((row, i) => {
+            const key = rowKey ? rowKey(row) : String(i)
+            const isOpen = expandedKey === key
+            const clickable = renderExpanded || onRowClick
+            const handleClick = renderExpanded
+              ? () => setExpandedKey(isOpen ? null : key)
+              : onRowClick
+                ? () => onRowClick(row)
+                : undefined
+            return (
+              <Fragment key={key}>
+                <tr
+                  onClick={handleClick}
+                  aria-expanded={renderExpanded ? isOpen : undefined}
+                  className={[
+                    'border-t border-line align-top',
+                    clickable ? 'cursor-pointer hover:bg-canvas-alt' : '',
+                    flagged?.(row) ? 'shadow-[inset_3px_0_0_var(--color-warning)]' : '',
+                    isOpen ? 'bg-canvas-alt' : '',
+                  ].join(' ')}
                 >
-                  {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '')}
-                </td>
-              ))}
-            </tr>
-          ))}
+                  {columns.map((col, ci) => (
+                    <td
+                      key={col.key}
+                      className={`px-3 py-2.5 ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+                    >
+                      {ci === 0 && renderExpanded && (
+                        <span className={`mr-1.5 inline-block text-[10px] text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
+                      )}
+                      {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '')}
+                    </td>
+                  ))}
+                </tr>
+                {renderExpanded && isOpen && (
+                  <tr className="border-t border-line bg-canvas-alt/60">
+                    <td colSpan={columns.length} className="px-3 py-3">
+                      {renderExpanded(row)}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
       {showPager && (

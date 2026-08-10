@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -52,6 +52,7 @@ export function TruckingStatusList() {
   const [movementFilter, setMovementFilter] = useState<string[]>([])
   const [sourceFilter, setSourceFilter] = useState<string[]>([])
   const [page, setPage] = useState(1)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
   const [requestTab, setRequestTab] = useState<'all' | 'from-logistics' | 'from-import-fob'>('all')
 
   // --- data ---
@@ -321,14 +322,17 @@ export function TruckingStatusList() {
               {jobs.map((r) => {
                 // Job-level tracking is DERIVED from the vehicles, never stored.
                 const rollup = trackingRollup(r.vehicles)
+                const isOpen = expandedId === r.id
                 return (
+                  <Fragment key={r.id}>
                   <tr
-                    key={r.id}
-                    className="cursor-pointer border-t border-line hover:bg-canvas-alt"
-                    onClick={() => navigate(`/trucking-status/${r.id}`)}
+                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${isOpen ? 'bg-canvas-alt' : ''}`}
+                    onClick={() => setExpandedId(isOpen ? null : r.id)}
+                    aria-expanded={isOpen}
                     style={r.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
                   >
                     <td className="px-3 py-2 font-medium text-ink">
+                      <span className={`mr-1.5 inline-block text-[10px] text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
                       {r.systemId}
                       {r.missingFields.length > 0 && (
                         <span
@@ -400,6 +404,14 @@ export function TruckingStatusList() {
                       </div>
                     </td>
                   </tr>
+                  {isOpen && (
+                    <tr className="border-t border-line bg-canvas-alt/60">
+                      <td colSpan={13} className="px-3 py-3">
+                        <TruckingRowDetails row={r} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
               {jobs.length === 0 && (
@@ -471,5 +483,47 @@ function SourceTag({ source }: { source: string }) {
     >
       {sourceLabel(source)}
     </span>
+  )
+}
+
+
+/** Single-click expansion for a trucking job row: its item details and each
+ *  assigned vehicle. */
+function TruckingRowDetails({ row }: { row: TruckingListRow }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-xs">
+        <span className="font-semibold text-muted">Item details: </span>
+        <span>{row.itemDetails || <span className="text-muted">none entered</span>}</span>
+      </div>
+      {row.vehicles.length === 0 ? (
+        <div className="text-xs text-muted">No vehicles assigned yet.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-xs">
+            <thead className="text-muted">
+              <tr>
+                <th className="py-1 pr-3 text-left">#</th>
+                <th className="py-1 pr-3 text-left">Vehicle</th>
+                <th className="py-1 pr-3 text-left">Type</th>
+                <th className="py-1 pr-3 text-right">Packages</th>
+                <th className="py-1 pr-3 text-right">Gross (kg)</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink">
+              {row.vehicles.map((v, i) => (
+                <tr key={i} className="border-t border-line/60">
+                  <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
+                  <td className="py-1 pr-3 font-medium">{v.vehicleNumber || '—'}</td>
+                  <td className="py-1 pr-3">{v.vehicleType || '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{v.noOfPackages ?? '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{v.grossWeight ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }

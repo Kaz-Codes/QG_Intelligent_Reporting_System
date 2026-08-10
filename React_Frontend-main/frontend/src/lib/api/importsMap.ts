@@ -47,6 +47,7 @@ const CANONICAL_STATUSES = new Set<string>(CONSIGNMENT_STATUSES)
 
 export interface ImportsListItem {
   itemName: string
+  placeholderName: string
   itemCode: string
   quantity: number | null
   uom: string
@@ -138,6 +139,7 @@ export interface ImportsListRow {
 function mapItem(item: ApiConsignmentItem): ImportsListItem {
   return {
     itemName: item.item_name ?? '',
+    placeholderName: item.placeholder_name ?? '',
     itemCode: item.item_code ?? '',
     quantity: toNumber(item.quantity),
     uom: item.unit_of_measurement ?? '',
@@ -379,6 +381,7 @@ function itemToPayload(item: DraftItem): ConsignmentItemPayload {
   return {
     id: item.backendId ?? null,
     item_name: strOrUndef(item.itemName),
+    placeholder_name: strOrUndef(item.placeholderName),
     item_code: strOrUndef(item.itemCode),
     hs_code: strOrUndef(item.hsCode),
     specification: strOrUndef(item.specification),
@@ -549,6 +552,7 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
       othersDescription: item.description ?? '',
       itemId: item.item_id != null ? String(item.item_id) : '',
       itemName: item.item_name ?? '',
+      placeholderName: item.placeholder_name ?? '',
       itemCode: item.item_code ?? '',
       specification: item.specification ?? '',
       quantity: toNumber(item.quantity) ?? undefined,
