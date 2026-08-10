@@ -8,8 +8,12 @@ import { DevDetailsPanel } from '@/components/assistant/DevDetailsPanel'
 import { useChat } from '@/lib/chatbot/useChat'
 import { useChatHealth } from '@/lib/chatbot/useHealth'
 import type { AssistantMessage } from '@/lib/chatbot/types'
-import logo from '@/assets/qg_logo_transparent.webp'
+// Tightly cropped from qadri_logo_transparent.webp — that source has ~75px
+// of transparent padding baked into its square canvas (top/bottom), which
+// stacked with this page's own spacing read as a large gap before "QG-IRS".
+import logo from '@/assets/qadri_logo_tight.webp'
 import { cn } from '@/lib/utils'
+import { useTheme } from '@/theme/ThemeContext'
 
 const BOT_NAME = 'QG-IRS'
 
@@ -23,7 +27,12 @@ const SUGGESTED_QUERIES = [
 // The mark is a transparent cut-out, so it gets no tile treatment — a rounded
 // card + ring + shadow would draw a box around the empty space in the logo's
 // corners rather than around the logo itself.
+// The mark's wordmark is flat black (no bevel), which reads fine on light
+// surfaces but disappears against the dark theme's near-black canvas — a
+// stacked drop-shadow halo (the standard transparent-PNG outline trick)
+// keeps it legible without touching the artwork or its brand colors.
 function BotAvatar({ size = 44 }: { size?: number }) {
+  const { dark } = useTheme()
   return (
     <img
       src={logo}
@@ -31,7 +40,13 @@ function BotAvatar({ size = 44 }: { size?: number }) {
       width={size}
       height={size}
       className="shrink-0 object-contain"
-      style={{ width: size, height: size }}
+      style={{
+        width: size,
+        height: size,
+        filter: dark
+          ? 'drop-shadow(0 0 1px rgba(255,255,255,0.9)) drop-shadow(0 0 2.5px rgba(255,255,255,0.55))'
+          : undefined,
+      }}
     />
   )
 }
@@ -148,8 +163,8 @@ export function Assistant() {
         <div className="animate-fade-in-up w-full max-w-xl text-center">
           {/* No drop shadow on the wrapper: with a transparent mark it renders
               as a rectangular glow behind empty space. */}
-          <div className="mx-auto mb-5 w-fit">
-            <BotAvatar size={96} />
+          <div className="mx-auto mb-3 w-fit">
+            <BotAvatar size={210} />
           </div>
           <h1 className="font-display text-3xl font-extrabold tracking-tight text-navy">{BOT_NAME}</h1>
           <p className="mt-2 text-sm text-muted">Purchases, inventory, imports, or logistics — in plain language.</p>
@@ -177,7 +192,7 @@ export function Assistant() {
       {/* Header — only shown once a conversation is underway. */}
       <div className="flex items-center justify-between pb-4">
         <div className="flex items-center gap-3">
-          <BotAvatar size={52} />
+          <BotAvatar size={92} />
           <div>
             <div className="flex items-center gap-2">
               <h1 className="font-display text-xl font-bold text-navy">{BOT_NAME}</h1>
