@@ -66,19 +66,19 @@ def serialize_logistics(db):
 
 
 def serialize_stores(db, dead_stock_days):
-    total_value, available_value, lines = helpers.stock_totals(db)
+    total_value, available_value, items = helpers.stock_totals(db)
     by_branch = helpers.stock_by_branch(db)
     consumption, window_days = helpers.consumption_by_branch(db)
-    dead_lines, dead_value, history_days = helpers.dead_stock(db, dead_stock_days)
+    dead_items, dead_value, history_days = helpers.dead_stock(db, dead_stock_days)
 
     # Stock is a snapshot, so none of this is period-bounded; the runway and the
     # dead-stock cutoff carry their own windows instead.
     return {
-        "stock_value": calc.stores_stock_value(total_value, available_value, lines),
+        "stock_value": calc.stores_stock_value(total_value, available_value, items),
         "value_by_store": calc.stores_value_by_store(by_branch),
         "stock_days": calc.stores_stock_days(by_branch, consumption, window_days),
         "dead_stock": calc.stores_dead_stock(
-            dead_lines, dead_value, dead_stock_days, lines, total_value,
+            dead_items, dead_value, dead_stock_days, items, total_value,
             history_days,
         ),
     }

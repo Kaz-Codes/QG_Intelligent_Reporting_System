@@ -129,16 +129,22 @@ def imports_shaft_counts(db):
 #-------------------------------------
 
 def procurement_period_totals(db, date_from, date_to):
-    total, rows, quantity = db.execute(
+    """Value + how many ORDERS, not item lines.
+
+    A PO with five lines is five rows in this table; counting rows made
+    procurement look three times busier than it was and could not be compared
+    with anything else on the screen. Distinct PO numbers is the order count.
+    """
+    total, orders, quantity = db.execute(
         select(
             func.coalesce(func.sum(PurchasesData.amount), 0),
-            func.count(PurchasesData.id),
+            func.count(func.distinct(PurchasesData.po_number)),
             func.coalesce(func.sum(PurchasesData.qty), 0),
         )
         .where(PurchasesData.purchase.between(date_from, date_to))
     ).one()
 
-    return total, rows, quantity
+    return total, orders, quantity
 
 
 def procurement_category_totals(db, date_from, date_to):
@@ -164,8 +170,11 @@ def procurement_delay(db, date_from, date_to):
     # A line is late when it was purchased after the date it was required.
     comparable, late = db.execute(
         select(
-            func.count(PurchasesData.id),
-            func.count(case((PurchasesData.required_d < PurchasesData.purchase, 1))),
+            func.count(func.distinct(PurchasesData.po_number)),
+            func.count(func.distinct(
+                case((PurchasesData.required_d < PurchasesData.purchase,
+                      PurchasesData.po_number))
+            )),
         )
         .where(PurchasesData.purchase.between(date_from, date_to))
         .where(PurchasesData.required_d.isnot(None))
@@ -184,7 +193,7 @@ def procurement_cycle_times(db, date_from, date_to):
     store_days, store_rows = db.execute(
         select(
             func.avg(PurchasesData.purchase - PurchasesData.ppc_store),
-            func.count(PurchasesData.id),
+            func.count(func.distinct(PurchasesData.po_number)),
         )
         .where(in_window)
         .where(PurchasesData.ppc_store.isnot(None))
@@ -194,7 +203,7 @@ def procurement_cycle_times(db, date_from, date_to):
     po_days, po_rows = db.execute(
         select(
             func.avg(PurchasesData.purchase - PurchasesData.po_date),
-            func.count(PurchasesData.id),
+            func.count(func.distinct(PurchasesData.po_number)),
         )
         .where(in_window)
         .where(PurchasesData.po_date.isnot(None))
@@ -250,7 +259,7 @@ def stock_totals(db):
         select(
             func.coalesce(func.sum(Stock.stock_qty_amount), 0),
             func.coalesce(func.sum(Stock.available_amount), 0),
-            func.count(Stock.id),
+            func.count(func.distinct(Stock.item_code)),
         )
     ).one()
 
@@ -260,7 +269,7 @@ def stock_by_branch(db):
         select(
             Stock.branch,
             func.coalesce(func.sum(Stock.stock_qty_amount), 0),
-            func.count(Stock.id),
+            func.count(func.distinct(Stock.item_code)),
         )
         .where(Stock.branch.isnot(None))
         .group_by(Stock.branch)
@@ -321,7 +330,7 @@ def dead_stock(db, threshold_days):
 
     lines, value = db.execute(
         select(
-            func.count(Stock.id),
+            func.count(func.distinct(Stock.item_code)),
             func.coalesce(func.sum(Stock.stock_qty_amount), 0),
         )
         .outerjoin(

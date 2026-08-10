@@ -13,7 +13,9 @@ import { CategoryBar } from '@/components/charts/CategoryBar'
 import { Donut } from '@/components/charts/Donut'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { AgingBuckets } from '@/components/charts/AgingBuckets'
+import { PeriodFilter, PeriodSummary, EMPTY_PERIOD, type Period } from '@/components/PeriodFilter'
 import { money } from '@/lib/format'
+import { PURCHASES_HELP, withBasis } from '@/lib/metricHelp'
 import { usePurchasesDashboard } from '@/lib/api/usePurchasesDashboard'
 
 const INSIGHT_TABS = [
@@ -31,6 +33,8 @@ export function Purchases() {
   const [dateTo, setDateTo] = useState('')
   const [mop, setMop] = useState<string[]>([])
   const [sourcingOfficer, setSourcingOfficer] = useState<string[]>([])
+  // Empty = "this month", resolved by the backend.
+  const [period, setPeriod] = useState<Period>(EMPTY_PERIOD)
   const [insightTab, setInsightTab] = useState<(typeof INSIGHT_TABS)[number]['value']>('branch')
 
   // Every filter here is applied server-side, so the KPIs and charts below can
@@ -39,14 +43,32 @@ export function Purchases() {
   const { data, isLoading, isError, error } = usePurchasesDashboard({
     status, supplier, branch, item_category: category, mop, sourcing_o: sourcingOfficer,
     po_from_date: dateFrom || undefined, po_to_date: dateTo || undefined,
+    // Both omitted = the backend's own default, the current month.
+    date_from: period.from || undefined, date_to: period.to || undefined,
   })
 
   const kpis = data?.kpis
-  const trend = (data?.monthlyValueTrend ?? []).map((p) => ({ month: p.month, value: Number((p.value / 1_000_000).toFixed(2)) }))
+  const proc = data?.procurementKpis
+  // Buckets are sized to the window by the API — 3-day steps inside a month,
+  // months across a year — and empty ones are included, so the line never
+  // draws straight across a gap it has no data for.
+  const trend = (data?.valueTrend?.points ?? []).map((p) => ({
+    month: p.label, value: Number((p.value / 1_000_000).toFixed(2)),
+  }))
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Purchases" subtitle="Track purchase orders, suppliers, and delivery status" module="purchases" />
+
+      <div className="rounded-xl border border-line bg-surface p-4">
+        <PeriodFilter period={period} onChange={setPeriod} range={data?.coverage}
+          label="Reporting period (purchase date)" />
+        {data && (
+          <div className="mt-3">
+            <PeriodSummary period={data.period} coverage={data.coverage} onJumpToLatest={setPeriod} />
+          </div>
+        )}
+      </div>
 
       <FilterBar>
         <DateRangeFilter label="PO Date" from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
@@ -77,29 +99,60 @@ export function Purchases() {
             trendData={trend}
             trendX="month"
             trendY="value"
-            caption="PKR millions per month, current filter"
+            caption={`PKR millions per ${data.valueTrend.granularity === 'day'
+              ? `${data.valueTrend.bucket_days} days` : data.valueTrend.granularity
+              } — empty buckets are shown as zero, not skipped`}
             trendUnit="PKR (millions)"
           />
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-            <KpiCard label="Orders" value={kpis.orders_count.toLocaleString()} />
-            <KpiCard label="Avg Order Value" value={kpis.orders_count ? money(kpis.avg_order_value) : '—'} />
-            <KpiCard label="Delayed" value={`${kpis.delayed_orders}`} direction={kpis.delayed_orders ? 'up' : null} goodWhen="down" />
-            <KpiCard label="On-Time Rate" value={kpis.orders_count ? `${kpis.on_time_pct}%` : '—'} />
-            <KpiCard label="Top Supplier" value={kpis.top_supplier ?? '—'} sub="by value, current filter" />
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+            <KpiCard label="Orders" value={kpis.orders_count.toLocaleString()}
+              help={PURCHASES_HELP.orders} />
+            <KpiCard label="Avg Order Value" value={kpis.orders_count ? money(kpis.avg_order_value) : '—'}
+              help={PURCHASES_HELP.avgOrderValue} />
+            <KpiCard label="Delayed Orders" value={kpis.delayed_orders.toLocaleString()}
+              direction={kpis.delayed_orders ? 'up' : null} goodWhen="down"
+              help={PURCHASES_HELP.delayed} />
+            <KpiCard label="Avg Delay"
+              value={proc?.avg_delay_days != null ? `${proc.avg_delay_days} days` : '—'}
+              sub="late lines only"
+              help={withBasis(PURCHASES_HELP.avgDelay,
+                proc ? `Measured on ${proc.basis.toLocaleString()} lines that have both a purchase and a required date.` : undefined)} />
+            <KpiCard label="On-Time Rate" value={kpis.orders_count ? `${kpis.on_time_pct}%` : '—'}
+              help={PURCHASES_HELP.onTimeRate} />
+            <KpiCard label="Top Supplier" value={kpis.top_supplier ?? '—'}
+              sub={kpis.top_supplier ? money(kpis.top_supplier_amount) : undefined}
+              help={withBasis(PURCHASES_HELP.topSupplier,
+                kpis.excluded_supplier_value
+                  ? `Import (IOL) is excluded from supplier figures; its ${money(kpis.excluded_supplier_value)} is still inside Total Value.`
+                  : undefined)} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <InsightsCard title="Insights" tabs={INSIGHT_TABS} active={insightTab} onChange={setInsightTab} className="lg:col-span-2">
-              {kpis.orders_count === 0 && <p className="py-12 text-center text-sm text-muted">No orders match the current filter.</p>}
+              {kpis.orders_count === 0 && (
+                <p className="py-12 text-center text-sm text-muted">
+                  No purchases in {data.period.label}
+                  {data.coverage.latest ? ` — data runs to ${data.coverage.latest}.` : '.'}
+                </p>
+              )}
               {kpis.orders_count > 0 && insightTab === 'branch' && (
-                <CategoryBar data={data.valueByBranch} category="label" value="value" height={300} unit="PKR" />
+                <CategoryBar data={data.valueByBranch} category="label" value="count"
+                  valueKey="value" countNoun="order" height={300} unit="Orders" />
               )}
               {kpis.orders_count > 0 && insightTab === 'status' && (
-                <Donut labels={data.statusSplit.map((s) => s.label)} values={data.statusSplit.map((s) => s.value)} height={300} />
+                <Donut labels={data.statusSplit.map((s) => s.label)} values={data.statusSplit.map((s) => s.count)} height={300} />
               )}
               {kpis.orders_count > 0 && insightTab === 'suppliers' && (
-                <RankedBar data={data.valueBySupplier} category="label" value="value" height={300} unit="PKR" />
+                <>
+                  <RankedBar data={data.valueBySupplier} category="label" value="count"
+                    valueKey="value" countNoun="order" height={300} unit="Orders" />
+                  <p className="mt-2 text-xs text-muted">
+                    Excludes Import (IOL) — the in-house import channel rather than a
+                    vendor. Its {money(kpis.excluded_supplier_value)} is still counted in
+                    Total Value above.
+                  </p>
+                </>
               )}
             </InsightsCard>
 

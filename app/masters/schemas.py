@@ -129,6 +129,21 @@ class ClearingAgentUpdateSchema(BaseModel):
 
 
 #--------------------------------
+# CUSTOMER
+#
+# Name only, by decision. The logistics workbooks carry nothing else about a
+# customer, so there is nothing to populate address or contact columns with.
+#--------------------------------
+
+class CustomerCreateSchema(BaseModel):
+    name : str = Field(..., max_length=255)
+
+
+class CustomerUpdateSchema(BaseModel):
+    name : Optional[str] = Field(None, max_length=255)
+
+
+#--------------------------------
 # ITEM
 #
 # One item can be cleared under several H.S. codes, so they

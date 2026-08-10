@@ -12,7 +12,6 @@ import {
   CURRENCIES, PORT_TYPES, PORT_USED_AS,
   type MasterKey, type MasterRow,
 } from '@/lib/api/masters'
-import { listCustomers, createCustomer } from '@/lib/mastersCustomers'
 
 /**
  * Masters management — view and add the reference lists the operations screens
@@ -42,7 +41,7 @@ interface FieldDef {
 }
 
 interface MasterDef {
-  key: MasterKey | 'customer'
+  key: MasterKey
   label: string
   /** Fields for both the add form and (where column=true) the table. */
   fields: FieldDef[]
@@ -50,14 +49,11 @@ interface MasterDef {
 
 const MASTER_DEFS: MasterDef[] = [
   {
+    // Name only — the logistics workbooks carry nothing else about a customer,
+    // so address/contact fields would just be six empty columns.
     key: 'customer', label: 'Customers',
     fields: [
       { key: 'name', label: 'Name', required: true, column: true },
-      { key: 'country', label: 'Country', column: true },
-      { key: 'city', label: 'City', column: true },
-      { key: 'contact_name', label: 'Contact name', column: true },
-      { key: 'phone', label: 'Phone' },
-      { key: 'email', label: 'Email' },
     ],
   },
   {
@@ -101,21 +97,15 @@ const MASTER_DEFS: MasterDef[] = [
       { key: 'address', label: 'Address' },
     ],
   },
-  {
-    key: 'works', label: 'Works',
-    fields: [
-      { key: 'name', label: 'Name', required: true, column: true },
-      { key: 'code', label: 'Code', column: true },
-      { key: 'ntn_strn', label: 'NTN / STRN', column: true },
-      { key: 'note', label: 'Note' },
-    ],
-  },
+  // No "Works" tab. Works and Branch are the same thing to the business (the
+  // imports sheet's "Works" column is what fills a consignment's branch), so
+  // the duplicate list was removed here and from the backend registry together.
 ]
 
 export function MastersPage() {
   const { user } = useAuth()
   const canAdd = can(user, 'manageMastersFull') || can(user, 'manageMastersInlineCreate')
-  const [activeKey, setActiveKey] = useState<MasterKey | 'customer'>('customer')
+  const [activeKey, setActiveKey] = useState<MasterKey>('customer')
   const def = MASTER_DEFS.find((d) => d.key === activeKey)!
 
   return (
@@ -146,13 +136,8 @@ function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
     setLoading(true)
     setError(null)
     try {
-      if (def.key === 'customer') {
-        // Mock store — no backend customer master yet.
-        setRows(listCustomers() as unknown as MasterRow[])
-      } else {
-        const data = await listMasters(def.key as MasterKey, { includeInactive })
-        setRows(data)
-      }
+      const data = await listMasters(def.key, { includeInactive })
+      setRows(data)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not load this list.')
     } finally {
@@ -194,11 +179,6 @@ function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
         )}
       </div>
 
-      {def.key === 'customer' && (
-        <div className="rounded-lg border border-[var(--color-info)]/30 bg-[var(--color-info-bg)] px-3 py-2 text-xs text-[var(--color-info)]">
-          Customers aren't a backend master yet — this list is held in the app for now and resets on reload. It'll connect to the database once the customer master is added.
-        </div>
-      )}
       {showForm && (
         <AddMasterForm
           def={def}
@@ -289,11 +269,7 @@ function AddMasterForm({ def, onCreated, onCancel }: {
       if (v) payload[f.key] = v
     }
     try {
-      if (def.key === 'customer') {
-        createCustomer(payload)
-      } else {
-        await createMaster(def.key as MasterKey, payload)
-      }
+      await createMaster(def.key, payload)
       onCreated()
     } catch (e) {
       setError(e instanceof ApiError ? (e.message || 'Could not save.') : (e instanceof Error ? e.message : 'Could not save.'))

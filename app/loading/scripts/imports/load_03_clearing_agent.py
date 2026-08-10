@@ -2,7 +2,8 @@
 
 import pandas as pd
 from app.loading.scripts.etl_common import (
-    read_and_concat, list_excel_files, clean_text, bulk_insert, clean_int
+    read_and_concat, list_excel_files, clean_text, bulk_insert, clean_int,
+    bump_sequence
 )
 from pathlib import Path
 
@@ -46,4 +47,8 @@ def load_clearing_agent(conn):
         clearing_agent_rows.append(row_tuple)
     
     bulk_insert(conn, "clearing_agents", CLEARING_AGENT_COLUMNS, clearing_agent_rows)
+
+    # ids were set by hand — see bump_sequence.
+    bump_sequence(conn, "clearing_agents")
+
     print(f"Clearing agent : inserted {len(clearing_agent_rows)} rows")

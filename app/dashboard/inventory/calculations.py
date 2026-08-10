@@ -73,36 +73,190 @@ def days_of_stock(available_qty, avg_daily_issue):
 # status / runway are computed exactly once (in the serializer).
 #-------------------------------------
 
-def kpis(rows):
-    available_units = sum((_num(r["available_qty"]) for r in rows), Decimal("0"))
-    total_stock = sum((_num(r["stock_qty"]) for r in rows), Decimal("0"))
-    on_hold = sum((_num(r["hold_qty"]) for r in rows), Decimal("0"))
+#-----------------------------------------------------
+# ITEMS, NOT STOCK LINES
+#
+# The stock table holds one row per (item, BRANCH) — the same bolt stocked at
+# four factories is four rows. Counting those rows answered "how many stock
+# records do we keep", which nobody asked; the question is how many ITEMS the
+# business holds, and how many of those are dead.
+#
+# So rows are folded together on item_code before anything is counted. Value and
+# quantity add up across branches, and movement is judged on the item's TOTAL
+# issuance — an item still moving at one factory is not dead just because it sat
+# still at another.
+#
+# Branch breakdowns keep using the per-branch rows: those are legitimate
+# aggregates, not line-level KPIs.
+#
+# A row with no item_code cannot be folded and stands alone, keyed on its
+# identity so two unrelated ones never merge.
+#-----------------------------------------------------
 
+def group_by_item(rows):
+    """One row per item, summed across the branches that stock it."""
+    items = {}
+
+    for row in rows:
+        key = row["item_code"] or f'~{row["item"]}|{row["branch"]}'
+        entry = items.get(key)
+
+        if entry is None:
+            items[key] = {
+                "item_code": row["item_code"],
+                "item": row["item"],
+                "item_category": row["item_category"],
+                "branches": {row["branch"]} if row["branch"] else set(),
+                "stock_qty_amount": _num(row["stock_qty_amount"]),
+                "available_amount": _num(row["available_amount"]),
+                "available_qty": _num(row["available_qty"]),
+                "stock_qty": _num(row["stock_qty"]),
+                "reorder_level": row["reorder_level"],
+                "issued_value_12m": _num(row["issued_value_12m"]),
+                "issued_value_3m": _num(row["issued_value_3m"]),
+            }
+            continue
+
+        if row["branch"]:
+            entry["branches"].add(row["branch"])
+        for field in ("stock_qty_amount", "available_amount",
+                      "available_qty", "stock_qty",
+                      "issued_value_12m", "issued_value_3m"):
+            entry[field] += _num(row[field])
+
+        # Reorder levels add up too: the item needs cover at every branch that
+        # stocks it, so the business-wide threshold is their sum.
+        if row["reorder_level"] is not None:
+            entry["reorder_level"] = (entry["reorder_level"] or Decimal("0")) + row["reorder_level"]
+
+    for entry in items.values():
+        entry["branch_count"] = len(entry["branches"])
+        entry["branches"] = sorted(entry["branches"])
+        entry["stock_status"] = derive_stock_status(
+            entry["available_qty"], entry["reorder_level"]
+        )
+        entry["movement"] = derive_movement(
+            entry["issued_value_3m"], entry["issued_value_12m"]
+        )
+
+    return list(items.values())
+
+
+def kpis(rows):
+    """The headline stock figures, counted over ITEMS.
+
+    Deliberately NOT here any more, by request:
+      * available_units / total_stock_qty — quantities summed across
+        incomparable units (kg + pcs + litres), so the totals were arithmetic
+        without a meaning. Value is the comparable measure and is kept.
+      * on_hold — replaced by dead stock, which is the question people were
+        actually asking of it.
+      * at_risk_pct — superseded by the movement split (fast / slow / dead),
+        which says the same thing with a reason attached.
+
+    Takes an already-grouped list (see group_by_item), so every count is a
+    distinct ITEM rather than an item-at-a-branch record.
+    """
     out_of_stock = sum(1 for r in rows if r["stock_status"] == OUT_OF_STOCK)
     below_reorder = sum(1 for r in rows if r["stock_status"] == BELOW_REORDER)
 
-    # "Items Shown" counts only items that actually have stock available — an
-    # item with 0 available is not something you have, it is an Out-of-Stock
-    # line. The out-of-stock rows still feed the risk figures below (that is what
-    # the % At Risk is about), so at_risk_pct keeps the FULL row count as its
-    # denominator, not the available-only count.
-    total_items = len(rows)
+    # Items that actually have stock available — an item with 0 available is not
+    # something you have, it is an Out-of-Stock item.
     items_shown = sum(1 for r in rows if _num(r["available_qty"]) > 0)
-    at_risk_pct = round(((out_of_stock + below_reorder) / total_items) * 100) if total_items else 0
 
     total_stock_value = sum((_num(r["stock_qty_amount"]) for r in rows), Decimal("0"))
     available_value = sum((_num(r["available_amount"]) for r in rows), Decimal("0"))
 
     return {
-        "available_units": available_units,
-        "total_stock_qty": total_stock,
-        "on_hold": on_hold,
+        "items_total": len(rows),
         "items_shown": items_shown,
         "out_of_stock": out_of_stock,
         "below_reorder": below_reorder,
-        "at_risk_pct": at_risk_pct,
         "total_stock_value": total_stock_value,
         "available_value": available_value,
+    }
+
+
+#-------------------------------------
+# MOVEMENT: FAST / SLOW / DEAD
+#
+# Replaces the "at risk" split. Risk was derived from the reorder level alone,
+# which said an item was in trouble without saying whether anybody actually
+# wants it. Movement answers that directly, from real issuance:
+#
+#   Dead  — nothing issued in the last 12 months. Stock that is not moving at
+#           all, which is the money worth arguing about.
+#   Slow  — issued in the last 12 months but NOT in the last 3.
+#   Fast  — issued within the last 3 months.
+#
+# The windows are the ones asked for, and both are reported per line so the two
+# issuance KPIs and this split can never disagree — they are the same numbers.
+#-------------------------------------
+
+MOVE_FAST = "Fast moving"
+MOVE_SLOW = "Slow moving"
+MOVE_DEAD = "Dead"
+MOVEMENT_CLASSES = [MOVE_FAST, MOVE_SLOW, MOVE_DEAD]
+
+
+def derive_movement(issued_3m, issued_12m):
+    if issued_3m and issued_3m > 0:
+        return MOVE_FAST
+    if issued_12m and issued_12m > 0:
+        return MOVE_SLOW
+    return MOVE_DEAD
+
+
+def movement_split(rows):
+    """Item counts AND value per movement class — both, because they disagree.
+
+    A count alone would rank a thousand dead washers above one dead machine;
+    value alone hides how much of the catalogue is standing still. Dead stock is
+    currently about half the items but a seventh of the money, and neither
+    number tells that story on its own.
+    """
+    stats = {c: {"items": 0, "value": Decimal("0")} for c in MOVEMENT_CLASSES}
+
+    for row in rows:
+        entry = stats[row["movement"]]
+        entry["items"] += 1
+        entry["value"] += _num(row["stock_qty_amount"])
+
+    total_value = sum((e["value"] for e in stats.values()), Decimal("0"))
+    total_items = sum(e["items"] for e in stats.values())
+
+    return [
+        {
+            "movement": name,
+            "items": stats[name]["items"],
+            "count": stats[name]["items"],
+            "value": stats[name]["value"],
+            "items_pct": round(stats[name]["items"] / total_items * 100, 1) if total_items else None,
+            "value_pct": round(float(stats[name]["value"] / total_value * 100), 1) if total_value else None,
+        }
+        for name in MOVEMENT_CLASSES
+    ]
+
+
+def movement_kpis(rows, window_12m, window_3m):
+    """The issuance + dead-stock tiles, all from the same per-item numbers."""
+    issued_12m = sum((_num(r["issued_value_12m"]) for r in rows), Decimal("0"))
+    issued_3m = sum((_num(r["issued_value_3m"]) for r in rows), Decimal("0"))
+
+    dead = [r for r in rows if r["movement"] == MOVE_DEAD]
+    dead_value = sum((_num(r["stock_qty_amount"]) for r in dead), Decimal("0"))
+    total_value = sum((_num(r["stock_qty_amount"]) for r in rows), Decimal("0"))
+
+    return {
+        "issued_value_12m": issued_12m,
+        "issued_value_3m": issued_3m,
+        "dead_items": len(dead),
+        "dead_value": dead_value,
+        "dead_value_pct": round(float(dead_value / total_value * 100), 1) if total_value else None,
+        # Named windows, so "last 12 months" is never assumed to end today when
+        # the issuance data stops earlier.
+        "window_12m": window_12m,
+        "window_3m": window_3m,
     }
 
 
@@ -111,36 +265,124 @@ def kpis(rows):
 #-------------------------------------
 
 def items_by_branch(rows):
+    """Items stocked per branch, with their value for the tooltip.
+
+    Per-branch rows on purpose — one row per (item, branch) means counting them
+    within a branch IS counting that branch's items.
+    """
     counts = {}
+    values = {}
     for row in rows:
         branch = row["branch"]
         if not branch:
             continue
         counts[branch] = counts.get(branch, 0) + 1
+        values[branch] = values.get(branch, Decimal("0")) + _num(row["stock_qty_amount"])
 
-    result = [{"branch": branch, "items": count} for branch, count in counts.items()]
-    result.sort(key=lambda r: r["items"], reverse=True)
+    result = [
+        {"branch": branch, "label": branch, "items": count,
+         "count": count, "value": values[branch]}
+        for branch, count in counts.items()
+    ]
+    result.sort(key=lambda r: r["value"], reverse=True)
     return result
 
 
-def at_risk_by_branch(rows):
+def movement_by_branch(rows):
+    """Fast / slow / dead per branch — replaces the at-risk-by-branch chart.
+
+    Takes the PER-BRANCH rows, because a branch breakdown needs the branch. An
+    item stocked at three factories is counted at each of them, which is the
+    only sensible reading of "how much dead stock does this store hold".
+    """
     totals = {}
+
     for row in rows:
         branch = row["branch"]
         if not branch:
             continue
-        entry = totals.setdefault(branch, {"total": 0, "risk": 0})
-        entry["total"] += 1
-        if row["stock_status"] in RISK_STATUSES:
-            entry["risk"] += 1
+        entry = totals.setdefault(
+            branch, {c: 0 for c in MOVEMENT_CLASSES} | {"dead_value": Decimal("0")}
+        )
+        entry[row["movement"]] += 1
+        if row["movement"] == MOVE_DEAD:
+            entry["dead_value"] += _num(row["stock_qty_amount"])
 
-    result = [
-        {"branch": branch, "at_risk": round((entry["risk"] / entry["total"]) * 100)}
-        for branch, entry in totals.items()
-        if entry["total"]
-    ]
-    result.sort(key=lambda r: r["at_risk"], reverse=True)
+    result = []
+    for branch, entry in totals.items():
+        lines = sum(entry[c] for c in MOVEMENT_CLASSES)
+        result.append({
+            "branch": branch,
+            "label": branch,
+            "fast": entry[MOVE_FAST],
+            "slow": entry[MOVE_SLOW],
+            "dead": entry[MOVE_DEAD],
+            # `count`/`value` so the chart plots DEAD LINES on the axis and
+            # shows the money on hover, like every other breakdown.
+            "count": entry[MOVE_DEAD],
+            "value": entry["dead_value"],
+            "dead_value": entry["dead_value"],
+            "dead_pct": round(entry[MOVE_DEAD] / lines * 100, 1) if lines else None,
+        })
+
+    result.sort(key=lambda r: r["value"], reverse=True)
     return result
+
+
+#-------------------------------------
+# STOCK DAYS (the runway), per branch and overall
+#
+# How long the stock on hand lasts at the rate it is actually being consumed.
+# Measured in RUPEES, not units: a store holds many units of incomparable
+# things, so summing bolts and shafts is meaningless while summing their value
+# is not.
+#
+# The consumption rate comes from the 12-month issuance window, which is the
+# same number the issuance KPI shows — one source, so the two cannot drift.
+#-------------------------------------
+
+def stock_days_from_value(stock_value, issued_value, window_days):
+    if not window_days or issued_value is None or issued_value <= 0:
+        return None
+    if stock_value is None or stock_value <= 0:
+        return None
+    daily = issued_value / Decimal(window_days)
+    return round(float(stock_value / daily), 1)
+
+
+def stock_days(rows, window_days):
+    """Overall runway + the per-branch split, from one set of numbers."""
+    by_branch = {}
+
+    for row in rows:
+        branch = row["branch"] or "(no branch)"
+        entry = by_branch.setdefault(branch, {"stock": Decimal("0"), "issued": Decimal("0")})
+        entry["stock"] += _num(row["stock_qty_amount"])
+        entry["issued"] += _num(row["issued_value_12m"])
+
+    branches = [
+        {
+            "branch": branch,
+            "stock_value": entry["stock"],
+            "issued_value": entry["issued"],
+            "days_of_stock": stock_days_from_value(entry["stock"], entry["issued"], window_days),
+        }
+        for branch, entry in by_branch.items()
+    ]
+
+    # A branch with no consumption has no runway; it sorts LAST rather than
+    # reading as the healthiest store on the list.
+    branches.sort(key=lambda b: (b["days_of_stock"] is None, b["days_of_stock"]))
+
+    total_stock = sum((b["stock_value"] for b in branches), Decimal("0"))
+    total_issued = sum((b["issued_value"] for b in branches), Decimal("0"))
+
+    return {
+        "total_days_of_stock": stock_days_from_value(total_stock, total_issued, window_days),
+        "by_branch": branches,
+        "window_days": window_days,
+        "basis": "value issued over the last 12 months",
+    }
 
 
 def top_items(rows, limit=8):
@@ -167,11 +409,14 @@ def lowest_days_of_stock(rows, limit=8):
 
 def stock_health_split(rows):
     counts = {}
+    values = {}
     for row in rows:
-        counts[row["stock_status"]] = counts.get(row["stock_status"], 0) + 1
+        status = row["stock_status"]
+        counts[status] = counts.get(status, 0) + 1
+        values[status] = values.get(status, Decimal("0")) + _num(row["stock_qty_amount"])
 
     return [
-        {"label": status, "value": counts[status]}
+        {"label": status, "count": counts[status], "value": values[status]}
         for status in [OK, BELOW_REORDER, OUT_OF_STOCK]
         if counts.get(status)
     ]

@@ -1,7 +1,7 @@
 from app.dashboard.imports.calculations import (
-    kpis, monthly_value_trend, status_split, value_by_branch,
+    kpis, value_trend, status_split, value_by_branch,
     value_by_country, value_by_supplier,
-    total_import_spend, demand_counts, delay_stats,
+    shafts_value, efs_split, demand_counts, delivery_delay,
     supplier_spend_pareto, category_delays,
 )
 
@@ -17,19 +17,27 @@ from app.dashboard.imports.calculations import (
 # anything. Both are computed over the same filtered list.
 #-------------------------------------
 
-def serialize_imports_dashboard(consignments):
+def serialize_imports_dashboard(consignments, period_from, period_to):
+    """One screen, no figure stated twice.
+
+    Two removals to keep it that way:
+      * `import_spend` — it was the stored total of the same consignments
+        `kpis.total_value_pkr` already totals, so two spend figures sat side by
+        side differing only by basis. Shafts value replaces it.
+      * `value_by_supplier` — `supplier_pareto` is the same breakdown with the
+        cumulative line added, so the plain chart was a strictly worse copy.
+    """
     return {
         "kpis": kpis(consignments),
         "status_split": status_split(consignments),
         "value_by_country": value_by_country(consignments),
-        "value_by_supplier": value_by_supplier(consignments),
         "value_by_branch": value_by_branch(consignments),
-        "monthly_value_trend": monthly_value_trend(consignments),
+        "value_trend": value_trend(consignments, period_from, period_to),
 
-        # KPI document
-        "import_spend": total_import_spend(consignments),
+        "shafts": shafts_value(consignments),
+        "efs_split": efs_split(consignments),
         "demands": demand_counts(consignments),
-        "delay": delay_stats(consignments),
+        "delivery_delay": delivery_delay(consignments),
         "supplier_pareto": supplier_spend_pareto(consignments),
         "category_delays": category_delays(consignments),
     }

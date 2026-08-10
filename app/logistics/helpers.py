@@ -10,6 +10,7 @@ from app.logistics.models import (
     LogisticsChangeHistory, LogisticsStatusHistory,
 )
 from app.logistics.serializers import serialize_many
+from app.masters.models import Customer
 from app.enums import LogisticsStatus, JobKind
 
 
@@ -71,6 +72,36 @@ def create_consignment_object(consignment_data, user):
 
     consignment = LogisticsConsignment(**consignment_data_dict)
     return consignment
+
+
+#-------------------------------------
+# KEEP customer_id IN STEP WITH customer_name
+#
+# The wizard sends a customer NAME (it always has). The master link is derived
+# from it here, on create and on update, so the two can never disagree — there
+# is no second place a customer can be set.
+#
+# An unmatched name leaves customer_id NULL rather than creating a master row:
+# silently minting a customer from a typo is how a master list becomes the very
+# free-text mess it exists to prevent. The Masters screen (or inline create) is
+# where a genuinely new customer is added, and the next save picks it up.
+#
+# Matching is case-insensitive and trims, because "Cherat Cement " and
+# "CHERAT CEMENT" are one customer to everybody except a string comparison.
+#-------------------------------------
+
+def resolve_customer_id(consignment, db):
+    name = (consignment.customer_name or "").strip()
+
+    if not name:
+        consignment.customer_id = None
+        return
+
+    match = db.execute(
+        select(Customer).where(func.lower(Customer.name) == name.lower())
+    ).scalars().first()
+
+    consignment.customer_id = match.id if match else None
 
 
 def create_child_objects(child_schemas, model):

@@ -4,7 +4,10 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_IMPORTS_DASHBOARD
-from app.dashboard.imports.helpers import fetch_consignments, fetch_filtered_consigments
+from app.dashboard.imports.helpers import (
+    fetch_consignments, fetch_filtered_consigments, source_coverage,
+)
+from app.dashboard.period import resolve_period, serialize_period
 from app.dashboard.imports.serializers import serialize_imports_dashboard
 from typing import Optional
 from datetime import date
@@ -19,7 +22,10 @@ def imports_dashboard(
     status : Optional[str] = None,
     mode_of_shipment : Optional[str] = None,
     from_date : Optional[date] = None,
-    to_date : Optional[date] = None
+    to_date : Optional[date] = None,
+    # The dashboard-wide reporting window. Both omitted -> the current month.
+    date_from : Optional[date] = None,
+    date_to : Optional[date] = None,
     ):
 
     db = SessionLocal()
@@ -33,8 +39,14 @@ def imports_dashboard(
         # action). Dashboards are read only, so every role sees them.
         user = authorize(user_payload, CAN_VIEW_IMPORTS_DASHBOARD, db)
 
+        period_from, period_to, period_kind = resolve_period(date_from, date_to)
+
         consignments = fetch_consignments(db)
-        filtered_consignments = fetch_filtered_consigments(db, work, status, item_category, supplier, country, from_date, to_date, mode_of_shipment)
+        filtered_consignments = fetch_filtered_consigments(
+            db, work, status, item_category, supplier, country,
+            from_date, to_date, mode_of_shipment,
+            period_from, period_to,
+        )
 
         works = set()
         suppliers = set()
@@ -58,7 +70,13 @@ def imports_dashboard(
 
 
         data = {
-            "consignments": serialize_imports_dashboard(filtered_consignments),
+            "consignments": serialize_imports_dashboard(
+                filtered_consignments, period_from, period_to
+            ),
+            # The window actually used + what the table holds, so an empty
+            # period is explained rather than shown as a bare zero.
+            "period": serialize_period(period_from, period_to, period_kind),
+            "coverage": source_coverage(db, period_from, period_to),
             "works" : sorted(works),
             "suppliers" : sorted(suppliers),
             "countries" : sorted(countries),

@@ -110,10 +110,11 @@ def imports_shafts(in_process, arrived):
 # LOCAL PROCUREMENT
 #-------------------------------------
 
-def procurement_period_value(total, rows, quantity):
+def procurement_period_value(total, orders, quantity):
+    """Value + ORDER count (distinct POs), never item lines."""
     return {
         "value": _num(total),
-        "lines": rows,
+        "orders": orders,
         "quantity": _num(quantity),
         "basis": "purchase_date",
     }
@@ -152,7 +153,7 @@ def procurement_category_split(category_totals, top=4):
 def procurement_delay(late, comparable):
     return {
         "delay_pct": pct(late, comparable),
-        "late_lines": late,
+        "late_orders": late,
         "basis": comparable,
     }
 
@@ -219,11 +220,11 @@ def logistics_shipments_handled(export_orders, import_consignments):
 # STORES
 #-------------------------------------
 
-def stores_stock_value(total_value, available_value, lines):
+def stores_stock_value(total_value, available_value, items):
     return {
         "stock_value": _num(total_value),
         "available_value": _num(available_value),
-        "stock_lines": lines,
+        "items": items,
     }
 
 
@@ -234,10 +235,10 @@ def stores_value_by_store(rows):
         {
             "branch": branch,
             "stock_value": _num(value),
-            "stock_lines": lines,
+            "items": items,
             "share_pct": pct(_num(value), total),
         }
-        for branch, value, lines in rows
+        for branch, value, items in rows
     ]
     stores.sort(key=lambda s: s["stock_value"], reverse=True)
     return stores
@@ -292,7 +293,7 @@ def stores_stock_days(stock_by_branch, consumption_by_branch, window_days):
     }
 
 
-def stores_dead_stock(lines, value, threshold_days, total_lines, total_value,
+def stores_dead_stock(items, value, threshold_days, total_items, total_value,
                       history_days=0):
     # Stock that still has value but has not been issued within the threshold.
     # The threshold is a caller parameter, not a constant here: "dead" is a
@@ -302,10 +303,10 @@ def stores_dead_stock(lines, value, threshold_days, total_lines, total_value,
     # issuance data goes, at which point the figure is really "never issued in
     # the data we hold" and raising the threshold cannot change it.
     return {
-        "lines": lines,
+        "items": items,
         "value": _num(value),
         "threshold_days": threshold_days,
-        "lines_pct": pct(lines, total_lines),
+        "items_pct": pct(items, total_items),
         "value_pct": pct(_num(value), _num(total_value)),
         "history_days": history_days,
         "exceeds_history": bool(history_days) and threshold_days >= history_days,

@@ -5,6 +5,7 @@ pd.set_option("display.max_columns", None)
 from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_int, clean_date, bulk_insert
 )
+from app.loading.scripts.stores.item_registry import register_missing_items
 from pathlib import Path
 
 CURRENT_DIR = Path(__file__).resolve().parents[2]
@@ -22,6 +23,20 @@ PURCHASES_COLUMNS = [
 
 def load_purchases(conn):
     df = read_and_concat("Sheet1", files)
+
+    # item_code is a foreign key onto `items`, and the catalogue export lags
+    # behind the transactional sheets — an unknown code fails the constraint and
+    # takes the whole load down. See item_registry for why the gap is filled
+    # rather than the code being nulled.
+    register_missing_items(
+        conn, df,
+        code_column="Item Code",
+        name_column="Item Name",
+        spec_column="Specificati",
+        category_column="Item Categ",
+        label="Purchases",
+    )
+
     purchases_rows = []
 
     for _, row in df.iterrows():

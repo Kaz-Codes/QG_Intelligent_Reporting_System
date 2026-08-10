@@ -52,6 +52,7 @@ import app.loading.schemas.stores_schemas
 
 from app.database import SessionLocal
 from app.enums import Incoterm
+from app.loading.scripts.imports.item_codes import assign_item_codes
 from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_date,
 )
@@ -101,7 +102,15 @@ def group_sheet_rows(df):
     """Reproduce load_05_consignments._group exactly: rows sharing a Payment
     Ref No are ONE consignment; a row without one stands alone; rows with no
     Item Code are skipped. Returns the groups in the loader's own order, which
-    is what makes position -> id recoverable."""
+    is what makes position -> id recoverable.
+
+    IMPORTANT: the loader now FILLS IN the missing Item Codes before it groups
+    (see imports/item_codes.py), so this must too. Grouping the raw sheet would
+    skip the 294 uncoded rows, produce a different set of groups in a different
+    order, and map every value onto the wrong consignment. The caller assigns
+    the codes first; the skip below then only drops rows with no item name at
+    all, exactly as the loader does.
+    """
     order, by_ref, singleton = [], {}, 0
 
     for _, row in df.iterrows():
@@ -138,11 +147,18 @@ def run(with_incoterm=False, dry_run=False):
         return
 
     df = read_and_concat("Sheet1", files)
-    groups = group_sheet_rows(df)
-    print(f"sheet: {len(df)} rows -> {len(groups)} consignment groups\n")
 
     db = SessionLocal()
     try:
+        # Fill the missing Item Codes exactly as the loader does, BEFORE
+        # grouping — otherwise the uncoded rows are skipped here but not there,
+        # and the groups (and therefore the id mapping) diverge. The alignment
+        # check below catches that, but aligning properly is the point.
+        assign_item_codes(df, db.connection().connection)
+
+        groups = group_sheet_rows(df)
+        print(f"sheet: {len(df)} rows -> {len(groups)} consignment groups\n")
+
         # The loader gave group N the id N+1. Rather than trust that blindly,
         # verify it against the stored instrument_number (Payment Ref No) —
         # a silent off-by-one here would write every value onto the wrong

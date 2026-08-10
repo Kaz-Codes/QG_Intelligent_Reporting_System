@@ -17,6 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 # imports module references accounts.
 if TYPE_CHECKING:
     from app.accounts.models import User
+    from app.masters.models import Customer
 
 #-----------------------------------------------------
 # THE LOGISTICS TABLES
@@ -117,9 +118,29 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # Customer is stored BOTH ways, on purpose.
+    #
+    # customer_name came first: orders carried the customer as free text long
+    # before a Customer master existed, and 1,424 loaded orders still hold only
+    # a name. customer_id is the master link, backfilled by exact name match.
+    #
+    # The name is kept rather than dropped because it is what the wizard sends
+    # and what every loaded row has; helpers.resolve_customer_id keeps the id in
+    # step with it on every save, so the pair cannot drift. A name that matches
+    # no customer leaves customer_id NULL rather than inventing a master row.
     customer_name: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True
+    )
+
+    customer_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+
+    customer: Mapped[Optional["Customer"]] = relationship(
+        back_populates="consignments"
     )
 
     # MO number is a grouping key, not a unique id. Several orders (batches)

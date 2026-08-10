@@ -29,6 +29,7 @@ from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_status, clean_int,
     clean_number, clean_date, bulk_insert,
 )
+from app.loading.scripts.imports.item_codes import assign_item_codes
 
 STATUS_VALUES = [s.value for s in Status]
 
@@ -84,7 +85,7 @@ CONSIGNMENT_COLUMNS = [
     "loading_port_id", "delivery_port_id",
     "origin", "currency", "consignment_type", "mode_of_shipment",
     "cargo_readiness_date", "etd", "eta", "eta_works",
-    "payment_instrument", "instrument_number", "opening_or_retirement_date",
+    "payment_instrument", "instrument_number", "opening_or_retirement_date", "required_date",
     "exchange_rate", "current_status", "remarks",
     "gd_number", "gd_filing_date", "free_days_allowed", "gate_out_date",
     "created_by_id",
@@ -141,13 +142,24 @@ def map_currency(value):
 
 
 def map_consignment_type(value):
+    """The sheet's EFS column -> EFS / Regular import / unknown.
+
+    Matched on the first letter rather than an exact list, because the column is
+    hand-typed and carries things like "NO HS Code Issue" — plainly not EFS, but
+    an exact match drops it into the unknown bucket alongside the genuinely
+    blank rows. None still means "the sheet does not say", which is a real and
+    large bucket here (well over half the lines) and is reported as its own
+    category rather than being folded into Regular.
+    """
     s = clean_text(value)
     if not s:
         return None
-    s = s.lower()
-    if s in ("yes", "y", "efs"):
+
+    s = s.strip().lower()
+
+    if s.startswith("y") or s == "efs":
         return "EFS"
-    if s in ("no", "n", "regular", "regular import"):
+    if s.startswith("n"):
         return "Regular import"
     return None
 
@@ -210,10 +222,11 @@ def _group(df):
 # building the rows for all three tables
 #--------------------------------------
 
-def build_rows(df, port_map, item_map, created_by_id):
+def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
     consignment_rows = []
     item_rows = []
     eta_rows = []
+    dropped_branches = 0
 
     for index, rows in enumerate(_group(df)):
         consignment_id = index + 1
@@ -227,9 +240,14 @@ def build_rows(df, port_map, item_map, created_by_id):
         status = map_status(_first(rows, "Current Status", clean_status))
         record_state, is_locked = terminal_flags(status)
 
+        branch_id = _first(rows, "works_id", clean_int)
+        if branch_ids is not None and branch_id is not None and branch_id not in branch_ids:
+            branch_id = None
+            dropped_branches += 1
+
         consignment_rows.append((
             consignment_id,
-            _first(rows, "works_id", clean_int),          # branch_id
+            branch_id,
             _first(rows, "supplier_id", clean_int),
             _first(rows, "clearing_agent_id", clean_int),
             port_map.get(pol) if pol else None,            # loading_port_id
@@ -245,6 +263,7 @@ def build_rows(df, port_map, item_map, created_by_id):
             _first(rows, "Payment Mode", clean_text),      # payment_instrument
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Ret Dt.", clean_date),
+            _first(rows, "Req. Dt.", clean_date),
             _first(rows, "Exchange Rate", clean_number),
             status,
             _first(rows, "Remarks", clean_text),
@@ -290,6 +309,10 @@ def build_rows(df, port_map, item_map, created_by_id):
                 None,
             ))
 
+    if dropped_branches:
+        print(f"  {dropped_branches} consignment(s) referenced a works that is not a "
+              f"branch (QH) — kept, with no branch")
+
     return consignment_rows, item_rows, eta_rows
 
 
@@ -312,6 +335,21 @@ def _port_map(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT name, id FROM ports")
         return {name: pid for name, pid in cur.fetchall()}
+
+
+def _branch_ids(conn):
+    """The branch ids that actually exist, so a consignment cannot point at one
+    that does not.
+
+    The sheet's works_id 5 is "QH", which is not a branch of the business and is
+    no longer loaded (see load_02_branches). Writing branch_id = 5 anyway would
+    fail the foreign key and take the whole insert down with it, so those
+    consignments are kept with NO branch instead — the import is real, its
+    branch attribution is not.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM branches")
+        return {row[0] for row in cur.fetchall()}
 
 
 def _item_map(conn):
@@ -341,12 +379,30 @@ def _bump_sequence(conn, table):
 def load_consignments(conn):
     df = read_and_concat("Sheet1", FILES)
 
+    # _group() keeps only rows that carry an Item Code, so the gaps have to be
+    # filled BEFORE grouping — otherwise every uncoded row is dropped and the
+    # sheet loses most of its lines (294 of 451 in the current workbook).
+    code_report = assign_item_codes(df, conn)
+    print(
+        "  item codes: "
+        f"{code_report['already_coded']} already coded, "
+        f"{code_report['from_sheet_sibling']} from a sibling row, "
+        f"{code_report['from_master']} from the items master, "
+        f"{code_report['generated']} generated "
+        f"({code_report['generated_items']} distinct items)"
+    )
+    if code_report["no_item_name"]:
+        print(f"  ! {code_report['no_item_name']} row(s) have no item name and are skipped")
+    if code_report["conflicting_pairs"]:
+        print(f"  ! {code_report['conflicting_pairs']} item(s) carry more than one code in the sheet")
+
     port_map = _port_map(conn)
     item_map = _item_map(conn)
+    branch_ids = _branch_ids(conn)
     created_by_id = _admin_id(conn)
 
     consignment_rows, item_rows, eta_rows = build_rows(
-        df, port_map, item_map, created_by_id
+        df, port_map, item_map, created_by_id, branch_ids
     )
 
     bulk_insert(conn, "consignments", CONSIGNMENT_COLUMNS, consignment_rows)

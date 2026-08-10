@@ -3,7 +3,7 @@ from typing import Optional, TYPE_CHECKING
 from app.database import Base
 from app.models_mixins import TimestampMixin
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData, StoreRequisition
 
@@ -13,6 +13,7 @@ from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData, S
 # only.
 if TYPE_CHECKING:
     from app.imports.models import Consignment, ConsignmentItem
+    from app.logistics.models import LogisticsConsignment
 
 
 #-----------------------------------------------------
@@ -192,6 +193,61 @@ class Works(Base, TimestampMixin):
 
     # Works is no longer a foreign key on the consignment (it is typed in by
     # hand there), so this table has no consignment back-reference.
+    #
+    # NOTE: Works and Branch are the SAME THING to the business — the imports
+    # sheet's "Works" column is what fills consignments.branch_id. This table
+    # is a vestige of the pre-refactor model: it holds zero rows, nothing
+    # references it, and it is no longer exposed as a master (removed from the
+    # registry and from the Masters screen). Kept here rather than dropped so
+    # no DDL runs against a table that might still exist in someone's database;
+    # it can be dropped once that is confirmed everywhere.
+
+
+#--------------------------------
+# CUSTOMERS TABLE
+#
+# Who the logistics side ships TO. Name only, by decision — the workbooks
+# carry nothing else about a customer, and inventing address/contact columns
+# nobody fills would just be six more empty fields on the screen.
+#
+# Customers came late: logistics orders stored the customer as free text
+# (customer_name) long before this table existed. That column is still written
+# by the wizard and kept in step with customer_id, so the two never disagree —
+# see logistics.helpers.resolve_customer_id.
+#--------------------------------
+
+class Customer(Base, TimestampMixin):
+    __tablename__ = "customers"
+
+    id : Mapped[int] = mapped_column(primary_key = True)
+
+    name : Mapped[str] = mapped_column(
+        String(255),
+        unique = True,
+        nullable = False
+    )
+
+    is_active : Mapped[bool] = mapped_column(
+        Boolean,
+        default = True,
+        server_default = text("true"),
+        nullable = False
+    )
+
+    # Seeded rows land verified=False: they were harvested from free text that
+    # nobody has checked, and the 348 distinct names hold obvious duplicates
+    # ("CHERAT CEMENT" vs "CHERAT CEMENT LTD."). The review queue is where they
+    # get confirmed or merged.
+    is_verified : Mapped[bool] = mapped_column(
+        Boolean,
+        default = True,
+        server_default = text("true"),
+        nullable = False
+    )
+
+    consignments : Mapped[list["LogisticsConsignment"]] = relationship(
+        back_populates = "customer"
+    )
 
 
 #--------------------------------

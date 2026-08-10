@@ -18,10 +18,33 @@ EXCEL_FILES = list_excel_files(directory)
 AB_DIRECTORY = CURRENT_DIR / "data" / "ab_items"
 AB_FILES = list_excel_files(AB_DIRECTORY)
 
-# "Main" is the full ranked list. The workbook's other ranked sheets
-# ("Re-Order", "Critical") are filtered views OF Main, so reading them too
-# would only re-state ranks Main already carries.
+# The AB workbook has had two layouts, and both are read.
+#
+# OLD ("AB Items"): one "Main" sheet holding every branch, with a Branch Name
+# column. The other ranked sheets ("Re-Order", "Critical") are filtered views OF
+# Main, so reading them too would only re-state ranks Main already carries.
+#
+# NEW ("Combined Planning Sheet"): ONE SHEET PER BRANCH, named with the branch
+# CODE, and the header on the 5th row (rows 1-4 are a title and summary block).
+# There is no Branch Name column — the sheet name is the branch.
+#
+# Supporting both matters: the layout changed silently, and the loader's old
+# behaviour on an unreadable sheet was to warn and carry on, which would have
+# dropped EVERY item to rank C without failing.
 AB_SHEET = "Main"
+AB_NEW_HEADER_ROW = 4
+
+# Branch code (the new workbook's sheet name) -> the branch name stock rows use.
+# NOT guessed: derived by matching each sheet's item codes against each branch's
+# stock rows, where every sheet covered exactly one branch's codes 100% and the
+# next best was 66% or less. Note QEN is Qadri ENGINEERING while QE is QADBROS
+# Engineering — the intuitive reading of those two codes is backwards.
+AB_BRANCH_BY_CODE = {
+    "QCL": "Qadcast (Pvt) Ltd.",
+    "QBL2": "Qadri Brothers (Pvt.) Ltd. (Unit-II)",
+    "QEN": "Qadri Engineering (Pvt) Ltd.",
+    "QE": "Qadbros Engineering (Pvt) Ltd.",
+}
 
 #Order of columns matters here (must be same as order of ROWS list)
 STOCK_COLUMNS = ["item_code", "item_name", "branch", "hold_qty", "stock_qty", "stock_qty_amount",  "available_qty", "available_amount", "rank"]
@@ -47,31 +70,83 @@ def build_rank_map():
     rank_map = {}
 
     for file in AB_FILES:
+        name = Path(file).name
+        sheets = pd.ExcelFile(file).sheet_names
+
+        if AB_SHEET in sheets:
+            _read_combined_sheet(file, rank_map, name)
+        else:
+            _read_per_branch_sheets(file, sheets, rank_map, name)
+
+    return rank_map
+
+
+def _record(rank_map, code, branch, rank):
+    """Store one ranking, guarding the enum.
+
+    A value outside A/B/C is IGNORED rather than stored — the new workbook
+    carries stray 'Q' and 'D' ranks, and letting those through would put junk in
+    a column the dashboards group by. An ignored row keeps the C default, which
+    is what "not classified" means here.
+    """
+    if not code or not branch or not rank:
+        return
+
+    rank = rank.strip().upper()
+    if rank not in VALID_RANKS:
+        return
+
+    rank_map[(code, branch)] = rank
+
+
+def _read_combined_sheet(file, rank_map, name):
+    """OLD layout: a single "Main" sheet carrying its own Branch Name column."""
+    try:
+        df = read_sheet(AB_SHEET, file)
+    except Exception as exc:
+        print(f"  ! AB ranks: could not read {AB_SHEET!r} from {name} — {exc}")
+        return
+
+    for _, row in df.iterrows():
+        _record(
+            rank_map,
+            clean_text(row.get("Item Code")),
+            clean_text(row.get("Branch Name")),
+            clean_text(row.get("Rank")),
+        )
+
+
+def _read_per_branch_sheets(file, sheets, rank_map, name):
+    """NEW layout: one sheet per branch, named with the branch code."""
+    unknown = [s for s in sheets if s.strip().upper() not in AB_BRANCH_BY_CODE]
+    if unknown:
+        # Loud, because a renamed or added factory sheet would otherwise be
+        # skipped in silence and its items would all read as rank C.
+        print(f"  ! AB ranks: {name} has sheet(s) with no known branch: {unknown}")
+
+    for sheet in sheets:
+        branch = AB_BRANCH_BY_CODE.get(sheet.strip().upper())
+        if branch is None:
+            continue
+
         try:
-            df = read_sheet(AB_SHEET, file)
+            df = pd.read_excel(file, sheet_name=sheet, header=AB_NEW_HEADER_ROW)
+            df.columns = [str(c).strip() for c in df.columns]
         except Exception as exc:
-            # A workbook without the expected sheet shouldn't sink the stock
-            # load; every row simply falls back to C.
-            print(f"  ! AB ranks: could not read {AB_SHEET!r} from {Path(file).name} — {exc}")
+            print(f"  ! AB ranks: could not read {sheet!r} from {name} — {exc}")
+            continue
+
+        if "Rank" not in df.columns or "Item Code" not in df.columns:
+            print(f"  ! AB ranks: {name}[{sheet}] has no Rank/Item Code column — skipped")
             continue
 
         for _, row in df.iterrows():
-            code = clean_text(row.get("Item Code"))
-            branch = clean_text(row.get("Branch Name"))
-            rank = clean_text(row.get("Rank"))
-
-            if not code or not branch or not rank:
-                continue
-
-            rank = rank.strip().upper()
-            # Guard the enum: an unexpected value in the sheet becomes C
-            # rather than landing a junk rank in the column.
-            if rank not in VALID_RANKS:
-                continue
-
-            rank_map[(code, branch)] = rank
-
-    return rank_map
+            _record(
+                rank_map,
+                clean_text(row.get("Item Code")),
+                branch,
+                clean_text(row.get("Rank")),
+            )
 
 
 def load_stock(conn):

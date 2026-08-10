@@ -5,7 +5,10 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_LOGISTICS
-from app.logistics.helpers import create_consignment_object, create_child_objects, fetch_consignment
+from app.logistics.helpers import (
+    create_consignment_object, create_child_objects, fetch_consignment,
+    resolve_customer_id,
+)
 from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment
 
@@ -28,6 +31,11 @@ def create_consignment(
 
         # Create the header and its line objects
         consignment = create_consignment_object(consignment_data, user)
+
+        # The wizard sends a customer name; the master link is derived from it
+        # so the two can never disagree.
+        resolve_customer_id(consignment, db)
+
         consignment.items = create_child_objects(consignment_data.items, LogisticsItem)
         consignment.packages = create_child_objects(consignment_data.packages, LogisticsPackage)
         consignment.containers = create_child_objects(consignment_data.containers, LogisticsContainer)

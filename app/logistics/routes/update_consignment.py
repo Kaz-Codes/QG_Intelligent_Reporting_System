@@ -9,7 +9,7 @@ from app.logistics.helpers import (
     updated_fields, verify_entry_ownership, apply_updates,
     new_children_to_add, updated_children, delete_missing,
     add_in_consignment_change_history, add_in_status_change_history,
-    create_child_objects, fetch_consignment,
+    create_child_objects, fetch_consignment, resolve_customer_id,
 )
 from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment, serialize_many
@@ -99,6 +99,10 @@ def update_consignment(
 
         # Applying header updates
         apply_updates(updation_dict, consignment)
+
+        # Re-derive the master link AFTER the header updates, so a changed
+        # customer name moves customer_id with it.
+        resolve_customer_id(consignment, db)
 
         # A plain draft save never closes an order, even if this update sets
         # the status to "Delivered" on an already-submitted record —

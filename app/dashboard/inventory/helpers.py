@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, case
 from sqlalchemy.orm import joinedload
 
 from app.loading.schemas.stores_schemas import (
@@ -212,6 +212,68 @@ def purchase_vs_issuance_by_category(db, item_category=None, limit=10):
         # branch filter is active on the rest of the screen, so the mismatch is
         # visible rather than mistaken for filtered data.
         "branch_filtered": False,
+    }
+
+
+#-------------------------------------
+# ISSUANCE PER (ITEM, BRANCH) OVER THE TWO REPORTING WINDOWS
+#
+# One query returns both the 12-month and the 3-month issued VALUE per stock
+# line. Everything on the screen that talks about movement is derived from these
+# two numbers — the issuance KPIs, the fast/slow/dead split, dead stock and the
+# stock-days runway — so those figures are guaranteed to agree with each other.
+#
+# The windows END AT THE LATEST ISSUANCE IN THE DATA, not at today. The data is
+# historical; anchoring to today would measure a window that is partly empty and
+# report healthy items as dead. The resolved window is returned so the screen
+# can state the dates it actually used.
+#-------------------------------------
+
+MONTHS_12_DAYS = 365
+MONTHS_3_DAYS = 92
+
+
+def issuance_windows(db):
+    """({(item_code, branch): {"v12", "v3"}}, window_info)"""
+    latest = db.execute(select(func.max(Issuance.from_date))).scalar()
+
+    if latest is None:
+        return {}, {"latest": None, "from_12m": None, "from_3m": None,
+                    "days_12m": MONTHS_12_DAYS, "days_3m": MONTHS_3_DAYS}
+
+    from_12m = latest - timedelta(days=MONTHS_12_DAYS)
+    from_3m = latest - timedelta(days=MONTHS_3_DAYS)
+
+    rows = db.execute(
+        select(
+            Issuance.item_code,
+            Issuance.branch,
+            func.coalesce(
+                func.sum(func.coalesce(Issuance.total_price, 0)), 0
+            ).label("v12"),
+            func.coalesce(
+                func.sum(
+                    case((Issuance.from_date >= from_3m,
+                          func.coalesce(Issuance.total_price, 0)), else_=0)
+                ), 0
+            ).label("v3"),
+        )
+        .where(Issuance.item_code.isnot(None))
+        .where(Issuance.from_date.between(from_12m, latest))
+        .group_by(Issuance.item_code, Issuance.branch)
+    ).all()
+
+    by_key = {
+        (item_code, branch): {"v12": v12 or Decimal("0"), "v3": v3 or Decimal("0")}
+        for item_code, branch, v12, v3 in rows
+    }
+
+    return by_key, {
+        "latest": latest,
+        "from_12m": from_12m,
+        "from_3m": from_3m,
+        "days_12m": MONTHS_12_DAYS,
+        "days_3m": MONTHS_3_DAYS,
     }
 
 

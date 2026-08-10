@@ -155,9 +155,17 @@ authorization** for the model.
 
 ## masters
 
-The dropdown source-of-truth tables: **Supplier, Branch, Works, Port,
-ClearingAgent, Item** (+ `HsCode` under Item). Free text is banned for anything
+The dropdown source-of-truth tables: **Customer, Supplier, Port, ClearingAgent,
+Branch, Item** (+ `HsCode` under Item). Free text is banned for anything
 reported on — three spellings of one supplier destroys supplier-wise reporting.
+
+**There is no Works master.** Works and Branch are the same thing to the
+business: the imports sheet's "Works" column is what fills a consignment's
+`branch_id`. The separate `works` list was a duplicate that held zero rows and
+that nothing referenced, so it is gone from the registry, the serializers and
+the Masters screen. The model and table survive untouched (no DDL is run against
+them) and `GET /masters/works` now 404s. The free-text `Consignment.works`
+column is a separate vestige — NULL on every loaded row.
 
 - **Config-driven registry** (`registry.py`): one dict per master (model,
   serializer shape, search fields, whether it has HS codes / a port relation),
@@ -170,9 +178,30 @@ reported on — three spellings of one supplier destroys supplier-wise reporting
 - **`is_active`** turns a row off without deleting (rows pointing at it keep working).
 - **`is_verified`** — a row created mid-data-entry starts `False` and waits in
   the review queue; rows created through the Masters screen are `True`.
-- **Inline creation** (Supplier, Item, Port, ClearingAgent only): type a name
-  that matches nothing → appended with `verified=False`. Ports also capture a
-  Sea/Air type at creation. **Branch and Works are never creatable inline.**
+- **Inline creation** (Customer, Supplier, Item, Port, ClearingAgent): type a
+  name that matches nothing → appended with `verified=False`. Ports also capture
+  a Sea/Air type at creation. **Branch is never creatable inline.**
+- **Customer** — **name only**, by decision: the logistics workbooks carry
+  nothing else about a customer, so address/contact columns would just be empty
+  fields on the screen. It is the one master counted against **logistics orders**
+  rather than import consignments (`used` = orders shipped to it).
+  - `logistics_consignments` carries **both** `customer_name` (free text, what
+    the wizard sends and what all 1,424 loaded rows have) **and** `customer_id`.
+    `helpers.resolve_customer_id` re-derives the id from the name on create,
+    update **and revert**, so the pair cannot drift and the wizard needed no
+    change. A name matching no customer leaves `customer_id` NULL rather than
+    minting a master row — silently creating a customer from a typo is how a
+    master list becomes the free-text mess it exists to prevent.
+  - Seeded from the 348 distinct order names by
+    `python -m app.loading.scripts.add_customer_master` → **335 customers**
+    (13 case-only duplicates merged), **1,424/1,424 orders linked**.
+  - **Verification is targeted, not blanket.** A name that is the only spelling
+    of its stem lands verified (268); a name sharing a stem with another —
+    "CHERAT CEMENT" vs "CHERAT CEMENT LTD." — stays unverified (67, in 29
+    groups) because which is the real customer is a business call. Seeding all
+    of them unverified would flood the review queue and make the "Unverified"
+    badge meaningless; seeding all verified would assert a cleanliness the data
+    does not have.
 - **Item** carries multiple H.S. codes (one-to-many), a default UoM and default
   specification, and a free-text `category`. These *populate* a consignment line
   when the item is picked, but the line stores its own copy — changing the
@@ -423,6 +452,45 @@ keeping payloads in KBs).
     `issuance`/`stock` hold full company names.** They share no values, so the
     purchase-vs-issuance chart is deliberately **not** branch-filtered. Mapping
     them belongs in the loader, agreed with the business.
+### The reporting window (`app/dashboard/period.py`)
+
+**Every dashboard defaults to the CURRENT MONTH.** Both bounds omitted → the 1st
+to today; either given → that custom range. The front end never computes the
+default itself — it just omits both dates — so the two cannot disagree about
+what "this month" means. `date_from`/`date_to` are the dashboard-wide window;
+each screen's own older range filters (`po_from_date`, `from_date`) still exist
+and are separate.
+
+**Every period figure ships with `coverage`**, because the sources do not all
+run to today: purchases stop **2026-01-23** while issuance runs to this morning.
+Defaulting to the current month therefore leaves purchases legitimately empty,
+and `is_empty` + `latest_month` let the screen say *"no purchases in August 2026
+— latest data is 23 Jan 2026"* with a one-click jump, instead of a confident
+Rs 0 that reads as a collapse in spend.
+
+### Figures deliberately removed (they were duplicates or meaningless)
+
+- imports `import_spend` — restated `kpis.total_value_pkr` on a different basis;
+  **shafts value** took the tile.
+- imports `value_by_supplier` — `supplier_pareto` is the same breakdown plus the
+  cumulative line.
+- purchases `total_quantity` — summed kg + pcs + litres.
+- purchases `avg_days_vs_required` / `delayed_lines` — a second delay average
+  beside the first, and a count already on the Delayed tile.
+- inventory `available_units` / `total_stock_qty` / `on_hold` — quantity totals
+  across incomparable units. Value is the comparable measure.
+- inventory `at_risk_pct` / `top_items` — replaced by **movement**
+  (fast / slow / dead), which says the same thing with a reason attached.
+
+### Frontend conventions for dashboards
+
+- **Every KPI carries a `help` tooltip** (`components/MetricInfo.tsx`): what the
+  figure means, how it is calculated, and — where two figures could be confused
+  — how it differs from the other one. Definitions live in `lib/metricHelp.ts`;
+  the **basis line comes from the API**, never hardcoded, so a stated
+  denominator cannot drift from the data. Opens on hover *and* keyboard focus.
+- `components/PeriodFilter.tsx` is the shared timeline control plus
+  `PeriodSummary`, which renders the empty-window message described above.
 - **All the formulas are in `calculations.md`.**
 
 ## reports — `/reports`
@@ -505,6 +573,61 @@ models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
   every start (and every `--reload`) silently doubled `purchases_data` (no natural
   key, and the DROP list had `purchases` instead of `purchases_data`, so the
   clear was a no-op). `app.main` only does `create_all` + seed on startup.
+- **The imports sheet's missing Item Codes are filled in before grouping**
+  (`imports/item_codes.py`). This is not cosmetic: `_group()` drops any row
+  without a code, and the current workbook has codes on only **157 of 451** rows
+  (the previous one had all 451), so loading it untouched discarded 65% of the
+  import lines. Order of preference: the sheet's own code → a code already on
+  another row for the same item → the items master matched on **(name, spec)** →
+  a generated `IMP-<hash>` code.
+  - **Keyed on name + SPEC, never name alone.** In the master, "servo drive"
+    carries four codes differing only by spec; every one of the 12 name matches
+    was ambiguous. Blank spec means the name alone identifies the item.
+  - The generated code is a **hash of the item's identity, not a counter**, so
+    the same item gets the same code on every reload — a counter renumbers
+    everything the moment an item is inserted earlier in the sheet. Every real
+    code matches `<digits>-<digits>`, so the `IMP-` prefix cannot collide.
+  - **`backfill_import_demand_dates` applies the same assignment before it
+    groups.** It must, or its groups diverge from the loader's and every value
+    lands on the wrong consignment. Its id-alignment check exists for exactly
+    this and did catch it.
+- **`QH` is not a branch** and is not loaded as one; the 2 consignments naming it
+  are kept with **no branch** rather than dropped. Branch names are canonicalised
+  per `works_id` by the most-used spelling, because the sheet writes both
+  "QBL-II" and "QBl-II" under one id and `drop_duplicates` would otherwise store
+  whichever row came first.
+- **The AB-items workbook changed shape and both layouts are read**
+  (`stores/load_05_stock.py`). The old one had a single "Main" sheet with a
+  Branch Name column; the new *Combined Planning Sheet* has **one sheet per
+  branch**, named with the branch CODE, header on row 5. The old code warned and
+  carried on, which would have silently dropped every item to rank C. The
+  code→branch map was derived by matching item codes against each branch's stock
+  (each sheet covered exactly one branch 100%) — worth doing, because
+  **`QEN` is Qadri Engineering while `QE` is Qadbros Engineering**, the opposite
+  of the intuitive reading. Ranks outside A/B/C (the sheet has stray `Q` and `D`)
+  are ignored, leaving the C default.
+- **Transactional sheets may reference items the catalogue lacks**
+  (`stores/item_registry.py`). `purchases_data.item_code` and
+  `issuance.item_code` are foreign keys onto `items`, and the catalogue export
+  lags: the current workbooks reference 30 and 3 unknown codes, which failed the
+  constraint and took the whole load down. Those rows carry a name, spec and
+  category, so a minimal **unverified** catalogue row is created rather than the
+  code being nulled — nulling would cut 0.1% of rows out of every category chart.
+- **`python -m app.loading.scripts.reload_changed`** reloads ONLY purchases,
+  issuance and imports (+ the masters the imports sheet feeds). Use it instead of
+  `load_all` when only those workbooks changed: `load_all` would also rebuild
+  logistics and destroy the 1,424 `customer_id` links for nothing. It re-runs the
+  demand-dates backfill and the sequence resync afterwards.
+- **Explicit ids mean the sequence must be bumped.** The loaders insert ids by
+  hand through raw psycopg2, which does **not** advance the table's id sequence;
+  the first row the APP then inserts reuses id 1 and dies on the primary key,
+  surfacing as a bare "Internal server error". `etl_common.bump_sequence(conn,
+  table)` is the fix and every loader calls it. Suppliers, branches and
+  clearing_agents did not, which is exactly why "Add Supplier / Branch /
+  Clearing Agent" on the Masters screen 500'd while ports and works worked.
+  **`python -m app.loading.scripts.resync_sequences`** repairs a database loaded
+  before that fix (`--check` to report only); it only ever moves a sequence
+  forward, so it is safe to run at any time.
 - **`backfill_import_demand_dates` is standalone and must be re-run after any
   imports reload.** It is the only source of `requisition_date`, `required_date`,
   `pkr_total` and `foreign_total` on loaded consignments — the imports loader

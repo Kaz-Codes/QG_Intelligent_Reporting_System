@@ -2,6 +2,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ResponsiveCo
 import { useTheme } from '@/theme/ThemeContext'
 import { BRAND_LIGHT, BRAND_DEEP } from '@/theme/tokens'
 import { lerpColor, tooltipStyle, compactNumber, axisLabel } from './utils'
+import { compactMoney, count } from '@/lib/format'
 
 interface Props {
   data: Record<string, unknown>[]
@@ -11,10 +12,16 @@ interface Props {
   /** What the value axis counts — "PKR", "Orders", "Items". Without it a bare
    * number says nothing about what's being measured. */
   unit?: string
+  /** A money field to reveal on hover — the axis stays a count. See RankedBar. */
+  valueKey?: string
+  /** What one bar counts — "order", "consignment", "line". Pluralised. */
+  countNoun?: string
 }
 
 /** Vertical bar for category comparison, brand-gradient by magnitude. */
-export function CategoryBar({ data, category, value, height = 300, unit }: Props) {
+export function CategoryBar({
+  data, category, value, height = 300, unit, valueKey, countNoun,
+}: Props) {
   const { colors } = useTheme()
   const values = data.map((d) => d[value] as number)
   const max = Math.max(...values)
@@ -32,7 +39,19 @@ export function CategoryBar({ data, category, value, height = 300, unit }: Props
           tickFormatter={compactNumber}
           label={axisLabel(unit, 'y', colors.muted)}
         />
-        <Tooltip {...tooltipStyle} />
+        <Tooltip
+          {...tooltipStyle}
+          formatter={(raw: unknown, _name: unknown, entry: unknown) => {
+            const n = Number(raw)
+            const row = (entry as { payload?: Record<string, unknown> })?.payload
+            const amount = valueKey ? Number(row?.[valueKey]) : NaN
+
+            const shown = countNoun ? count(n, countNoun) : n.toLocaleString()
+            return Number.isFinite(amount)
+              ? [`${shown} · ${compactMoney(amount)}`, '']
+              : [shown, '']
+          }}
+        />
         <Bar dataKey={value} radius={[4, 4, 0, 0]} maxBarSize={72} isAnimationActive={false}>
           {data.map((d, i) => {
             const v = d[value] as number

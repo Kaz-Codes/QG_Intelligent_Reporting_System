@@ -1,26 +1,43 @@
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 
-/** One entry of FastAPI's own automatic request-body validation 422 — sent
- *  when the JSON doesn't even satisfy the Pydantic schema's types (a string
- *  where a number was expected, a value outside a Field(gt=...) bound, an
- *  enum value that isn't one of the fixed options, ...). This is BEFORE any
- *  application code runs, so it's a different shape from any route's own
- *  HTTPException(detail=...). */
-interface PydanticFieldError {
-  loc: (string | number)[]
-  msg: string
-  type: string
+/** One entry of a 422 field-error array. TWO shapes reach us:
+ *
+ *  - FastAPI's own automatic request-body validation — `{loc, msg, type}` —
+ *    sent when the JSON doesn't even satisfy the Pydantic schema's types (a
+ *    string where a number was expected, a value outside a Field(gt=...)
+ *    bound, an enum value that isn't one of the fixed options, ...). This is
+ *    BEFORE any application code runs.
+ *  - The masters module validates by hand (one route serves all six lists, so
+ *    the body arrives as a plain dict) and re-shapes the same errors to
+ *    `{field, message}`.
+ *
+ *  Both are handled, because a caller cannot tell which it will get: the same
+ *  Add-Master form produces the second shape, while the imports wizard
+ *  produces the first. Reading `loc` unconditionally used to throw a
+ *  TypeError inside the ApiError constructor for the masters shape, which
+ *  swallowed the field-level message and left the form showing a generic
+ *  "Could not save." */
+interface FieldError {
+  loc?: (string | number)[]
+  msg?: string
+  field?: string
+  message?: string
 }
 
-function describeFieldErrors(errors: PydanticFieldError[]): string {
+function describeFieldErrors(errors: FieldError[]): string {
   return errors
     .map((e) => {
       // loc[0] is always the literal "body" for a JSON-body field; drop it so
       // the path reads as the field itself ("items.0.quantity", not
       // "body.items.0.quantity").
-      const path = e.loc.slice(e.loc[0] === 'body' ? 1 : 0).join('.')
-      return path ? `${path}: ${e.msg}` : e.msg
+      const path = Array.isArray(e.loc)
+        ? e.loc.slice(e.loc[0] === 'body' ? 1 : 0).join('.')
+        : (e.field ?? '')
+      const text = e.msg ?? e.message ?? ''
+      if (path && text) return `${path}: ${text}`
+      return text || path
     })
+    .filter(Boolean)
     .join('; ')
 }
 
@@ -42,7 +59,9 @@ export class ApiError extends Error {
     if (typeof detail === 'string') {
       message = detail
     } else if (Array.isArray(detail)) {
-      message = detail.length ? describeFieldErrors(detail as PydanticFieldError[]) : `Request failed (${status})`
+      message = detail.length
+        ? (describeFieldErrors(detail as FieldError[]) || `Request failed (${status})`)
+        : `Request failed (${status})`
     } else {
       message = (detail as { message?: string })?.message ?? `Request failed (${status})`
     }

@@ -2,7 +2,8 @@
 
 import pandas as pd
 from app.loading.scripts.etl_common import (
-    read_and_concat, list_excel_files, clean_text, bulk_insert, clean_int
+    read_and_concat, list_excel_files, clean_text, bulk_insert, clean_int,
+    bump_sequence
 )
 from pathlib import Path
 
@@ -47,4 +48,9 @@ def load_suppliers(conn):
         supplier_rows.append(row_tuple)
     
     bulk_insert(conn, "suppliers", SUPPLIER_COLUMNS, supplier_rows)
+
+    # ids were set by hand, so move the sequence past them or the app's own
+    # inserts collide on the primary key (a 500 on "Add Supplier").
+    bump_sequence(conn, "suppliers")
+
     print(f"Suppliers : inserted {len(supplier_rows)} rows")

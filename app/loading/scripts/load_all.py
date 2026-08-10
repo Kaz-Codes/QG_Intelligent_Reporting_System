@@ -21,6 +21,20 @@ This is a DESTRUCTIVE full reload: it drops the loaded tables, recreates the
 schema, and repopulates everything from the source workbooks under
 `app/loading/data/`.
 
+ONE COMMAND IS ENOUGH. The post-load steps (import demand dates, the customer
+master, sequence resync) run automatically at the end — see run_post_load_steps
+for why leaving them to be remembered was dangerous.
+
+The DATABASE ITSELF must already exist: create_all builds tables, not the
+database. On a brand-new machine:
+
+    createdb supply_chain_erp          # or whatever DB_NAME in .env says
+    python -m app.loading.scripts.load_all
+
+and the source workbooks must be present under `app/loading/data/` — they are
+NOT in git, so a fresh clone has none of them and every loader will find
+nothing to read.
+
 It is NOT run on import any more. Importing this module has no side effects — the
 drop/reload only happens when you invoke it explicitly:
 
@@ -84,6 +98,46 @@ def load_data(table_name, load_function):
         print(f"!! {table_name} FAILED — {type(exc).__name__}: {exc}")
 
 
+def run_post_load_steps():
+    """The steps that must follow every load, run here so they cannot be missed.
+
+    These used to be separate commands somebody had to remember, and forgetting
+    them failed SILENTLY — the app came up, the dashboards rendered, and four
+    columns were simply empty:
+
+      * backfill_import_demand_dates is the ONLY source of requisition_date,
+        required_date, pkr_total and foreign_total on loaded consignments. The
+        imports loader writes none of them, so without this every figure built
+        on import value reads zero without erroring.
+      * add_customer_master creates the customers master from the logistics
+        orders and links them. A reload drops the orders, so the links have to
+        be rebuilt with them.
+      * resync_sequences is belt and braces: the loaders bump their own
+        sequences now, but a mismatch here means the first record anybody
+        creates in the app dies on a duplicate key.
+
+    Each is guarded so one failing does not hide the others.
+    """
+    print("\n" + "=" * 60)
+    print("POST-LOAD STEPS")
+    print("=" * 60)
+
+    from app.loading.scripts.backfill_import_demand_dates import run as backfill_dates
+    from app.loading.scripts.add_customer_master import main as build_customers
+    from app.loading.scripts.resync_sequences import main as resync
+
+    for label, step in [
+        ("Import demand dates + totals", backfill_dates),
+        ("Customer master + logistics links", build_customers),
+        ("Sequence resync", resync),
+    ]:
+        print(f"\n--- {label} ---")
+        try:
+            step()
+        except Exception as exc:
+            print(f"!! {label} FAILED — {type(exc).__name__}: {exc}")
+
+
 def call_load():
     """Run every loader against tables that already exist. Does NOT drop or
     create anything — reset_and_load() handles that."""
@@ -99,6 +153,8 @@ def call_load():
     load_data("Consignments", load_consignments)
     load_data("Logistics", load_logistics)
     load_data("Trucking", load_trucking)
+
+    run_post_load_steps()
 
     print("\nAll load steps complete.")
 

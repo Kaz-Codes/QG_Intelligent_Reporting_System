@@ -1,4 +1,5 @@
 import { Check, TriangleAlert, Circle, type LucideIcon } from 'lucide-react'
+import { MetricInfo, type MetricHelp } from './MetricInfo'
 import { Card, CardContent } from './ui/card'
 import { useTheme } from '@/theme/ThemeContext'
 import { BRAND } from '@/theme/tokens'
@@ -16,6 +17,11 @@ export interface KpiData {
   /** What this metric IS (a clock for cycle time, a ship for imports, ...).
    * Falls back to a generic status glyph (check/alert) when omitted. */
   icon?: LucideIcon
+  /** What the figure means, how it is worked out, and how it differs from the
+   * similar one beside it. Shown on hover/focus of the info icon. Every KPI on
+   * a dashboard should carry one — an unexplained number is a number nobody can
+   * act on. */
+  help?: MetricHelp
 }
 
 function Sparkline({ values, color, gradientId }: { values: number[]; color: string; gradientId: string }) {
@@ -48,7 +54,7 @@ function Sparkline({ values, color, gradientId }: { values: number[]; color: str
   )
 }
 
-export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon }: KpiData) {
+export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon, help }: KpiData) {
   const { colors } = useTheme()
   const hasDirection = direction === 'up' || direction === 'down'
   const isGood = hasDirection && direction === goodWhen
@@ -68,14 +74,17 @@ export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub
           >
             <Icon size={16} fill={Icon === Circle ? ink : 'none'} />
           </div>
-          {hasDirection && delta && (
-            <span
-              className="rounded-full px-2 py-0.5 text-xs font-semibold"
-              style={{ backgroundColor: colors.canvasAlt, color: ink }}
-            >
-              {direction === 'up' ? '▲' : '▼'} {delta}
-            </span>
-          )}
+          <span className="flex items-center gap-1.5">
+            {hasDirection && delta && (
+              <span
+                className="rounded-full px-2 py-0.5 text-xs font-semibold"
+                style={{ backgroundColor: colors.canvasAlt, color: ink }}
+              >
+                {direction === 'up' ? '▲' : '▼'} {delta}
+              </span>
+            )}
+            {help && <MetricInfo help={help} label={label} />}
+          </span>
         </div>
         <p className="font-display mt-3 text-3xl font-extrabold text-navy">{value}</p>
         <p className="text-sm font-medium text-muted">{label}</p>

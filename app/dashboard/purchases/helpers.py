@@ -1,7 +1,8 @@
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.orm import joinedload
 from app.loading.schemas.stores_schemas import PurchasesData
 from app.masters.models import Item
+from app.dashboard.period import coverage
 
 
 #-------------------------------------
@@ -55,12 +56,42 @@ def fetch_consignments(db):
 # rows are loaded.
 #-------------------------------------
 
+def source_coverage(db, date_from, date_to):
+    """What the table holds, and how much of it the chosen window catches.
+
+    Reported so an empty period is explained rather than shown as a confident
+    Rs 0 — purchases currently stop in January, so the default (this month) is
+    legitimately empty and the screen has to be able to say so.
+    """
+    earliest, latest, total = db.execute(
+        select(
+            func.min(PurchasesData.purchase),
+            func.max(PurchasesData.purchase),
+            func.count(PurchasesData.id),
+        )
+    ).one()
+
+    in_period = db.execute(
+        select(func.count(PurchasesData.id))
+        .where(PurchasesData.purchase.between(date_from, date_to))
+    ).scalar_one()
+
+    return coverage(earliest, latest, in_period, total, "purchase date")
+
+
 def fetch_filtered_consignments(
         db, supplier, branch, item_category, mop,
-        sourcing_o, po_from_date, po_to_date, search
+        sourcing_o, po_from_date, po_to_date, search,
+        date_from=None, date_to=None
     ):
 
     query = select(PurchasesData).options(joinedload(PurchasesData.item))
+
+    # The dashboard-wide reporting window, applied to the PURCHASE date (when
+    # the money was actually spent), not the PO date. po_from_date/po_to_date
+    # remain a separate, explicit filter on the PO date for anyone who wants it.
+    if date_from is not None and date_to is not None:
+        query = query.where(PurchasesData.purchase.between(date_from, date_to))
 
     if supplier:
         query = query.where(PurchasesData.supplier.in_(supplier))

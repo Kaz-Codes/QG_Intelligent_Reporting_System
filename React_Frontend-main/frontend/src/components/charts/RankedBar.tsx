@@ -2,6 +2,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLin
 import { useTheme } from '@/theme/ThemeContext'
 import { BRAND, BRAND_LIGHT, BRAND_DEEP, GOLD } from '@/theme/tokens'
 import { lerpColor, tooltipStyle, compactNumber, axisLabel } from './utils'
+import { compactMoney, count } from '@/lib/format'
 
 interface Props {
   data: Record<string, unknown>[]
@@ -15,6 +16,13 @@ interface Props {
   /** What the value axis measures — "PKR", "Days", "Jobs". Without it a bare
    * number says nothing about what's being compared. */
   unit?: string
+  /** A money field to reveal on hover. The axis plots the count; the rupees
+   * appear in the tooltip, abbreviated (PKR 4.66B), because a value axis on
+   * this data prints 4,660,038,184 against every gridline and the exact rupee
+   * is not what a ranked bar is for. */
+  valueKey?: string
+  /** What one bar counts — "order", "consignment", "line". Pluralised. */
+  countNoun?: string
 }
 
 // The category axis used to be a flat 130px, which was fine for mock labels
@@ -28,7 +36,10 @@ const MAX_AXIS_WIDTH = 240
 const CHAR_PX = 6.2
 
 /** Horizontal ranked bar — supplier performance, top items, etc. */
-export function RankedBar({ data, category, value, height = 320, benchmark, invertColor = false, unit }: Props) {
+export function RankedBar({
+  data, category, value, height = 320, benchmark, invertColor = false, unit,
+  valueKey, countNoun,
+}: Props) {
   const { colors } = useTheme()
   const sorted = [...data].sort((a, b) => (a[value] as number) - (b[value] as number))
   const values = sorted.map((d) => d[value] as number)
@@ -66,7 +77,22 @@ export function RankedBar({ data, category, value, height = 320, benchmark, inve
           axisLine={false}
           tickLine={false}
         />
-        <Tooltip {...tooltipStyle} />
+        <Tooltip
+          {...tooltipStyle}
+          // The bar is a count; the money rides along in the payload and is
+          // shown here, abbreviated. Falls back to the plain recharts label
+          // when there is no money field on the row.
+          formatter={(raw: unknown, _name: unknown, entry: unknown) => {
+            const n = Number(raw)
+            const row = (entry as { payload?: Record<string, unknown> })?.payload
+            const amount = valueKey ? Number(row?.[valueKey]) : NaN
+
+            const shown = countNoun ? count(n, countNoun) : n.toLocaleString()
+            return Number.isFinite(amount)
+              ? [`${shown} · ${compactMoney(amount)}`, '']
+              : [shown, '']
+          }}
+        />
         {benchmark !== undefined && (
           <ReferenceLine x={benchmark} stroke={GOLD} strokeDasharray="4 4" label={{ value: 'target', fill: GOLD, fontSize: 11, position: 'insideTopRight' }} />
         )}

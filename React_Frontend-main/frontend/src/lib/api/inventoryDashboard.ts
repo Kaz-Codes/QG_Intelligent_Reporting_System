@@ -31,40 +31,95 @@ export interface StockRow {
   days_of_stock: number | null
 }
 
+/** Quantity totals (available_units / total_stock_qty) and on_hold were dropped
+ *  from the endpoint: they summed incomparable units — kilograms plus pieces
+ *  plus litres — so the number was arithmetic without a meaning. at_risk_pct
+ *  went with them, replaced by the movement split, which says the same thing
+ *  with a reason attached. Value is the comparable measure and is what remains. */
 export interface InventoryKpis {
-  available_units: number
-  total_stock_qty: number
-  on_hold: number
+  /** Distinct ITEMS, folded across the branches that stock them. */
+  items_total: number
   items_shown: number
   out_of_stock: number
   below_reorder: number
-  at_risk_pct: number
   total_stock_value: number
   available_value: number
+}
+
+/** Everything about movement comes from ONE pair of per-line numbers, so these
+ *  KPIs, the split and the stock-days runway cannot disagree with each other. */
+export interface MovementKpis {
+  issued_value_12m: number
+  issued_value_3m: number
+  dead_items: number
+  dead_value: number
+  dead_value_pct: number | null
+  window_12m: number
+  window_3m: number
+}
+
+export interface MovementBucket {
+  [key: string]: unknown
+  movement: 'Fast moving' | 'Slow moving' | 'Dead'
+  items: number
+  count: number
+  value: number
+  items_pct: number | null
+  value_pct: number | null
+}
+
+export interface BranchMovement {
+  [key: string]: unknown
+  branch: string
+  label: string
+  fast: number
+  slow: number
+  dead: number
+  /** dead lines — what the bar plots; `value` is the money, shown on hover. */
+  count: number
+  value: number
+  dead_value: number
+  dead_pct: number | null
+}
+
+export interface BranchStockDays {
+  [key: string]: unknown
+  branch: string
+  stock_value: number
+  issued_value: number
+  days_of_stock: number | null
+}
+
+export interface StockDays {
+  total_days_of_stock: number | null
+  by_branch: BranchStockDays[]
+  window_days: number
+  basis: string
+}
+
+/** The dates the 12m/3m windows actually cover. They end at the latest issuance
+ *  in the DATA, not today, so a screen can state the real range instead of
+ *  implying it runs to this morning. */
+export interface IssuanceWindows {
+  latest_issuance: string | null
+  from_12m: string | null
+  from_3m: string | null
 }
 
 export interface LabelValue {
   [key: string]: unknown
   label: string
+  count: number
   value: number
 }
 
 export interface BranchItems {
   [key: string]: unknown
   branch: string
+  label: string
   items: number
-}
-
-export interface BranchAtRisk {
-  [key: string]: unknown
-  branch: string
-  at_risk: number
-}
-
-export interface ItemQty {
-  [key: string]: unknown
-  item: string
-  stock_qty: number
+  count: number
+  value: number
 }
 
 export interface ItemRunway {
@@ -76,6 +131,9 @@ export interface ItemRunway {
 export interface InventoryDashboardFilters {
   status?: string[]
   reorder_status?: string[]
+  /** Fast moving / Slow moving / Dead — derived from issuance, filtered
+   *  server-side like the other derived statuses. */
+  movement?: string[]
   category?: string[]
   branch?: string[]
   item?: string[]
@@ -91,13 +149,17 @@ interface RawResponse {
      * individual rows has to cope with them being absent. */
     rows?: StockRow[]
     kpis: InventoryKpis
+    movement_kpis: MovementKpis
+    stock_days: StockDays
+    movement_split: MovementBucket[]
+    movement_by_branch: BranchMovement[]
+    issuance_windows: IssuanceWindows
     stock_health: LabelValue[]
     items_by_branch: BranchItems[]
-    at_risk_by_branch: BranchAtRisk[]
-    top_items: ItemQty[]
     lowest_days_of_stock: ItemRunway[]
     statuses: string[]
     reorder_statuses: string[]
+    movement_classes: string[]
     branches: string[]
     items: string[]
     item_categories: string[]
@@ -107,13 +169,17 @@ interface RawResponse {
 export interface InventoryDashboardResponse {
   rows?: StockRow[]
   kpis: InventoryKpis
+  movementKpis: MovementKpis
+  stockDays: StockDays
+  movementSplit: MovementBucket[]
+  movementByBranch: BranchMovement[]
+  issuanceWindows: IssuanceWindows
   stockHealth: LabelValue[]
   itemsByBranch: BranchItems[]
-  atRiskByBranch: BranchAtRisk[]
-  topItems: ItemQty[]
   lowestDaysOfStock: ItemRunway[]
   statuses: string[]
   reorderStatuses: string[]
+  movementClasses: string[]
   branches: string[]
   items: string[]
   itemCategories: string[]
@@ -133,13 +199,17 @@ export async function getInventoryDashboard(filters: InventoryDashboardFilters =
   return {
     rows: data.rows,
     kpis: data.kpis,
+    movementKpis: data.movement_kpis,
+    stockDays: data.stock_days,
+    movementSplit: data.movement_split,
+    movementByBranch: data.movement_by_branch,
+    issuanceWindows: data.issuance_windows,
     stockHealth: data.stock_health,
     itemsByBranch: data.items_by_branch,
-    atRiskByBranch: data.at_risk_by_branch,
-    topItems: data.top_items,
     lowestDaysOfStock: data.lowest_days_of_stock,
     statuses: data.statuses,
     reorderStatuses: data.reorder_statuses,
+    movementClasses: data.movement_classes,
     branches: data.branches,
     items: data.items,
     itemCategories: data.item_categories,

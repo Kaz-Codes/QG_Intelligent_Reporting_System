@@ -1,8 +1,9 @@
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.imports.models import Consignment, ConsignmentItem
 from app.masters.models import Supplier, Item, Branch
+from app.dashboard.period import coverage
 
 
 #-------------------------------------
@@ -31,11 +32,35 @@ def fetch_consignments(db):
     return db.execute(query).scalars().all()
 
 
+def source_coverage(db, date_from, date_to):
+    """What the consignments table holds, against what the window catches.
+
+    Windowed on ETA Works — the arrival at the factory, which is the date the
+    imports screen is about and the one the delivery-delay figure uses.
+    """
+    earliest, latest, total = db.execute(
+        select(
+            func.min(Consignment.eta_works),
+            func.max(Consignment.eta_works),
+            func.count(Consignment.id),
+        ).where(Consignment.is_deleted == False)
+    ).one()
+
+    in_period = db.execute(
+        select(func.count(Consignment.id))
+        .where(Consignment.is_deleted == False)
+        .where(Consignment.eta_works.between(date_from, date_to))
+    ).scalar_one()
+
+    return coverage(earliest, latest, in_period, total, "ETA Works")
+
+
 def fetch_filtered_consigments(
         db,
         work, status, item_category,
         supplier, country, from_date,
-        to_date, mode_of_shipment
+        to_date, mode_of_shipment,
+        date_from=None, date_to=None
     ):
 
     # Same eager loading as fetch_consignments, plus the item MASTER behind each
@@ -91,6 +116,11 @@ def fetch_filtered_consigments(
         query = query.where(
             Consignment.mode_of_shipment == mode_of_shipment
         )
+
+    # The dashboard-wide reporting window, on ETA Works. from_date/to_date above
+    # stay as the screen's own explicit range filter.
+    if date_from is not None and date_to is not None:
+        query = query.where(Consignment.eta_works.between(date_from, date_to))
 
     return db.execute(query).unique().scalars().all()
 

@@ -6,10 +6,12 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_INVENTORY_DASHBOARD
 from app.dashboard.inventory.helpers import (
     fetch_filtered_stock, consumption_map, reorder_level_map, option_lists,
-    purchase_vs_issuance_by_category,
+    purchase_vs_issuance_by_category, issuance_windows,
 )
 from app.dashboard.inventory.serializers import serialize_rows, serialize_inventory_dashboard
-from app.dashboard.inventory.calculations import STOCK_STATUSES, REORDER_STATUSES
+from app.dashboard.inventory.calculations import (
+    STOCK_STATUSES, REORDER_STATUSES, MOVEMENT_CLASSES,
+)
 from typing import Optional
 
 
@@ -18,6 +20,7 @@ def inventory_dashboard(
     request : Request,
     status : Optional[list[str]] = Query(None),
     reorder_status : Optional[list[str]] = Query(None),
+    movement : Optional[list[str]] = Query(None),
     category : Optional[list[str]] = Query(None),
     branch : Optional[list[str]] = Query(None),
     item : Optional[list[str]] = Query(None),
@@ -36,9 +39,10 @@ def inventory_dashboard(
 
         consumption = consumption_map(db)
         reorder_levels = reorder_level_map(db)
+        issuance, windows = issuance_windows(db)
 
         stocks = fetch_filtered_stock(db, branch, item, category, search)
-        rows = serialize_rows(stocks, consumption, reorder_levels)
+        rows = serialize_rows(stocks, consumption, reorder_levels, issuance)
 
         # Stock status and reorder status are derived, so they are filtered here.
         if status:
@@ -49,13 +53,18 @@ def inventory_dashboard(
             wanted = set(reorder_status)
             rows = [r for r in rows if r["reorder_status"] in wanted]
 
+        # Movement is derived too, so it is filtered here alongside the others.
+        if movement:
+            wanted = set(movement)
+            rows = [r for r in rows if r["movement"] in wanted]
+
         data = {
             # The "view data" table is being removed from the dashboard, so
             # only the aggregates + filter option lists are returned. The
             # serialized rows are still built above, but only to feed the
             # aggregates, not shipped over the wire. Dropdown values come from
             # cheap DISTINCT queries, not from loading the whole table.
-            **serialize_inventory_dashboard(rows),
+            **serialize_inventory_dashboard(rows, windows),
             # KPI document. Built from purchases + issuance rather than the
             # stock rows above, so it takes only the category filter — see the
             # helper for why branch cannot be applied to both sides.
@@ -64,6 +73,7 @@ def inventory_dashboard(
             ),
             "statuses": STOCK_STATUSES,
             "reorder_statuses": REORDER_STATUSES,
+            "movement_classes": MOVEMENT_CLASSES,
             **option_lists(db),
         }
 

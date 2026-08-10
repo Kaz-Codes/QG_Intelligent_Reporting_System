@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from app.dashboard.period import build_trend
+
 #-----------------------------------------------------
 # PURCHASES DASHBOARD CALCULATIONS
 #
@@ -49,22 +51,95 @@ def total_value(rows):
 # HEADLINE NUMBERS (KPIS)
 #-------------------------------------
 
-def kpis(rows):
-    orders = set()
+# "Import (IOL)" is not a supplier — it is the in-house import channel, and at
+# Rs 1.59bn it is the largest line in the table by a wide margin. Left in, it
+# wins "top supplier" on every screen and crowds the real vendors out of the
+# supplier chart, which is a statement about how the data is coded rather than
+# about who the business buys from.
+#
+# It is excluded from SUPPLIER figures only. Its spend still counts in the
+# totals, because the money was genuinely spent.
+NON_SUPPLIERS = {"import (iol)"}
+
+
+def is_real_supplier(name):
+    return bool(name) and name.strip().lower() not in NON_SUPPLIERS
+
+
+#-----------------------------------------------------
+# ORDERS, NOT LINES
+#
+# Everything the dashboard counts is an ORDER. The source is one row per item
+# line — a PO with five lines is five rows — and counting those rows made every
+# figure roughly three times the number of orders actually placed, which is why
+# "22,333 orders" sat next to "8,572 delayed" and neither could be compared to
+# the other.
+#
+# So rows are grouped by PO number first, and every count below is over the
+# resulting orders. Value still sums across all the lines of an order, because
+# an order is worth what its lines cost.
+#
+# A row with no PO number cannot be grouped and stands as its own order, keyed
+# on its id so two such rows never merge by accident.
+#-----------------------------------------------------
+
+def group_orders(rows):
+    """[[row, ...], ...] — the lines of each purchase order."""
+    orders = {}
 
     for row in rows:
-        if row.po_number:
-            orders.add(row.po_number)
+        key = ("po", row.po_number.strip()) if row.po_number else ("row", row.id)
+        orders.setdefault(key, []).append(row)
+
+    return list(orders.values())
+
+
+def order_status(lines):
+    """One status for a whole order, from its lines.
+
+    Worst case wins, because an order is not finished while any part of it is
+    outstanding:
+      * any line not yet purchased  -> Pending
+      * else any line bought late   -> Delayed
+      * else                        -> Completed
+    """
+    if any(line.purchase is None for line in lines):
+        return STATUS_PENDING
+
+    if any(line.required_d is not None and line.required_d < line.purchase
+           for line in lines):
+        return STATUS_DELAYED
+
+    return STATUS_COMPLETED
+
+
+def order_value(lines):
+    return sum((_amount(line) for line in lines), Decimal("0"))
+
+
+def order_days_late(lines):
+    """How late the order was, i.e. its LAST line to arrive. None if on time."""
+    late = [
+        (line.purchase - line.required_d).days
+        for line in lines
+        if line.purchase is not None and line.required_d is not None
+        and line.purchase > line.required_d
+    ]
+    return max(late) if late else None
+
+
+def kpis(rows, orders=None):
+    """Headline figures, every count over ORDERS rather than item lines."""
+    orders = orders if orders is not None else group_orders(rows)
 
     orders_count = len(orders)
     value = total_value(rows)
     avg_order_value = (value / orders_count) if orders_count else Decimal("0")
 
     pending = completed = delayed = 0
-    supplier_totals = {}
 
-    for row in rows:
-        status = derive_status(row.purchase, row.required_d)
+    for lines in orders:
+        status = order_status(lines)
         if status == STATUS_PENDING:
             pending += 1
         elif status == STATUS_DELAYED:
@@ -72,15 +147,23 @@ def kpis(rows):
         else:
             completed += 1
 
-        if row.supplier:
+    # Supplier spend is still summed over lines — an order's money is its
+    # lines' money — but Import (IOL) is left out; see NON_SUPPLIERS.
+    supplier_totals = {}
+    excluded_value = Decimal("0")
+
+    for row in rows:
+        if is_real_supplier(row.supplier):
             supplier_totals[row.supplier] = supplier_totals.get(row.supplier, Decimal("0")) + _amount(row)
+        elif row.supplier:
+            excluded_value += _amount(row)
 
     top_supplier = None
     top_supplier_amount = Decimal("0")
     if supplier_totals:
         top_supplier, top_supplier_amount = max(supplier_totals.items(), key=lambda kv: kv[1])
 
-    # Of the orders that have actually been purchased, how many were on time.
+    # Of the orders actually purchased, how many landed on time.
     purchased = completed + delayed
     on_time_pct = round((completed / purchased) * 100) if purchased else 0
 
@@ -94,6 +177,10 @@ def kpis(rows):
         "on_time_pct": on_time_pct,
         "top_supplier": top_supplier,
         "top_supplier_amount": top_supplier_amount,
+        # Named so the screen can say WHY the supplier figures and the total do
+        # not reconcile, instead of leaving the gap to be discovered.
+        "excluded_from_supplier_figures": sorted(NON_SUPPLIERS),
+        "excluded_supplier_value": excluded_value,
     }
 
 
@@ -101,40 +188,66 @@ def kpis(rows):
 # BREAKDOWNS
 #-------------------------------------
 
-def value_by(rows, key_fn, limit=None):
-    totals = {}
+#-------------------------------------
+# CHART ROWS: COUNT ON THE AXIS, VALUE ON HOVER
+#
+# Every breakdown returns BOTH numbers per bar:
+#   count — how many orders, which is what the axis plots
+#   value — what they are worth, which the tooltip shows
+#
+# The axis is a count because that is the question these charts answer ("where
+# are the orders?"), and because a rupee axis on this data prints
+# 4,622,808,663 against every gridline. The money is not lost — it is one hover
+# away, formatted to K/M/B.
+#
+# Sorted by VALUE, not count: the biggest bar should be the one worth most
+# attention, and a supplier with 400 tiny orders is not more important than one
+# with 12 large ones.
+#-------------------------------------
 
-    for row in rows:
-        label = key_fn(row)
+def breakdown_by(orders, key_fn, limit=None):
+    stats = {}
+
+    for lines in orders:
+        label = key_fn(lines[0])
         if not label:
             continue
-        totals[label] = totals.get(label, Decimal("0")) + _amount(row)
+        entry = stats.setdefault(label, {"count": 0, "value": Decimal("0")})
+        entry["count"] += 1
+        entry["value"] += order_value(lines)
 
-    result = [{"label": label, "value": value} for label, value in totals.items()]
+    result = [
+        {"label": label, "count": entry["count"], "value": entry["value"]}
+        for label, entry in stats.items()
+    ]
     result.sort(key=lambda r: r["value"], reverse=True)
 
-    if limit is not None:
-        result = result[:limit]
-
-    return result
+    return result[:limit] if limit is not None else result
 
 
-def value_by_supplier(rows, limit=8):
-    return value_by(rows, lambda r: r.supplier, limit)
+def value_by_supplier(orders, limit=8):
+    # Real vendors only — see NON_SUPPLIERS.
+    return breakdown_by(
+        orders, lambda r: r.supplier if is_real_supplier(r.supplier) else None, limit
+    )
 
 
-def value_by_branch(rows, limit=8):
-    return value_by(rows, lambda r: r.branch, limit)
+def value_by_branch(orders, limit=8):
+    return breakdown_by(orders, lambda r: r.branch, limit)
 
 
-def status_split(rows):
+def status_split(orders):
+    """Orders per status — the same roll-up the KPI tiles count."""
     counts = {}
-    for row in rows:
-        status = derive_status(row.purchase, row.required_d)
+    values = {}
+
+    for lines in orders:
+        status = order_status(lines)
         counts[status] = counts.get(status, 0) + 1
+        values[status] = values.get(status, Decimal("0")) + order_value(lines)
 
     return [
-        {"label": status, "value": counts[status]}
+        {"label": status, "count": counts[status], "value": values[status]}
         for status in PURCHASE_STATUSES
         if counts.get(status)
     ]
@@ -163,28 +276,53 @@ def _aging_tier(days):
     return "90+ days"
 
 
-def overdue_buckets(rows):
+def overdue_buckets(orders):
+    """Delayed ORDERS by how late they were, with their value for the tooltip."""
     counts = {tier: 0 for tier in AGING_TIERS}
-    for row in rows:
-        overdue = days_overdue(row.purchase, row.required_d)
+    values = {tier: Decimal("0") for tier in AGING_TIERS}
+
+    for lines in orders:
+        overdue = order_days_late(lines)
         if overdue is None:
             continue
-        counts[_aging_tier(overdue)] += 1
+        tier = _aging_tier(overdue)
+        counts[tier] += 1
+        values[tier] += order_value(lines)
 
-    return [{"bucket": tier, "orders": counts[tier]} for tier in AGING_TIERS]
+    return [
+        {"bucket": tier, "orders": counts[tier], "count": counts[tier], "value": values[tier]}
+        for tier in AGING_TIERS
+    ]
 
 
-def monthly_value_trend(rows):
-    totals = {}
+def value_trend(orders, period_from, period_to):
+    """Spend over the window, bucketed to fit it.
 
-    for row in rows:
-        day = row.purchase or row.po_date
-        if day is None:
+    The bucket size comes from the window, not the calendar: a month-long
+    window bucketed by month is a single bar, so it splits into 3-day steps
+    instead (see period.build_trend). Empty buckets are kept, so the line never
+    draws straight across a gap it has no data for.
+
+    One point per ORDER, dated on its earliest purchase (falling back to the PO
+    date), so an order spanning several deliveries lands once rather than once
+    per line.
+    """
+    dated = []
+    undated = 0
+
+    for lines in orders:
+        days = [line.purchase or line.po_date for line in lines]
+        days = [d for d in days if d is not None]
+
+        if not days:
+            undated += 1
             continue
-        month = day.strftime("%Y-%m")
-        totals[month] = totals.get(month, Decimal("0")) + _amount(row)
 
-    return [{"month": month, "value": totals[month]} for month in sorted(totals)]
+        dated.append((min(days), order_value(lines)))
+
+    trend = build_trend(period_from, period_to, dated)
+    trend["undated_orders"] = undated
+    return trend
 
 
 #=====================================================
@@ -197,36 +335,37 @@ def monthly_value_trend(rows):
 #=====================================================
 
 def procurement_kpis(rows):
-    quantity = 0
-    value = Decimal("0")
+    """Total value + how late purchasing runs.
 
-    # The document defines purchase delay as the average of
-    # (required date - purchase date). That is negative when a line is late, so
-    # the sign is flipped here: `avg_delay_days` is positive when purchasing ran
-    # LATE, which is how a figure labelled "delay" is read. Both the late-only
-    # average and the all-lines average are returned, because they answer
-    # different questions — how bad the late ones are, versus whether
-    # purchasing is running early or late overall.
+    Deliberately NOT here any more, by request:
+      * total_quantity        — summed across incomparable units (kg, pcs,
+                                litres), so the number never meant anything
+      * avg_days_vs_required  — a second delay average sitting next to the
+                                first, which invited "which one is the delay?"
+      * delayed_lines         — the same fact as the Delayed status tile
+    `basis` stays: it is the denominator behind avg_delay_days, not a KPI.
+
+    Counted over ORDERS. An order's lateness is its LAST line to arrive, since
+    the order is not complete until all of it lands.
+    """
+    orders = group_orders(rows)
+    value = total_value(rows)
     late_days = []
-    all_days = []
+    comparable = 0
 
-    for row in rows:
-        quantity += row.qty or 0
-        value += _amount(row)
-
-        if row.purchase is not None and row.required_d is not None:
-            days = (row.purchase - row.required_d).days
-            all_days.append(days)
-            if days > 0:
+    for lines in orders:
+        if any(l.purchase is not None and l.required_d is not None for l in lines):
+            comparable += 1
+            days = order_days_late(lines)
+            if days is not None:
                 late_days.append(days)
 
-    avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else None
-
     return {
-        "total_quantity": quantity,
         "total_value": value,
-        "avg_delay_days": avg(late_days),
-        "avg_days_vs_required": avg(all_days),
-        "delayed_lines": len(late_days),
-        "basis": len(all_days),
+        # Positive = purchased AFTER the date it was required, which is how a
+        # figure labelled "delay" is read. Averaged over the late lines only,
+        # so it answers "when we are late, how late" rather than being diluted
+        # by everything that arrived early.
+        "avg_delay_days": round(sum(late_days) / len(late_days), 1) if late_days else None,
+        "basis": comparable,
     }

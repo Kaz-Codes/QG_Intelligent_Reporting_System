@@ -55,6 +55,8 @@ export const MODULE_ACCENTS: Record<PageKey, string> = {
   // Reference-data management — reuses inventory's petrol hue (same
   // convention the pre-rebrand palette used: masters === inventory), rather
   // than adding a seventh hue to an already six-step ramp.
+  // (Both sides of this merge independently chose #0F766E; only the comment
+  // differed, and this one names the convention it follows.)
   masters: '#0F766E',
 }
 

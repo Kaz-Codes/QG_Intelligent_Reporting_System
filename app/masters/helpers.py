@@ -4,6 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.imports.models import Consignment, ConsignmentItem
+from app.logistics.models import LogisticsConsignment
 from app.masters.models import HsCode, Item
 
 #-----------------------------------------------------
@@ -147,9 +148,27 @@ def used_counts(master, ids, db):
     if master == "branch":
         return _grouped_count(Consignment.branch_id, ids, db, counts)
 
+    if master == "customer":
+        # The only master counted against LOGISTICS orders rather than import
+        # consignments — customers are who the business ships TO.
+        rows = db.execute(
+            select(
+                LogisticsConsignment.customer_id,
+                func.count(LogisticsConsignment.id),
+            )
+            .where(LogisticsConsignment.is_deleted == False)
+            .where(LogisticsConsignment.customer_id.in_(ids))
+            .group_by(LogisticsConsignment.customer_id)
+        ).all()
+
+        for row_id, count in rows:
+            counts[row_id] = count
+
+        return counts
+
     if master == "works":
-        # Works is no longer linked to consignments (it is free text there),
-        # so nothing references a works row.
+        # Works is no longer exposed as a master (it is the same thing as
+        # Branch), but the branch is left here so an older caller cannot crash.
         return counts
 
     if master == "agent":

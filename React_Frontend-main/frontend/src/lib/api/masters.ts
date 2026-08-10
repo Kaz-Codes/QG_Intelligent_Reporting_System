@@ -69,13 +69,17 @@ export function nameToId(options: MasterOption[], name: string | undefined | nul
  * path — GET to list, POST to create — behind the `{status, message, data}`
  * envelope the masters module uses.
  *
- * The backend supports six masters (supplier, branch, works, port, agent,
- * item). This screen exposes the ones an ops user maintains by hand. There is
- * no "customer" master on the backend — customers live only on the logistics
- * side today — so it isn't listed here.
+ * The backend registry defines: customer, supplier, port, agent, branch, item.
+ * This screen exposes the ones an ops user maintains by hand — items are
+ * excluded because item data entry is not done here.
+ *
+ * There is no "works" master. Works and Branch are the same thing to the
+ * business (the imports sheet's "Works" column is what fills a consignment's
+ * branch), so the duplicate list was removed from the backend registry and
+ * from this screen together.
  * ------------------------------------------------------------------------- */
 
-export type MasterKey = 'supplier' | 'branch' | 'works' | 'port' | 'agent'
+export type MasterKey = 'customer' | 'supplier' | 'branch' | 'port' | 'agent'
 
 export interface SupplierRow {
   id: number
@@ -103,12 +107,11 @@ export interface BranchRow {
   used: number
 }
 
-export interface WorksRow {
+/** Name only, by decision — the logistics workbooks carry nothing else about a
+ *  customer. `used` is how many logistics orders point at this customer. */
+export interface CustomerRow {
   id: number
   name: string
-  code: string | null
-  ntn_strn: string | null
-  note: string | null
   is_active: boolean
   is_verified: boolean
   used: number
@@ -139,7 +142,7 @@ export interface AgentRow {
   used: number
 }
 
-export type MasterRow = SupplierRow | BranchRow | WorksRow | PortRow | AgentRow
+export type MasterRow = SupplierRow | BranchRow | CustomerRow | PortRow | AgentRow
 
 export const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED'] as const
 export const PORT_TYPES = ['Sea', 'Air', 'Dry', 'Land'] as const
