@@ -16,6 +16,7 @@ export interface ApiConsignmentItem {
   item_id: number | null
   item_code: string | null
   item_name: string | null
+  placeholder_name: string | null
   specification: string | null
   hs_code: string | null
   quantity: string | number | null
@@ -278,6 +279,7 @@ export interface ConsignmentItemPayload {
   id?: number | null
   item_id?: number | null
   item_name?: string | null
+  placeholder_name?: string | null
   item_code?: string | null
   hs_code?: string | null
   specification?: string | null

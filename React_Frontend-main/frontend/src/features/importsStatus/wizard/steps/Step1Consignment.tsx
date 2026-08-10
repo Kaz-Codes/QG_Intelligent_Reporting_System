@@ -149,6 +149,9 @@ export function Step1Consignment() {
                     <Field label="Item name" required span error={errors.items?.[i]?.itemName?.message}>
                       <Input list="dl-items" {...register(`items.${i}.itemName`)} placeholder="Search item master…" autoComplete="off" />
                     </Field>
+                    <Field label="Placeholder name" hint="Optional nickname" span>
+                      <Input {...register(`items.${i}.placeholderName`)} placeholder="e.g. “blue drum”" autoComplete="off" />
+                    </Field>
                     <Field label="Item code" required error={errors.items?.[i]?.itemCode?.message}>
                       <Input {...register(`items.${i}.itemCode`)} autoComplete="off" />
                     </Field>

@@ -43,7 +43,6 @@ export const MODULE_ACCENTS: Record<PageKey, string> = {
   dashboard: BRAND,
   purchases: '#B4531A',
   inventory: '#0F766E',
-<<<<<<< HEAD
   imports: '#3E6E9E',
   importsStatus: '#3B4654',
   logisticsStatus: '#5C5346',
@@ -53,18 +52,10 @@ export const MODULE_ACCENTS: Record<PageKey, string> = {
   reports: '#5C5346',
   assistant: BRAND,
   userManagement: '#6B6156',
-=======
-  imports: '#0E7490',
-  importsStatus: '#1E3A5F',
-  logisticsStatus: '#475569',
-  truckingStatus: '#7C4A11',
-  dataEntry: '#0E7490',
-  logistics: '#1E3A5F',
-  reports: '#475569',
-  assistant: '#0369A1',
-  userManagement: '#64748B',
+  // Reference-data management — reuses inventory's petrol hue (same
+  // convention the pre-rebrand palette used: masters === inventory), rather
+  // than adding a seventh hue to an already six-step ramp.
   masters: '#0F766E',
->>>>>>> 7c3c743bf9590b659a8a37aaef37c4b78bcc2302
 }
 
 export interface Palette {
