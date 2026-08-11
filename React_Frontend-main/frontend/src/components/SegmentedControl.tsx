@@ -22,7 +22,7 @@ const CONTAINER = {
 }
 
 const ACTIVE = {
-  solid: 'bg-brand text-white',
+  solid: 'bg-brand text-black',
   ghost: 'bg-surface text-ink shadow-sm',
   onBrand: 'bg-white text-brand shadow-sm',
 }

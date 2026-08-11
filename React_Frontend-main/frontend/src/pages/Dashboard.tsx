@@ -18,7 +18,7 @@ import { Logistics } from '@/pages/Logistics'
  */
 
 const DASH_TABS = [
-  { value: 'overview', label: 'Overview' },
+  { value: 'overview', label: 'Supply Chain' },
   { value: 'purchases', label: 'Purchases' },
   { value: 'inventory', label: 'Inventory' },
   { value: 'imports', label: 'Imports' },

@@ -27,6 +27,27 @@ interface Props {
  * room, inside the slice when compact. A composition chart whose whole job is
  * showing proportion should not make you hover to learn the proportion.
  */
+// Recharts only lets a `label` FUNCTION customize the text when it returns a
+// string — it still positions that string with its own default (just outside
+// outerRadius), which is why compact's tiny margin ({top:4,...}) used to clip
+// or overlap the percentages. Returning a real positioned <text> element
+// instead puts it at the ring's own midpoint radius, so it is physically
+// inside the slice and can never clip regardless of container size.
+function CompactSliceLabel(props: any) {
+  const { cx, cy, midAngle, innerRadius, outerRadius, value, pct } = props
+  const p = pct(Number(value))
+  if (p < 6) return null
+  const RADIAN = Math.PI / 180
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.5
+  const x = cx + radius * Math.cos(-midAngle * RADIAN)
+  const y = cy + radius * Math.sin(-midAngle * RADIAN)
+  return (
+    <text x={x} y={y} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize={11} fontWeight={700}>
+      {p}%
+    </text>
+  )
+}
+
 export function Donut({ labels, values, height = 300, compact = false }: Props) {
   const { colors } = useTheme()
   const data = labels.map((label, i) => ({ label, value: values[i] }))
@@ -46,11 +67,7 @@ export function Donut({ labels, values, height = 300, compact = false }: Props) 
           paddingAngle={2}
           // Compact draws the bare percentage inside the slice, so nothing can
           // clip; the full chart puts the name beside it outside the ring.
-          label={
-            compact
-              ? ({ value }) => (pct(Number(value)) >= 6 ? `${pct(Number(value))}%` : '')
-              : ({ name, value }) => `${name} ${pct(Number(value))}%`
-          }
+          label={compact ? (props) => <CompactSliceLabel {...props} pct={pct} /> : ({ name, value }) => `${name} ${pct(Number(value))}%`}
           labelLine={!compact}
           isAnimationActive={false}
         >
