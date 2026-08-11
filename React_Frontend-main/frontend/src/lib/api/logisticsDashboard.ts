@@ -81,9 +81,12 @@ export interface OrderTypeSplit {
 export interface OrderTypeCounts extends OrderTypeSplit {
   windowed: boolean
   /** Orders with NO date in the chosen column, so they fall in no period at
-   *  all. NOT ONE local order carries a business date, so without this the
-   *  local tile is a silent zero that reads as "we do no local business". */
+   *  all. No longer a tile, but still the basis for the tooltip explaining
+   *  why the windowed local count is zero. */
   undated: OrderTypeSplit
+  /** The whole book. The only basis on which a local count says anything,
+   *  since local orders carry no business date. */
+  all_time: OrderTypeSplit
 }
 
 export interface ShipmentsResponse extends TabMeta {
@@ -91,7 +94,6 @@ export interface ShipmentsResponse extends TabMeta {
   references: {
     orders: ReferenceSet
     delivered: ReferenceSet
-    not_linked: ReferenceSet
     export: ReferenceSet
     local: ReferenceSet
     not_stated: ReferenceSet

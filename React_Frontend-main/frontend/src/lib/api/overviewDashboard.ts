@@ -146,6 +146,8 @@ export interface OverviewLogistics extends SectionMeta {
     total: number
     windowed: boolean
     undated: { export: number; local: number; not_stated: number; total: number }
+    /** The whole book — the basis the local tile uses. */
+    all_time: { export: number; local: number; not_stated: number; total: number }
   }
   /** `by_movement` is keyed by movement type, with the NULL group under
    *  "Unclassified" — the same name its tile shows. */
@@ -155,7 +157,6 @@ export interface OverviewLogistics extends SectionMeta {
     shipments_handled: ReferenceSet
     export_orders: ReferenceSet
     local_orders: ReferenceSet
-    undated_orders: ReferenceSet
   }
 }
 

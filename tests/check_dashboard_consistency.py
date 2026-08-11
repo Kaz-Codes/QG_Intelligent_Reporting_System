@@ -210,18 +210,25 @@ check("undated orders are reported, not dropped",
 check("every windowed tile has a list behind it",
       all(lg["references"][k]["total"] == t[k]
           for k in ("export", "local", "not_stated")))
-check("undated list matches the undated tile",
+check("the removed Not-Yet-Linked set is gone with its tile",
+      "not_linked" not in lg["references"])
+check("undated list matches the undated count",
       lg["references"]["undated"]["total"] == t["undated"]["total"])
 
 ol = get("/dashboard/overview")["logistics"]
+# The local tile is ALL TIME on purpose — a windowed local count is zero in
+# every period, so this asserts the tile is on the basis that says something.
+check("overview local tile is all-time, not the windowed zero",
+      ol["references"]["local_orders"]["total"] == t["all_time"]["local"]
+      and t["all_time"]["local"] > 0,
+      f'{t["all_time"]["local"]} local orders across the whole book')
+
 check("overview and the tab agree on the export count",
       ol["order_types"]["export"] == t["export"], str(t["export"]))
 check("overview and the tab agree on the undated count",
       ol["order_types"]["undated"]["total"] == t["undated"]["total"])
-check("overview order tiles have lists behind them",
-      ol["references"]["export_orders"]["total"] == ol["order_types"]["export"]
-      and ol["references"]["undated_orders"]["total"]
-      == ol["order_types"]["undated"]["total"])
+check("overview export tile has a list behind it",
+      ol["references"]["export_orders"]["total"] == ol["order_types"]["export"])
 
 for _tab, _key in (("shipments", "undated"), ("packing", "packages"),
                    ("transport", "jobs")):

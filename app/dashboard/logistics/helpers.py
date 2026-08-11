@@ -386,6 +386,12 @@ def order_type_counts(db, date_from=None, date_to=None, date_field=None):
         **windowed,
         "windowed": date_from is not None and date_to is not None,
         "undated": undated,
+        # ALL TIME, for the figures that cannot honestly be windowed. Local
+        # orders carry no business date, so a windowed local count is zero in
+        # every period; the whole-book count is the only one that says anything.
+        # Published beside the windowed split rather than instead of it, so a
+        # tile can state which basis it is on.
+        "all_time": split([]),
     }
 
 

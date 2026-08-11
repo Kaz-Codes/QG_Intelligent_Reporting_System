@@ -200,10 +200,9 @@ def serialize_logistics(db, date_from, date_to, date_field, period_kind):
             ),
             "export_orders": refs.order_type_references(
                 db, "Export", date_from, date_to, date_field),
+            # ALL TIME — see order_type_counts for why local cannot be windowed.
             "local_orders": refs.order_type_references(
-                db, "Local", date_from, date_to, date_field),
-            "undated_orders": refs.order_type_references(
-                db, None, date_from, date_to, date_field, undated=True),
+                db, "Local", date_from, date_to, date_field, all_time=True),
         },
     }
 

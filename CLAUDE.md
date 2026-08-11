@@ -496,15 +496,21 @@ across port-in, ETD, CRO arrival, actual arrival, effective and gate-out, **not
 one** of the 7 local orders (or the 392 that state no type) carries a date. Only
 exports are dated.
 
-So an **Undated Orders** tile sits beside them, carrying the 501 orders no
-window can reach, split by type and openable like any other. Without it "0
-local" reads as *"we do no local business"* rather than *"local orders carry no
-date"* — the same class of error as a bare Rs 0 on an empty period, and the same
-fix: put the gap on the screen.
+**Local Orders is therefore an ALL-TIME tile, and its label says so** —
+"Local Orders (all time)", beside a windowed Export Orders. Two bases in one
+row is normally the thing to avoid; here the alternative is a tile that reads
+zero for ever, so the bases are shown VISIBLY rather than reconciled silently.
+The remaining undated orders stay in the payload (`order_types.undated`) and
+explain the zero in the Orders tooltip, without a tile of their own.
 
 The Local/Export FILTER was removed for the same reason. Filtering a windowed
 screen by a type only one value of which is ever dated would have appeared to
 work while always returning nothing for local.
+
+The tab is named **Export Shipments** on the same evidence: since only exports
+are dated, every windowed view of it contains exports and nothing else, so the
+name describes what is actually on screen rather than what the table could in
+principle hold.
 
 ### A DEFAULT is part of the metric
 

@@ -132,14 +132,12 @@ def shipment_sets(orders, delivered_status, page=None, page_size=None,
     Their tile is the one that would otherwise read a silent zero.
     """
     delivered = [o for o in orders if o.current_status == delivered_status]
-    unlinked = [o for o in orders if not o.mo_no]
     by_type = lambda t: [o for o in orders
                          if (o.order_type == t if t else not o.order_type)]
 
     sets = {
         "orders": order_references(orders, page, page_size),
         "delivered": order_references(delivered, page, page_size),
-        "not_linked": order_references(unlinked, page, page_size),
         "export": order_references(by_type("Export"), page, page_size),
         "local": order_references(by_type("Local"), page, page_size),
         "not_stated": order_references(by_type(None), page, page_size),

@@ -197,14 +197,9 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
     differs: 'Only exports carry dates, so in practice this is nearly the whole windowed count. The Undated tile holds the rest.',
   },
   localOrders: {
-    what: 'How many logistics orders in this period are local business.',
-    how: 'Orders with order type "Local" whose chosen date falls in the window.',
-    differs: 'This will read zero in every period, and that is a DATA fact rather than a business one: not one local order records a sailing, arrival or gate-out date, so none can fall in any window. The Undated tile beside it holds them.',
-  },
-  undatedOrders: {
-    what: 'Orders that carry no date at all, so no period can reach them.',
-    how: 'Orders with nothing in the date column currently selected. Split by type, because the local ones are all here.',
-    differs: 'These are real orders excluded from every windowed figure on the screen — not deleted, not cancelled, just undated. Shown so the money and volume do not disappear silently between periods.',
+    what: 'How many logistics orders are local business, across the whole book.',
+    how: 'Every order with order type "Local". NOT filtered by the period above, deliberately: not one local order records a sailing, arrival, gate-out or port-in date, so a windowed count would read zero in every period there has ever been \u2014 which says "no local business" rather than "local orders are undated".',
+    differs: 'Export Orders beside it IS windowed. The two sit on different bases, which is why this one says "all time" on its face instead of leaving you to assume they match.',
   },
   packedTonnage: {
     what: 'How much weight was packed for shipping in this period.',
@@ -297,11 +292,6 @@ export const LOGISTICS_HELP: Record<string, MetricHelp> = {
     how: 'Orders at status "Delivered" within the period.',
     differs: 'Transport’s Delivered counts trucking JOBS, which is a different unit and a different table.',
   },
-  notLinked: {
-    what: 'Orders being tracked before they have an export number.',
-    how: 'Orders with no MO number yet. They are real work — packing and booking start before the export record exists — so they are counted rather than hidden.',
-    differs: 'This is not a data error; it is a stage. It becomes zero once the export number is issued.',
-  },
   totalCost: {
     what: 'What these shipments cost to move, all charges together.',
     how: 'Sea/air freight, port and clearance charges, packing, fumigation, lashing, DHL, insurance and inland trucking, summed across the orders in the period.',
@@ -319,12 +309,7 @@ export const LOGISTICS_HELP: Record<string, MetricHelp> = {
   orderTypes: {
     what: 'The orders in this period, split into export, local and not stated.',
     how: 'Counted in the window on the date you chose above.',
-    differs: 'Local reads zero in every period because local orders carry no date at all — not because there is no local business. The Undated tile beside this one holds them, and can be opened.',
-  },
-  undatedOrders: {
-    what: 'Orders carrying no date in the column currently selected.',
-    how: 'They fall in no period, so no windowed figure on this screen counts them. Split by type, because every local order is one of them.',
-    differs: 'Not deleted and not cancelled — just undated. Shown so they do not disappear silently from every period at once.',
+    differs: 'Local reads zero in every period because local orders carry no date at all — not because there is no local business. The basis line says how many exist outside every window.',
   },
   packages: {
     what: 'How many packages were packed in this period.',

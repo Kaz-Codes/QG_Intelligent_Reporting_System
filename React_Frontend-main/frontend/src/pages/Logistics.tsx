@@ -7,7 +7,7 @@ import { PackingView } from './logistics/PackingView'
 import { TransportView } from './logistics/TransportView'
 
 const VIEWS = [
-  { value: 'shipments', label: 'Shipments' },
+  { value: 'shipments', label: 'Export Shipments' },
   { value: 'packing', label: 'Packing' },
   { value: 'transport', label: 'Transport' },
 ] as const
@@ -33,7 +33,7 @@ export function Logistics() {
               Logistics
             </span>
             <h1 className="font-display text-2xl font-extrabold leading-tight tracking-tight text-navy lg:text-3xl">
-              Shipments &amp; transport
+              Export shipments &amp; transport
             </h1>
             <p className="mt-1 max-w-md text-sm text-muted">Shipments, packing, and transport in one place. Each view sets its own period and states where its data is incomplete.</p>
           </div>

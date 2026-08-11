@@ -25,19 +25,17 @@ import { logisticsRefPager } from '@/lib/api/dashboardReferences'
  * there's no shipment count by country or by port to switch to. One chart
  * doesn't need a tab bar, so it's a plain card until those figures exist.
  *
- * THE TAB IS "SHIPMENTS", NOT "EXPORT SHIPMENTS". Local orders live in this
- * table too, and the Orders tile below shows the split.
+ * THE TAB IS "EXPORT SHIPMENTS", and that is accurate rather than a
+ * simplification: local orders carry no date at all — no ETD, no arrival, no
+ * gate-out — so every windowed view of this screen contains only exports.
  *
- * It is a TILE rather than a filter, because filtering by it would not work:
- * local orders carry no date at all — no ETD, no arrival, no gate-out — so
- * every windowed view of this screen contains only exports. A Local/Export
- * filter would have appeared to work while always returning nothing for local,
- * which is worse than not offering it.
+ * That is also why there is no Local/Export FILTER. Filtering a windowed screen
+ * by a type only one value of which is ever dated would have appeared to work
+ * while always returning nothing for local.
  *
- * The tile is windowed like everything else here, and reports the UNDATED
- * orders beside it. That is what stops "0 local" reading as "no local
- * business" when it actually means "local orders carry no date": the orders
- * are there, in a list you can open, just in no period.
+ * The Orders tile shows the split anyway. Its zero for local is explained in
+ * the tooltip rather than by a tile of its own: those orders exist, they simply
+ * carry no date and so fall in no period.
  */
 export function ShipmentsView() {
   const [status, setStatus] = useState<string[]>([])
@@ -132,14 +130,6 @@ export function ShipmentsView() {
                 data.orderTypeCounts.undated.total
                   ? `${data.orderTypeCounts.undated.total.toLocaleString()} orders carry no ${data.dateField.toUpperCase()} at all and fall in no period — ${data.orderTypeCounts.undated.local.toLocaleString()} of them local. Open the Undated tile to see them.`
                   : undefined)} />
-            {/* The tile that stops "0 local" being read as "no local business". */}
-            {data.orderTypeCounts.undated.total > 0 && (
-              <KpiCard label="Undated Orders"
-                value={data.orderTypeCounts.undated.total.toLocaleString()}
-                sub={`${data.orderTypeCounts.undated.export.toLocaleString()} export · ${data.orderTypeCounts.undated.local.toLocaleString()} local · ${data.orderTypeCounts.undated.not_stated.toLocaleString()} not stated`}
-                refs={refs.undated} fetchRefs={pager('undated')}
-                help={LOGISTICS_HELP.undatedOrders} />
-            )}
             <KpiCard label="Shipments" value={kpis.shipments_shown.toLocaleString()}
               refs={refs.orders} fetchRefs={pager('orders')}
               help={LOGISTICS_HELP.shipments} />
@@ -148,10 +138,6 @@ export function ShipmentsView() {
               direction={kpis.delivered ? 'up' : null} goodWhen="up"
               refs={refs.delivered} fetchRefs={pager('delivered')}
               help={LOGISTICS_HELP.delivered} />
-            <KpiCard label="Not Yet Linked" value={`${kpis.not_yet_linked}`}
-              sub="tracked ahead of the export record"
-              refs={refs.not_linked} fetchRefs={pager('not_linked')}
-              help={LOGISTICS_HELP.notLinked} />
             <KpiCard label="Total Logistics Cost" value={money(kpis.total_cost)}
               refs={refs.orders} fetchRefs={pager('orders')}
               help={LOGISTICS_HELP.totalCost} />

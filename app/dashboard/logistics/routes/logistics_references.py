@@ -34,7 +34,7 @@ from app.dashboard.logistics.helpers import (
 from app.dashboard.logistics.routes.router import router
 
 KEYS = {
-    "shipments": ("orders", "delivered", "not_linked",
+    "shipments": ("orders", "delivered",
                   "export", "local", "not_stated", "undated"),
     "packing": ("packages", "packed"),
     "transport": ("jobs", "delivered", "in_progress"),

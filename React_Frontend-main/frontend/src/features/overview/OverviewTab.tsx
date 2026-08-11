@@ -364,7 +364,7 @@ export function OverviewTab() {
               fieldOptions={data.date_field_options.logistics}
               field={logisticsField} onFieldChange={setLogisticsField}
             />
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               <KpiCard label="Trucking Cost" value={money(data.logistics.trucking_cost.total)}
                 sub="all jobs to date" icon={Truck}
                 refs={data.logistics.references.trucking_cost}
@@ -403,10 +403,12 @@ export function OverviewTab() {
                 icon={Truck}
                 help={withBasis(OVERVIEW_HELP.freightPerKg,
                   `Measured on the ${data.logistics.freight_per_kg.basis.toLocaleString()} jobs that record both a freight figure and a vehicle weight.`)} />
-              {/* Export and local as SEPARATE tiles, in the window like
-                  everything else. `undated` sits beside them because not one
-                  local order carries a business date — without it, "0 local"
-                  reads as "no local business". */}
+              {/* Export is windowed like everything else here. LOCAL IS NOT,
+                  and its label says so on its face: not one local order carries
+                  a business date, so a windowed local count is zero in every
+                  period there has ever been. All-time is the only basis on
+                  which it says anything, and two bases shown visibly beat two
+                  bases shown silently. */}
               <KpiCard label="Export Orders"
                 value={data.logistics.order_types.export.toLocaleString()}
                 sub={data.logistics.order_types.total
@@ -416,25 +418,13 @@ export function OverviewTab() {
                 refs={data.logistics.references.export_orders}
                 fetchRefs={logisticsRefs('logistics.export_orders')}
                 help={OVERVIEW_HELP.exportOrders} />
-              <KpiCard label="Local Orders"
-                value={data.logistics.order_types.local.toLocaleString()}
-                sub={data.logistics.order_types.undated.local
-                  ? `${data.logistics.order_types.undated.local.toLocaleString()} more carry no date`
-                  : undefined}
+              <KpiCard label="Local Orders (all time)"
+                value={data.logistics.order_types.all_time.local.toLocaleString()}
+                sub="not period-filtered"
                 icon={Truck}
                 refs={data.logistics.references.local_orders}
                 fetchRefs={logisticsRefs('logistics.local_orders')}
-                help={withBasis(OVERVIEW_HELP.localOrders,
-                  data.logistics.order_types.undated.local
-                    ? `Not one local order carries a business date, so none can fall in any period. All ${data.logistics.order_types.undated.local.toLocaleString()} are in the Undated list.`
-                    : undefined)} />
-              <KpiCard label="Undated Orders"
-                value={data.logistics.order_types.undated.total.toLocaleString()}
-                sub={`${data.logistics.order_types.undated.local.toLocaleString()} local · ${data.logistics.order_types.undated.not_stated.toLocaleString()} not stated`}
-                icon={Boxes}
-                refs={data.logistics.references.undated_orders}
-                fetchRefs={logisticsRefs('logistics.undated_orders')}
-                help={OVERVIEW_HELP.undatedOrders} />
+                help={OVERVIEW_HELP.localOrders} />
               <KpiCard label="Transit Time"
                 value={data.logistics.transit_time.days != null
                   ? `${data.logistics.transit_time.days} days` : '—'}

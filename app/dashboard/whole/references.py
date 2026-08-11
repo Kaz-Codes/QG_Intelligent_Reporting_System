@@ -603,7 +603,7 @@ def consignment_line_rows(db, conditions, page, page_size):
 
 
 def order_type_references(db, order_type, date_from, date_to, date_field=None,
-                          undated=False, page=None, page_size=None):
+                          undated=False, all_time=False, page=None, page_size=None):
     """Logistics orders of one type, in the window — or the undated ones.
 
     `undated=True` returns the orders carrying NO date in the chosen column,
@@ -621,6 +621,10 @@ def order_type_references(db, order_type, date_from, date_to, date_field=None,
     conditions = [LogisticsConsignment.is_deleted.is_(False)]
     if undated:
         conditions.append(column.is_(None))
+    elif all_time:
+        # No window at all — for a type that carries no date and so could
+        # never appear in one.
+        conditions.append(LogisticsConsignment.order_type == order_type)
     else:
         conditions.append(column.between(date_from, date_to))
         conditions.append(LogisticsConsignment.order_type == order_type)
