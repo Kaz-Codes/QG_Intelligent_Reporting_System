@@ -1,9 +1,10 @@
 import type {
-  ApiTruckingJob, ApiTruckingVehicle, TruckingPayload, TruckingVehiclePayload,
+  ApiTruckingJob, ApiTruckingVehicle, ApiTruckingItem, TruckingPayload, TruckingVehiclePayload,
 } from './trucking'
 import type {
-  VehicleTrackingStatus, VehiclePackageRef, VehicleImportRef, TruckingDraft,
+  VehicleTrackingStatus, VehiclePackageRef, VehicleImportRef, TruckingDraft, TruckingItem,
 } from '@/features/truckingStatus/schema'
+import { emptyTruckItem } from '@/features/truckingStatus/schema'
 
 /**
  * Backend trucking job -> the shape the list and detail screens draw.
@@ -52,6 +53,9 @@ export interface TruckingListRow {
   executionDate?: string
   transporterName?: string
   shiftingType?: string
+  /** Repeatable item lines. Empty when the record predates this feature and
+   *  never had any items entered. */
+  items: { itemDetails?: string; weight?: number; pickup?: string; destination?: string; referenceNo?: string }[]
   itemDetails?: string
   pickup?: string
   destination?: string
@@ -136,6 +140,13 @@ export function apiToRow(j: ApiTruckingJob): TruckingListRow {
     executionDate: str(j.execution_date),
     transporterName: str(j.transporter_name),
     shiftingType: str(j.shifting_type),
+    items: jsonArray<ApiTruckingItem>(j.items).map((it) => ({
+      itemDetails: str(it.item_details),
+      weight: num(it.weight),
+      pickup: str(it.pickup),
+      destination: str(it.destination),
+      referenceNo: str(it.reference_no),
+    })),
     itemDetails: str(j.item_details),
     pickup: str(j.pickup),
     destination: str(j.destination),
@@ -215,6 +226,15 @@ export function draftToPayload(draft: TruckingDraft): TruckingPayload {
     import_consignment_refs: v.importConsignmentRefs ?? [],
   }))
 
+  const items = (draft.items ?? []).map((it) => ({
+    item_details: outStr(it.itemDetails),
+    weight: outNum(it.weight),
+    pickup: outStr(it.pickup),
+    destination: outStr(it.destination),
+    reference_no: outStr(it.referenceNo),
+  }))
+  const firstItem = draft.items?.[0]
+
   return {
     movement_type: outStr(draft.movementType),
     source: outStr(draft.source),
@@ -223,10 +243,13 @@ export function draftToPayload(draft: TruckingDraft): TruckingPayload {
     execution_date: outStr(draft.executionDate),
     transporter_name: outStr(draft.transporterName),
     shifting_type: outStr(draft.shiftingType),
-    item_details: outStr(draft.itemDetails),
-    pickup: outStr(draft.pickup),
-    destination: outStr(draft.destination),
-    reference_no: outStr(draft.referenceNo),
+    items,
+    // Mirror item[0] onto the legacy singular columns so a backend without
+    // the `items` JSON column still gets the first item's data.
+    item_details: outStr(firstItem?.itemDetails ?? draft.itemDetails),
+    pickup: outStr(firstItem?.pickup ?? draft.pickup),
+    destination: outStr(firstItem?.destination ?? draft.destination),
+    reference_no: outStr(firstItem?.referenceNo ?? draft.referenceNo),
 
     quoted_freight: outNum(draft.quotedFreight),
     actual_freight: outNum(draft.actualFreight),
@@ -255,6 +278,25 @@ export function apiToDraft(j: ApiTruckingJob): TruckingDraft {
     executionDate: row.executionDate ?? '',
     transporterName: row.transporterName ?? '',
     shiftingType: (row.shiftingType ?? 'Regular') as TruckingDraft['shiftingType'],
+    // Rows saved before `items` existed have none — fall back to synthesizing
+    // one item from the legacy row-level fields so the wizard always has at
+    // least one item card to edit.
+    items: row.items.length
+      ? row.items.map((it): TruckingItem => ({
+          ...emptyTruckItem(),
+          itemDetails: it.itemDetails ?? '',
+          weight: it.weight,
+          pickup: it.pickup ?? '',
+          destination: it.destination ?? '',
+          referenceNo: it.referenceNo ?? '',
+        }))
+      : [{
+          ...emptyTruckItem(),
+          itemDetails: row.itemDetails ?? '',
+          pickup: row.pickup ?? '',
+          destination: row.destination ?? '',
+          referenceNo: row.referenceNo ?? '',
+        }],
     itemDetails: row.itemDetails ?? '',
     pickup: row.pickup ?? '',
     destination: row.destination ?? '',
