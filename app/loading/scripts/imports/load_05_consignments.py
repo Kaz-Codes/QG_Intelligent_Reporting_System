@@ -27,7 +27,7 @@ from pathlib import Path
 from app.enums import Status
 from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_status, clean_int,
-    clean_number, clean_date, bulk_insert,
+    clean_number, clean_date, clean_date_any, bulk_insert,
 )
 from app.loading.scripts.imports.item_codes import assign_item_codes
 
@@ -259,7 +259,7 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             _first(rows, "Rediness Dt.", clean_date),
             _first(rows, "ETD", clean_date),
             eta,
-            _first(rows, "ETA Works", clean_date),
+            _first(rows, "ETA Works", clean_date_any),
             _first(rows, "Payment Mode", clean_text),      # payment_instrument
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Ret Dt.", clean_date),
@@ -295,7 +295,7 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
                 # The LINE's own ETA, not the header's. The rows grouped under
                 # one payment reference do not all arrive together — see the
                 # column's comment on ConsignmentItem for what that cost.
-                clean_date(r.get("ETA Works")),
+                clean_date_any(r.get("ETA Works")),
                 clean_text(r.get("Batch No")),
                 clean_text(r.get("Job No")),
                 clean_text(r.get("MO No")),

@@ -23,7 +23,7 @@ becomes an order of its own (logistics_common.build_order_index).
 
 from psycopg2.extras import Json
 
-from app.enums import LogisticsStatus, JobKind
+from app.enums import LogisticsStatus, JobKind, Incoterm
 from app.loading.scripts.etl_common import (
     bulk_insert, clean_date, clean_date_any, clean_int, clean_number,
     clean_status, clean_text, parse_qty_uom,
@@ -125,6 +125,41 @@ CONTAINER_COLUMNS = {
 # A count above this is a data-entry slip (a weight or an amount typed into a
 # container column); expanding it would write thousands of phantom rows.
 MAX_CONTAINERS_PER_ORDER = 60
+
+#--------------------------------------
+# INCOTERMS
+#
+# The sheets write the term with a place or a mode stuck on the end — "FCA
+# Karachi", "CPT-By Air", "FCA-By Air" — and `incoterm` is VARCHAR(10), so
+# "FCA Karachi" does not merely store something junky, it ABORTS THE WHOLE LOAD
+# on a StringDataRightTruncation.
+#
+# So the value is normalised onto the canonical Incoterm enum, exactly as the
+# imports backfill does with its own messy S/Terms column: match the longest
+# canonical term the cell starts with, and store NULL for anything unrecognised
+# rather than a truncated fragment. FCA and CPT are real Incoterms but are not
+# in our enum, so they land NULL and are reported by the loader — adding them is
+# a one-line enum change if the business wants them.
+#--------------------------------------
+
+VALID_INCOTERMS = sorted((i.value for i in Incoterm), key=len, reverse=True)
+
+_unmapped_incoterms = set()
+
+
+def map_incoterm(value):
+    raw = clean_text(value)
+    if raw is None:
+        return None
+
+    token = str(raw).upper().replace("-", " ").replace("/", " ").strip()
+    for term in VALID_INCOTERMS:
+        if token == term or token.startswith(term + " "):
+            return term
+
+    _unmapped_incoterms.add(str(raw).strip())
+    return None
+
 
 CONSIGNMENT_COLUMNS = [
     "id", "order_type", "department",
@@ -254,7 +289,7 @@ def _apply_shipment(header, row):
     header.set("customer_name", _clean_customer(row.get("Customer")))
     header.set("origin_country", clean_text(row.get("Country")))
     header.set("pod", clean_text(row.get("POD")))
-    header.set("incoterm", clean_text(row.get("Shipment Terms")))
+    header.set("incoterm", map_incoterm(row.get("Shipment Terms")))
     header.set("shipping_line", clean_text(row.get("S/Line")))
     header.set("clearing_agent", clean_text(row.get("C/Agent")))
     header.set("booking_no", clean_text(row.get("CRO #")))
@@ -272,7 +307,12 @@ def _apply_shipment(header, row):
     header.set("qfl_container_movement", clean_number(row.get("QFL ~ Port")))
     header.set("custom_clearance_charges", clean_number(row.get("Clearance Cost")))
     header.set("port_charges", clean_number(row.get("Wharfage")))
-    header.set("dhl_charges", clean_number(row.get("DHL Charges")))
+    # "DHL Charges" in the older workbook, "DHL Documents" in the current one.
+    # The current column is mostly '-' with 16 real figures in 202 rows, so
+    # clean_number drops the dashes and keeps the money.
+    header.set("dhl_charges", clean_number(
+        row.get("DHL Charges") if "DHL Charges" in row else row.get("DHL Documents")
+    ))
     header.set("insurance", clean_number(row.get("Insurance")))
     header.set("sea_air_freight", clean_number(row.get("Sea Freight")))
 
@@ -326,7 +366,7 @@ def _apply_export_docs(header, row):
     """
     header.set("order_type", "Export")
     header.set("customer_name", _clean_customer(row.get("Customer")))
-    header.set("incoterm", clean_text(row.get("Shipping Term")))
+    header.set("incoterm", map_incoterm(row.get("Shipping Term")))
     header.set("clearing_agent", clean_text(row.get("Shipping Agent")))
     header.set("etd_sailing_date", clean_date_any(row.get("Sailing Date")))
     header.set("gate_out_date", clean_date_any(row.get("Gate-Out Date")))
@@ -355,8 +395,12 @@ def _item_from(row, consignment_id, job_column, detail_column,
         quantity,
         None,                                        # unit_weight: not in sheet
         clean_number(row.get(gross_column)),
-        clean_date(row.get(planned_column)) if planned_column else None,
-        clean_date(row.get(actual_column)) if actual_column else None,
+        # clean_date_ANY: the packing sheet now stores its dates as raw Excel
+        # day-serials (46239), which plain clean_date hands to pd.to_datetime as
+        # NANOSECONDS — every date came back 1970-01-01. Populated, plausible-
+        # looking, and completely wrong; see the column's own note below.
+        clean_date_any(row.get(planned_column)) if planned_column else None,
+        clean_date_any(row.get(actual_column)) if actual_column else None,
         Json([]),                                    # rfd_history
         False,
     )
@@ -377,8 +421,14 @@ def _package_from(row, consignment_id):
         clean_number(row.get("Actual Packing Cost"))
         or clean_number(row.get("Packing Cost Actual"))
     )
-    packing_date = clean_date(row.get("Actual Packing Date"))
-    ready_date = clean_date(row.get("Actual RFD Date"))
+    # clean_date_ANY, not clean_date. The current workbook writes these two as
+    # bare Excel day-serials (46239 = 2026-08-07) rather than real dates, and
+    # pd.to_datetime reads a bare number as nanoseconds — so all 570 packing
+    # dates and 632 RFD dates loaded as 1970-01-01. The post-load check did not
+    # catch it because the column was FULL; it was full of the epoch. There is
+    # now a plausibility check for exactly this.
+    packing_date = clean_date_any(row.get("Actual Packing Date"))
+    ready_date = clean_date_any(row.get("Actual RFD Date"))
     status = clean_status(row.get("Packing Status"))
 
     # Nothing about packing was recorded on this row - a package row here
@@ -554,6 +604,10 @@ def load_logistics(conn):
     consignment_rows, item_rows, package_rows, container_rows = build_rows(
         created_by_id
     )
+
+    if _unmapped_incoterms:
+        print(f"   incoterms left NULL (not in the enum): "
+              f"{sorted(_unmapped_incoterms)}")
 
     bulk_insert(conn, "logistics_consignments", CONSIGNMENT_COLUMNS, consignment_rows)
     bulk_insert(conn, "logistics_items", ITEM_COLUMNS, item_rows)

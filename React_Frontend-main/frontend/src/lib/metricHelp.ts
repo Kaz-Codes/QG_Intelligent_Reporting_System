@@ -252,3 +252,72 @@ export const INVENTORY_HELP: Record<string, MetricHelp> = {
     differs: 'Out of Stock has already run out; these have not yet.',
   },
 }
+
+
+/* -------------------------------------------------------------- logistics */
+
+export const LOGISTICS_HELP: Record<string, MetricHelp> = {
+  shipments: {
+    what: 'How many logistics orders fall in this period.',
+    how: 'Orders whose chosen date — sailing (ETD) or arrival (ETA) — lands in the window. Local and export orders both count; the Local/Export filter narrows to one.',
+    differs: 'Packages on the Packing tab counts PACKAGES, several of which can sit under one order, so the two numbers are not meant to match.',
+  },
+  delivered: {
+    what: 'Shipments that have reached the customer.',
+    how: 'Orders at status "Delivered" within the period.',
+    differs: 'Transport’s Delivered counts trucking JOBS, which is a different unit and a different table.',
+  },
+  notLinked: {
+    what: 'Orders being tracked before they have an export number.',
+    how: 'Orders with no MO number yet. They are real work — packing and booking start before the export record exists — so they are counted rather than hidden.',
+    differs: 'This is not a data error; it is a stage. It becomes zero once the export number is issued.',
+  },
+  totalCost: {
+    what: 'What these shipments cost to move, all charges together.',
+    how: 'Sea/air freight, port and clearance charges, packing, fumigation, lashing, DHL, insurance and inland trucking, summed across the orders in the period.',
+    differs: 'Transport’s freight total covers ROAD movements only, from the trucking table. The two overlap only in the inland leg.',
+  },
+  costPerKg: {
+    what: 'What it costs to move a kilogram, on average.',
+    how: 'Total logistics cost divided by gross weight, averaged over the orders that carry both. Orders missing either are left out rather than counted as zero.',
+    differs: 'An average of per-order rates, not total cost divided by total weight — so a single small, expensive shipment does not disappear into a large one.',
+  },
+  countries: {
+    what: 'How many destination countries these shipments went to.',
+    how: 'Distinct origin/destination countries on the orders in the period.',
+  },
+  packages: {
+    what: 'How many packages were packed in this period.',
+    how: 'Packages whose chosen date — packed, or ready-for-dispatch — falls in the window. Counted per PACKAGE; the list shows how many orders they belong to.',
+    differs: 'Shipments counts ORDERS. One order routinely carries several packages.',
+  },
+  packed: {
+    what: 'Packages that have finished packing.',
+    how: 'Packages at status "Packed" within the period.',
+  },
+  packingCost: {
+    what: 'What packing these shipments cost.',
+    how: 'Actual packing cost summed across the packages in the period.',
+    differs: 'Savings against the budgeted cost cannot be computed while no actual cost is recorded — it is reported as unavailable rather than as a confident zero.',
+  },
+  jobs: {
+    what: 'How many trucking jobs ran in this period.',
+    how: 'Jobs whose execution date (or arrival at works, if you switch the filter) falls in the window. Inbound, outbound and intra-factory moves all count.',
+    differs: 'Shipments counts sea/air ORDERS. A single export order can generate several road jobs.',
+  },
+  jobsDelivered: {
+    what: 'Trucking jobs where every vehicle has been delivered.',
+    how: 'A job is Delivered only when all of its trucks are; while any is still moving it is In Progress.',
+    differs: 'Shipments’ Delivered is about the sea/air shipment reaching the customer, not about the trucks.',
+  },
+  freight: {
+    what: 'What road movement cost in this period.',
+    how: 'Actual freight summed across the trucking jobs in the window. Jobs with no freight recorded are counted as jobs but add nothing — the data note says how many.',
+    differs: 'Intra-factory moves are included here and are a large share of the job count; filter by movement type to separate them.',
+  },
+  savings: {
+    what: 'The gap between quoted and actual freight.',
+    how: 'Quoted minus actual, summed over the jobs that carry both figures.',
+    differs: 'Intra-factory jobs record only one freight figure, so they contribute nothing here by construction, not because they saved nothing.',
+  },
+}

@@ -23,7 +23,8 @@ from app.loading.scripts.etl_common import (
     clean_text, parse_qty_uom,
 )
 from app.loading.scripts.logistics.logistics_common import (
-    SHEET_SHIFTING, admin_id, bump_sequence, read_logistics_sheet,
+    SHEET_SHIFTING, SHEET_INTRAFACTORY, admin_id, bump_sequence,
+    read_logistics_sheet,
 )
 from app.loading.scripts.backfill_trucking_closed import mark_closed_jobs
 
@@ -247,6 +248,14 @@ def load_trucking(conn):
 
     consignment_rows, vehicle_rows = build_rows(created_by_id)
 
+    # Intra-factory moves are a second sheet feeding the same tables; their ids
+    # continue the sequence so both sets share one id space.
+    intra_consignments, intra_vehicles = build_intrafactory_rows(
+        created_by_id, len(consignment_rows) + 1
+    )
+    consignment_rows += intra_consignments
+    vehicle_rows += intra_vehicles
+
     bulk_insert(conn, "trucking_consignments", CONSIGNMENT_COLUMNS, consignment_rows)
     bulk_insert(conn, "trucking_vehicles", VEHICLE_COLUMNS, vehicle_rows)
 
@@ -261,10 +270,123 @@ def load_trucking(conn):
 
     inbound = sum(1 for r in consignment_rows if r[1] == "Inbound")
     outbound = sum(1 for r in consignment_rows if r[1] == "Outbound")
+    intra = sum(1 for r in consignment_rows if r[1] == "Intrafactory")
     delivered = sum(1 for r in vehicle_rows if r[9] == "Delivered")
 
     print(f"Trucking jobs : inserted {len(consignment_rows)} rows "
-          f"({inbound} inbound, {outbound} outbound, "
-          f"{len(consignment_rows) - inbound - outbound} untyped)")
+          f"({inbound} inbound, {outbound} outbound, {intra} intra-factory, "
+          f"{len(consignment_rows) - inbound - outbound - intra} untyped)")
     print(f"Trucking vehicles : inserted {len(vehicle_rows)} rows "
           f"({delivered} delivered)")
+
+
+#--------------------------------------
+# INTRA-FACTORY MOVES
+#
+# A SEPARATE SHEET, a different shape, the same table. Moving material between
+# Qadri's own sites is trucking like any other, so it belongs in
+# trucking_consignments — but the sheet does not look like the inbound/outbound
+# one and cannot be read by the same code:
+#
+#   * no Movement Type column   — the sheet IS the movement type
+#   * Sender / Receiver         — not Pickup Point / Destination
+#   * one 'T/ Freight - Rs.'    — not a quoted/actual pair, so there is no
+#                                 saving to compute and quoted stays NULL
+#                                 rather than being set equal to actual
+#   * no containers, no ETA, no dispatch note
+#
+# Every one of those columns is nullable on the model, so this needs no schema
+# change — the gap was purely that nothing ever read the sheet. 875 rows and
+# Rs 17.5m of freight were simply invisible.
+#
+# ONE ROW IS ONE JOB. Bilty numbers are near-unique (824 distinct across 862
+# non-blank), unlike the inbound/outbound sheet where several trucks share a
+# shipment reference. So these are not grouped — grouping on a Bilty '-' would
+# merge 39 unrelated moves into a single job.
+#--------------------------------------
+
+# The sheet writes both 'Other' and 'Others' for the same thing. Left unmapped,
+# the 72 'Other' rows would fall through to NULL — the same duplicate-spelling
+# problem the logistics status vocabulary already guards against.
+SHIFTING_TYPES = {
+    "regular": "Regular",
+    "special": "Special",
+    "other": "Others",
+    "others": "Others",
+}
+
+# A row with none of these is a spacer, not a movement.
+_INTRA_SIGNAL_COLUMNS = (
+    "Execution Date", "Sender", "Receiver", "Transporter",
+    "Vehicle Number", "Item Details", "Bilty #",
+)
+
+
+def map_shifting_type(value):
+    s = clean_text(value)
+    return SHIFTING_TYPES.get(s.strip().lower()) if s else None
+
+
+def build_intrafactory_rows(created_by_id, start_id):
+    """(consignments, vehicles) for the intra-factory sheet, ids from start_id."""
+    df = read_logistics_sheet(SHEET_INTRAFACTORY)
+
+    consignment_rows = []
+    vehicle_rows = []
+    next_id = start_id
+
+    for _, row in df.iterrows():
+        if not any(clean_text(row.get(column)) for column in _INTRA_SIGNAL_COLUMNS):
+            continue
+
+        consignment_id = next_id
+        next_id += 1
+
+        consignment_rows.append((
+            consignment_id,
+            "Intrafactory",                              # the sheet IS the type
+            # 'Requester' here is a PERSON (Manan, Ahtsham, ...), not a
+            # handing-over module, so source stays manual — intra-factory work
+            # is internal and nobody hands it over.
+            "manual",
+            None,                                        # source_ref
+            Json([]),                                    # taken_snapshot
+            clean_date_any(row.get("Execution Date")),
+            clean_text(row.get("Transporter")),
+            map_shifting_type(row.get("Shifting Type")),
+            clean_text(row.get("Item Details")),
+            clean_text(row.get("Sender")),               # pickup
+            clean_text(row.get("Receiver")),             # destination
+            clean_text(row.get("Bilty #")),              # reference_no
+            None,                                        # quoted_freight
+            clean_number(row.get("T/ Freight - Rs.")),   # actual_freight
+            # 'Bill Status' says whether the BILL was cleared, which is not the
+            # payment-terms vocabulary this column holds elsewhere. Left NULL
+            # rather than mapped onto a term it does not mean.
+            None,                                        # payment_status
+            None,                                        # paid_amount
+            None,                                        # detention
+            None,                                        # dispatch_note_date
+            None,                                        # eta_works
+            clean_text(row.get("Delay Reason")),         # remarks
+            created_by_id,
+            False,                                       # is_deleted
+        ))
+
+        vehicle_rows.append((
+            consignment_id,
+            clean_text(row.get("Vehicle Number")),
+            clean_text(row.get("Vehicle Type")),
+            None,                                        # no_of_packages
+            None,                                        # driver_phone
+            None,                                        # net_weight
+            clean_number(row.get("Weight")),             # gross_weight
+            None,                                        # container_no
+            None,                                        # container_type
+            map_tracking_status(row.get("Status")),
+            Json([]),                                    # package_refs
+            Json([]),                                    # import_consignment_refs
+            False,                                       # is_deleted
+        ))
+
+    return consignment_rows, vehicle_rows

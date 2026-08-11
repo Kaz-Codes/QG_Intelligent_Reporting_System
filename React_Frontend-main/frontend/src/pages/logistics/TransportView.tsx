@@ -11,6 +11,11 @@ import { CategoryBar } from '@/components/charts/CategoryBar'
 import { Donut } from '@/components/charts/Donut'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { money } from '@/lib/format'
+import { PeriodFilter, PeriodSummary, EMPTY_PERIOD, type Period } from '@/components/PeriodFilter'
+import { DataNotes } from '@/components/DataNotes'
+import { Label } from '@/components/ui/label'
+import { LOGISTICS_HELP } from '@/lib/metricHelp'
+import { logisticsRefPager } from '@/lib/api/dashboardReferences'
 import { useDebounced } from '@/lib/useDebounced'
 import { useTransportDashboard } from '@/lib/api/useLogisticsDashboard'
 
@@ -41,6 +46,10 @@ export function TransportView() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [search, setSearch] = useState('')
+  const [period, setPeriod] = useState<Period>(EMPTY_PERIOD)
+  // Execution, or arrival at works — the same pair the Overview offers, so a
+  // figure can be compared across the two screens.
+  const [dateField, setDateField] = useState('etd')
   const [tab, setTab] = useState<(typeof TABS)[number]['value']>('status')
 
   const debouncedSearch = useDebounced(search)
@@ -50,12 +59,52 @@ export function TransportView() {
     customer, province, transporter, source,
     exec_from: dateFrom || undefined, exec_to: dateTo || undefined,
     search: debouncedSearch.trim() || undefined,
+    date_from: period.from || undefined,
+    date_to: period.to || undefined,
+    date_field: dateField,
+  })
+
+  const refs = data?.references
+
+  const pager = (key: string) => logisticsRefPager(key, {
+    tab: 'transport',
+    status, movement_type: movementType, source, payment_status: paymentStatus,
+    transporter, exec_from: dateFrom, exec_to: dateTo,
+    search: debouncedSearch.trim(),
+    date_from: period.from, date_to: period.to, date_field: dateField,
   })
 
   const kpis = data?.kpis
 
   return (
     <div className="flex flex-col gap-6">
+      {/* The window, and which date it means — the same control, wording and
+          "jump to the latest month with data" as every other dashboard. */}
+      <div className="rounded-xl border border-line bg-surface p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <PeriodFilter period={period} onChange={setPeriod} range={data?.coverage}
+            label="Reporting period" />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="transport-date-field" className="text-xs">Filter on</Label>
+            <select
+              id="transport-date-field"
+              value={dateField}
+              onChange={(e) => setDateField(e.target.value)}
+              className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+            >
+              {(data?.dateFieldOptions ?? []).map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {data && (
+          <div className="mt-3">
+            <PeriodSummary period={data.period} coverage={data.coverage} onJumpToLatest={setPeriod} />
+          </div>
+        )}
+      </div>
+
       <FilterBar search={{ value: search, onChange: setSearch, placeholder: 'Search by customer, transporter, or destination…' }}>
         <DateRangeFilter label="Execution Date" from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
         <MultiSelectFilter label="Movement Type" options={data?.movementTypes ?? []} value={movementType} onChange={setMovementType} />
@@ -82,14 +131,27 @@ export function TransportView() {
 
       <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && (
+      {data && kpis && refs && (
         <>
+          {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
+
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-            <KpiCard label="Movements Shown" value={kpis.jobs_shown.toLocaleString()} />
-            <KpiCard label="Delivered" value={`${kpis.delivered}`} direction={kpis.delivered ? 'up' : null} goodWhen="up" />
-            <KpiCard label="In Progress" value={`${kpis.in_progress}`} />
-            <KpiCard label="Total Freight Cost" value={money(kpis.total_freight)} />
-            <KpiCard label="Total Savings" value={kpis.total_savings ? money(kpis.total_savings) : '—'} />
+            <KpiCard label="Trucking Jobs" value={kpis.jobs_shown.toLocaleString()}
+              refs={refs.jobs} fetchRefs={pager('jobs')}
+              help={LOGISTICS_HELP.jobs} />
+            <KpiCard label="Delivered" value={`${kpis.delivered}`}
+              direction={kpis.delivered ? 'up' : null} goodWhen="up"
+              refs={refs.delivered} fetchRefs={pager('delivered')}
+              help={LOGISTICS_HELP.jobsDelivered} />
+            <KpiCard label="In Progress" value={`${kpis.in_progress}`}
+              refs={refs.in_progress} fetchRefs={pager('in_progress')}
+              help={LOGISTICS_HELP.jobsDelivered} />
+            <KpiCard label="Total Freight Cost" value={money(kpis.total_freight)}
+              refs={refs.jobs} fetchRefs={pager('jobs')}
+              help={LOGISTICS_HELP.freight} />
+            <KpiCard label="Total Savings" value={kpis.total_savings ? money(kpis.total_savings) : '—'}
+              refs={refs.jobs} fetchRefs={pager('jobs')}
+              help={LOGISTICS_HELP.savings} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

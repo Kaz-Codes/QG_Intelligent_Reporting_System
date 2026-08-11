@@ -40,12 +40,39 @@ SHEET_SHIPMENT = "Shipment Master Database"
 SHEET_PACKING = "Master Packing Database"
 SHEET_EXPORT_DOCS = "Export Documentation Database"
 SHEET_SHIFTING = "Inbound & Outbound Shifting"
+# Intra-factory moves are a SEPARATE sheet with a different shape — no
+# movement-type column (it is implied), Sender/Receiver instead of
+# Pickup/Destination, and one freight figure instead of a quoted/actual
+# pair. It loads into the same trucking tables; see load_03_trucking.
+SHEET_INTRAFACTORY = "Intra Factory Shifting"
 
+# The sheets, and the columns each one spells the export/batch number with.
+#
+# EACH ENTRY IS A LIST OF CANDIDATES, not a single name. The workbook renames
+# these between exports — the current one calls the export-docs batch column
+# "Batch" where the previous one said "Batch #" — and a name that no longer
+# exists does not raise: `row.get` returns None, every key comes back empty,
+# and the whole sheet silently merges into nothing. The first candidate that is
+# actually present wins.
 KEY_COLUMNS = {
-    SHEET_SHIPMENT: ("Exp #", "B. #"),
-    SHEET_PACKING: ("Exp #", "Batch #"),
-    SHEET_EXPORT_DOCS: ("Exp. #", "Batch #"),
+    SHEET_SHIPMENT: (("Exp #", "Exp. #"), ("B. #", "Batch #", "Batch")),
+    SHEET_PACKING: (("Exp #", "Exp. #"), ("Batch #", "Batch")),
+    SHEET_EXPORT_DOCS: (("Exp. #", "Exp #"), ("Batch #", "Batch")),
 }
+
+
+def first_present(row, names):
+    """The first of `names` the row actually carries a value under.
+
+    Distinguishes "this column is absent" from "this cell is blank": a blank
+    cell in a present column is a real answer and stops the search, so a row
+    genuinely missing its batch number does not fall through to some other
+    column that happens to be there.
+    """
+    for name in names:
+        if name in row:
+            return row.get(name)
+    return None
 
 
 def order_key(exp_value, batch_value):
@@ -60,8 +87,8 @@ def order_key(exp_value, batch_value):
 
 
 def row_key(row, sheet_name):
-    exp_col, batch_col = KEY_COLUMNS[sheet_name]
-    return order_key(row.get(exp_col), row.get(batch_col))
+    exp_names, batch_names = KEY_COLUMNS[sheet_name]
+    return order_key(first_present(row, exp_names), first_present(row, batch_names))
 
 
 def read_logistics_sheet(sheet_name):
