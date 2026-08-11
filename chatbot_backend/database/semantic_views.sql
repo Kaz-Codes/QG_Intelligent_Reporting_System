@@ -214,7 +214,12 @@ WHERE lower(trim(i.name)) IN (
 -- whose stock is entirely reserved is unavailable in practice even though
 -- stock_qty is positive.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_item_stock_position AS
+-- Dropped rather than replaced: CREATE OR REPLACE cannot add a column to
+-- an existing view, and the dependent views are rebuilt below anyway.
+DROP VIEW IF EXISTS v_item_demand_picture;
+DROP VIEW IF EXISTS v_out_of_stock_items;
+DROP VIEW IF EXISTS v_item_stock_position;
+CREATE VIEW v_item_stock_position AS
 SELECT s.item_code,
        MAX(s.item_name)                            AS item_name,
        COUNT(*)                                    AS branches_held_at,
@@ -222,7 +227,16 @@ SELECT s.item_code,
        SUM(COALESCE(s.hold_qty, 0))                AS hold_qty,
        SUM(COALESCE(s.available_qty, 0))           AS available_qty,
        SUM(COALESCE(s.available_amount, 0))        AS available_amount,
-       (SUM(COALESCE(s.available_qty, 0)) <= 0)    AS is_out_of_stock
+       (SUM(COALESCE(s.available_qty, 0)) <= 0)    AS is_out_of_stock,
+
+       -- The RAREST class this item carries at any branch. A < B < C
+       -- sorts correctly, so MIN is the rarest, matching the documented
+       -- reading of "how many A items" (A at at least one branch).
+       MIN(s.rank)                                 AS rank,
+       -- Kept because 103 items disagree across branches, and an answer
+       -- that says "A" for an item that is C at two of its three sites
+       -- is hiding the thing worth knowing.
+       STRING_AGG(DISTINCT s.rank, '/' ORDER BY s.rank) AS branch_ranks
 FROM stock AS s
 GROUP BY s.item_code;
 
@@ -234,9 +248,11 @@ GROUP BY s.item_code;
 -- of stock; it is out at that branch. Items with no stock row at all are not
 -- here either - they are simply not stocked, which is a different question.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_out_of_stock_items AS
+CREATE VIEW v_out_of_stock_items AS
 SELECT p.item_code,
        p.item_name,
+       p.rank,
+       p.branch_ranks,
        p.branches_held_at,
        p.stock_qty,
        p.hold_qty,
@@ -311,7 +327,6 @@ GROUP BY iss.item_code, date_trunc('month', iss.from_date);
 -- Dropped rather than replaced: CREATE OR REPLACE cannot insert a column into
 -- the middle of an existing view's column list, and this view gains columns as
 -- the answer it feeds grows.
-DROP VIEW IF EXISTS v_item_demand_picture;
 CREATE VIEW v_item_demand_picture AS
 WITH win AS (
     SELECT (CURRENT_DATE - INTERVAL '3 months')::date          AS win_start,
@@ -384,6 +399,8 @@ incoming AS (
 )
 SELECT p.item_code,
        p.item_name,
+       p.rank,
+       p.branch_ranks,
        p.available_qty,
        p.stock_qty,
        p.hold_qty,

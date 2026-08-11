@@ -65,12 +65,13 @@ branches(id PK, name, code, city, address, is_active, is_verified)
     RESOLVE IT THROUGH v_branch_aliases, never v_branches directly:
         JOIN branches br ON br.id = c.branch_id
         JOIN v_branch_aliases a ON a.alias = br.name
-    The alias map carries every spelling including 'QBL-II' and 'QH', so all
-    206 consignments resolve. (An earlier version keyed on a `legal_name`
-    column and had neither, which matched ZERO rows and is how "how many import
-    consignments are of QE" once answered 0 when the true answer is 34.)
-    Use LEFT JOIN when adding the branch for display - 1 consignment has a NULL
-    branch_id and an INNER JOIN drops it.
+    The alias map carries every spelling including 'QBL-II' and 'QH', so EVERY
+    consignment resolves - a row that fails to join is a bug, not an unknown
+    branch. (An earlier version keyed on a `legal_name` column and had neither,
+    which matched ZERO rows and is how "how many import consignments are of QE"
+    once answered 0 when the true answer was 34.)
+    Use LEFT JOIN when adding the branch for display - a consignment with a NULL
+    branch_id exists and an INNER JOIN drops it.
 
 works(id PK, name, code, ntn_strn, note, is_active, is_verified)
 ports(id PK, name, country, port_type, un_locode, used_as, is_active)
@@ -80,7 +81,8 @@ hs_codes(id PK, item_id -> items.id, code, is_active)
 === STORES / INVENTORY ===
 
 stock(id PK, item_code -> items.item_code, item_name, branch, hold_qty,
-      stock_qty, stock_qty_amount, available_qty, available_amount)
+      stock_qty, stock_qty_amount, available_qty, available_amount,
+      reorder_level, rank)
     Current snapshot, ONE ROW PER ITEM PER BRANCH. NOT a history table - it has
     no date column at all, so any "stock over time" question must be answered
     from issuance (consumption) or purchases_data (inflow) instead.
@@ -88,16 +90,26 @@ stock(id PK, item_code -> items.item_code, item_name, branch, hold_qty,
     counts item-branch pairs, NOT items. Any "how many items ..." question must
     aggregate to item_code first (GROUP BY item_code, or COUNT(DISTINCT
     item_code)) or it overstates the answer - 1,407 rows are at or below zero
-    available, but they are only 871 distinct items.
+    available, but they are far fewer DISTINCT items - the gap is the whole
+    point, and the live figures are in the profile block.
     available_qty = stock_qty - hold_qty, and it is the quantity actually
     usable; prefer it over stock_qty for anything about availability.
+    `rank` is the business's A/B/C rarity class - A rarest, C least rare. It is
+    per item PER BRANCH like everything else on this table, so one item can be
+    A at one branch and C at another (103 of them are). Use it to PRIORITISE a
+    list of items, never as a filter the user did not ask for. See the item
+    rank term for the counting rules.
+    `reorder_level` exists but is EMPTY on every row today - there is no safety
+    stock or reorder policy in this data. Do not present it as one, and do not
+    treat a NULL here as "reorder level is zero".
 
 issuance(id PK, issuance_code, item_code -> items.item_code, item_name,
          specification, department, branch, issue_to_others, authorized_by,
          issued_by, received_by, description, ref_no, demand_ref_no,
          quantity, status, from_date, unit_price, total_price, job_number)
-    Consumption transactions - the main demand history, ~260k rows covering
-    Dec 2022 to date. from_date is the issue date; use it for consumption
+    Consumption transactions - the main demand history, and the largest
+    table in the database. Its date range and row count are in the profile
+    block, not here; they change on every load. from_date is the issue date; use it for consumption
     trends and burn-rate calculations.
     issuance_code is the issuance DOCUMENT number and is NOT unique: one
     document issues many items (thousands cover more than one item code, the
@@ -114,7 +126,7 @@ store_requisition(id PK, item_code -> items.item_code, item_name, ref_no,
 purchases_data(id PK, item_code -> items.item_code, item_name, specification,
                po_number, po_date, ref_no, qty, branch, amount, ppc_store,
                required_d, purchase, mop, dc_no, bill_no, sourcing_o, supplier)
-    Local purchases, ~68k rows from Jan 2023. `purchase` is the date it landed
+    Local purchases. `purchase` is the date it landed
     and `required_d` the date it was needed - the gap between them is the
     observed procurement lead time. There is no separate purchase_order table
     any more; po_number and po_date live here.
@@ -334,7 +346,7 @@ v_item_stock_position(item_code, item_name, branches_held_at, stock_qty,
 
 v_out_of_stock_items(item_code, item_name, branches_held_at, stock_qty,
                      hold_qty, available_qty)
-    Items with nothing usable left ANYWHERE - 871 of them. An item at zero in
+    Items with nothing usable left ANYWHERE. An item at zero in
     one branch while another still holds it is not here.
 
 v_item_types(item_type, display_name, item_codes, category)

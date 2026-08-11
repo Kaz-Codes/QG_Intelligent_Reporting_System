@@ -75,6 +75,56 @@ BUSINESS_TERMS = [
         ),
     },
     {
+        "term": (
+            "item rank / ABC classification / A items / B items / C items / "
+            "how rare is this item / critical items / which items matter most"
+        ),
+        "meaning": (
+            "stock.rank classes every stocked item A, B or C by RARITY - A is "
+            "the rarest, B less rare, C the least rare. It is the business's own "
+            "'vital few against the trivial many': A and B are the small set "
+            "that deserve attention, C is the long tail.\n"
+            "Rarity here is about how FEW items carry the class, not about how "
+            "seldom they are used - the opposite, in fact. Measured on the "
+            "current data, A and B items move far MORE than C:\n"
+            "    A   ~172 items, ~341 issue lines each, avg ~10,000 available\n"
+            "    B   ~164 items, ~406 issue lines each, avg ~7,000 available\n"
+            "    C  ~4,531 items,  ~51 issue lines each, avg ~58 available\n"
+            "So an A item running low matters far more than a C item doing the "
+            "same, and a shortage list that treats them alike is not useful."
+        ),
+        "maps_to": (
+            "stock.rank - a single character, 'A' / 'B' / 'C'. Join to any item "
+            "question on item_code.\n"
+            "RANK IS RECORDED PER ITEM PER BRANCH, NOT PER ITEM - it sits on "
+            "the stock row, which is one row per item per branch. 103 items "
+            "carry DIFFERENT ranks at different branches: item 10670-60 is B at "
+            "Qadbros, C at Qadcast and A at Qadri Engineering. So 'how many A "
+            "items' has three different honest answers and you must pick one "
+            "and SAY which:\n"
+            "    stock ROWS with rank A            (counts item-branch pairs)\n"
+            "    DISTINCT item_code with rank A    (A somewhere - the usual "
+            "reading of 'how many A items')\n"
+            "    items where EVERY branch says A   (unambiguously A)\n"
+            "Default to COUNT(DISTINCT item_code) and state that it means 'A at "
+            "at least one branch'. This is the same trap as counting stock rows "
+            "for an out-of-stock question."
+        ),
+        "notes": (
+            "USE IT TO PRIORITISE, which is what it is for. When an answer "
+            "recommends action across several items - what to reorder, what is "
+            "short, what is out of stock - lead with the A items and say so. "
+            "'871 items are out of stock' is a number; 'of the 871, N are "
+            "A-class' is a decision.\n"
+            "Do NOT filter to A items unless the user asked. Rank ranks the "
+            "list; it does not narrow the question. Adding rank = 'A' to a "
+            "plain 'what is out of stock' silently answers a different, smaller "
+            "question - the standing no-invented-filter rule applies here too.\n"
+            "Rank is set by the loaders from the source workbook. It is not "
+            "derived here and must not be recomputed or second-guessed."
+        ),
+    },
+    {
         "term": "stock / inventory on hand",
         "meaning": (
             "Current quantity physically held, per item per branch. "
@@ -101,12 +151,14 @@ BUSINESS_TERMS = [
         "notes": (
             "stock is a snapshot with no date column - it cannot be trended.\n"
             "THREE DIFFERENT COUNTS, so read the question carefully:\n"
-            "  4,762  items with a stock RECORD (we carry the line)\n"
-            "  3,891  items with available_qty > 0 (we actually have some)\n"
-            "    871  items out of stock (record exists, nothing available)\n"
-            "3,891 + 871 = 4,762. 'How many items do we stock' means the widest "
-            "(4,762); 'how many do we have available / in stock right now' means "
-            "3,891. State which one the answer used whenever the phrasing could "
+            "  items with a stock RECORD      - we carry the line\n"
+            "  items with available_qty > 0   - we actually have some\n"
+            "  items out of stock            - record exists, nothing available\n"
+            "The last two ADD UP to the first, so they are three different "
+            "answers to what sounds like one question. 'How many items do we "
+            "stock' means the widest; 'how many do we have available / in stock "
+            "right now' means the second. Do not quote a figure from memory - "
+            "COUNT it. State which one the answer used whenever the phrasing could "
             "go either way.\n"
             "A further 22,987 catalogue items have NO stock record at all - "
             "never stocked. They belong in none of the three counts unless the "
@@ -122,7 +174,7 @@ BUSINESS_TERMS = [
             "of stock; it is out at that branch."
         ),
         "maps_to": (
-            "SELECT FROM THE VIEW v_out_of_stock_items - 871 rows, already one "
+            "SELECT FROM THE VIEW v_out_of_stock_items - already one "
             "per ITEM rather than per item-branch. For stock levels generally "
             "use v_item_stock_position, which carries available_qty summed "
             "across branches plus an is_out_of_stock flag."
@@ -131,7 +183,8 @@ BUSINESS_TERMS = [
             "COUNT THE ITEM, NOT THE ROW. stock holds one row per item PER "
             "BRANCH, so COUNT(*) FROM stock WHERE available_qty <= 0 counts an "
             "item held in four branches four times - it returns 1,407 where the "
-            "real answer is 871. Always aggregate to item_code first.\n"
+            "real answer is the DISTINCT item count, which is far smaller. "
+            "Always aggregate to item_code first.\n"
             "Use available_qty (stock_qty minus hold_qty), not stock_qty: 1,133 "
             "items have physical stock that is entirely reserved, and they are "
             "unavailable in practice. Filtering stock_qty = 0 instead returns "
@@ -160,7 +213,8 @@ BUSINESS_TERMS = [
             "(department, job number, who issued it)."
         ),
         "notes": (
-            "Group by item_code and month for a consumption trend. ~260k rows "
+            "Group by item_code and month for a consumption trend. It is the "
+            "largest table, so "
             "covering Dec 2022 onwards. issuance.status values are 'Issue' "
             "(the normal completed issue), 'Hold' and 'HoldIssuence' - there is "
             "NO status called 'Issued'. Held rows are not consumption; exclude "
@@ -913,11 +967,11 @@ BUSINESS_TERMS = [
         "maps_to": (
             "trucking_consignments.movement_type  NULL on 191 of 399 jobs "
             "(Outbound 158, Inbound 50)\n"
-            "logistics_consignments.order_type    NULL on 403 of 1,424 "
+            "logistics_consignments.order_type    often NULL "
             "(Local 707, Export 314)\n"
-            "logistics_consignments.department     NULL on 614 of 1,424\n"
+            "logistics_consignments.department     often NULL\n"
             "consignments.consignment_type        NULL on 58 of 91\n"
-            "logistics_consignments.incoterm      NULL on 1,232 of 1,424"
+            "logistics_consignments.incoterm      usually NULL"
         ),
         "notes": (
             "Inbound + Outbound is 208, NOT the 399 total - the other 191 are "
@@ -938,10 +992,10 @@ BUSINESS_TERMS = [
         ),
         "maps_to": (
             "Measured grain of each table:\n"
-            "  stock                 6,070 rows  ->  4,762 items "
+            "  stock                 rows are item-BRANCH pairs -> fewer items "
             "(one row per item PER BRANCH)\n"
-            "  issuance            260,715 rows  -> 100,779 documents\n"
-            "  purchases_data       68,298 rows  ->  63,246 ref_no\n"
+            "  issuance             rows are LINES -> fewer documents\n"
+            "  purchases_data       rows are lines -> fewer ref_no\n"
             "  consignment_items       161 lines ->      91 consignments\n"
             "  logistics_items       1,399 lines ->   1,387 orders\n"
             "  trucking_vehicles       464 rows  ->     399 jobs\n"
@@ -949,7 +1003,7 @@ BUSINESS_TERMS = [
         ),
         "notes": (
             "Decide what the user is counting before writing COUNT(*). "
-            "'How many items are out of stock' means items (871), not stock "
+            "'How many items are out of stock' means distinct ITEMS, not stock "
             "rows (1,407). 'How many issuances' almost always means documents "
             "(COUNT(DISTINCT issuance_code)), not lines. 'How many trucks' "
             "means vehicle ROWS (464); 'how many trucking jobs' means "

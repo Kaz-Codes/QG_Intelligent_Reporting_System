@@ -1,17 +1,1 @@
-[
-  {
-    "fingerprint": "33a21926336bb2de79ec",
-    "question": "how many days of stock do we have for lime stone",
-    "normalised": "how many days stock lime stone",
-    "entity_key": "item=lime stone",
-    "sql": "SELECT v.item_code, v.item_name, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty FROM v_item_demand_picture v WHERE v.item_code IN ('20328-60', '2836-60')",
-    "tables_used": [
-      "v_item_demand_picture"
-    ],
-    "limit_is_user_requested": false,
-    "schema_hash": "e0a2f943f200ad6a",
-    "created_at": "2026-08-11T11:18:38",
-    "last_used": "2026-08-11T11:18:38",
-    "hits": 0
-  }
-]
+[]
