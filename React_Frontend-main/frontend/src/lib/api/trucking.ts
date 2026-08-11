@@ -33,6 +33,16 @@ export interface ApiTruckingVehicle {
   is_deleted: boolean
 }
 
+/** One item line on a trucking job. Not yet its own table server-side — see
+ *  the `items` JSON column note on ApiTruckingJob. */
+export interface ApiTruckingItem {
+  item_details: string | null
+  weight: string | number | null
+  pickup: string | null
+  destination: string | null
+  reference_no: string | null
+}
+
 export interface ApiTruckingJob {
   id: number
   movement_type: string | null
@@ -47,6 +57,9 @@ export interface ApiTruckingJob {
   execution_date: string | null
   transporter_name: string | null
   shifting_type: string | null
+  /** Repeatable item lines, once the backend has an `items` JSON column;
+   *  absent/null on rows saved before this existed. */
+  items?: ApiTruckingItem[] | null
   item_details: string | null
   pickup: string | null
   destination: string | null
@@ -202,6 +215,16 @@ export interface TruckingPayload {
   execution_date?: string
   transporter_name?: string
   shifting_type?: string
+  /** Repeatable item lines. Item[0] is also mirrored onto the legacy
+   *  item_details/pickup/destination/reference_no fields below, so a backend
+   *  without the `items` column yet still gets the first item's data. */
+  items?: {
+    item_details?: string
+    weight?: number
+    pickup?: string
+    destination?: string
+    reference_no?: string
+  }[]
   item_details?: string
   pickup?: string
   destination?: string

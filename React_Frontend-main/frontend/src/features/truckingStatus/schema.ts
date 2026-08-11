@@ -145,6 +145,45 @@ export const takenSourceSnapshotSchema = z.object({
 })
 export type TakenSourceSnapshot = z.infer<typeof takenSourceSnapshotSchema>
 
+// --- Per-item line (Step 1) -------------------------------------------------
+
+/**
+ * A trucking job can carry several distinct items, each with its own
+ * pickup/destination/weight/IDM (e.g. one truck run picking up from two
+ * factories, or one shipment mixing items bound for different destinations).
+ * Mirrors the header + item-lines pattern used by importsStatus/logisticsStatus.
+ *
+ * Not yet backed by its own backend column — see draftToPayload/apiToDraft in
+ * lib/api/truckingMap.ts for how item[0] mirrors onto the legacy singular
+ * fields (itemDetails/pickup/destination/referenceNo) until a real `items`
+ * JSON column exists server-side.
+ */
+export const truckingItemSchema = z.object({
+  id: z.string(),
+  itemDetails: z.string().optional(),
+  weight: z.number().min(0).optional(),
+  pickup: z.string().optional(),
+  destination: z.string().optional(),
+  // Shipment reference / IDM — outbound + inbound only, same rule as the header.
+  referenceNo: z.string().optional(),
+})
+export type TruckingItem = z.infer<typeof truckingItemSchema>
+
+// Monotonic per-tab counter so two items added in the same render never
+// collide before the first save gives them a stable identity.
+let truckItemSeq = 0
+export function emptyTruckItem(): TruckingItem {
+  truckItemSeq += 1
+  return {
+    id: `item-${Date.now()}-${truckItemSeq}`,
+    itemDetails: '',
+    weight: undefined,
+    pickup: '',
+    destination: '',
+    referenceNo: '',
+  }
+}
+
 // --- Step 1: Movement + Item ----------------------------------------------
 export const movementSchema = z.object({
   movementType: z.enum(MOVEMENT_TYPES),
@@ -171,6 +210,10 @@ export const movementSchema = z.object({
   executionDate: z.string().optional(), // ISO yyyy-mm-dd
   transporterName: z.string().optional(),
   shiftingType: z.enum(SHIFTING_TYPES).optional(),
+  /** Repeatable item lines — see truckingItemSchema. */
+  items: z.array(truckingItemSchema).default([]),
+  // Legacy singular fields, kept as a mirror of items[0] for backward
+  // compatibility until the backend gets a real `items` JSON column.
   itemDetails: z.string().optional(),
   pickup: z.string().optional(),
   destination: z.string().optional(),
@@ -233,6 +276,17 @@ export const truckingSubmitSchema = truckingDraftSchema.superRefine((val, ctx) =
   if (!val.vehicles?.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vehicles'], message: 'At least one vehicle is required' })
   }
+  if (val.movementType !== 'Intrafactory') {
+    val.items?.forEach((it, i) => {
+      if (!it.referenceNo?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', i, 'referenceNo'],
+          message: 'Shipment reference / IDM is required for outbound and inbound movements',
+        })
+      }
+    })
+  }
   if (val.movementType === 'Inbound') {
     val.vehicles?.forEach((v, i) => {
       if (!v.containerNo?.trim()) {
@@ -255,6 +309,7 @@ export const DRAFT_DEFAULT_VALUES: TruckingDraft = {
   executionDate: '',
   transporterName: '',
   shiftingType: 'Regular',
+  items: [emptyTruckItem()],
   itemDetails: '',
   pickup: '',
   destination: '',
@@ -285,7 +340,7 @@ export const WIZARD_STEPS: WizardStepDef[] = [
     label: 'Movement & Item',
     fields: [
       'movementType', 'executionDate', 'transporterName', 'shiftingType',
-      'itemDetails', 'pickup', 'destination', 'referenceNo',
+      'items', 'itemDetails', 'pickup', 'destination', 'referenceNo',
     ],
   },
   { step: 2, key: 'vehicles', label: 'Vehicles', fields: ['vehicles'] },

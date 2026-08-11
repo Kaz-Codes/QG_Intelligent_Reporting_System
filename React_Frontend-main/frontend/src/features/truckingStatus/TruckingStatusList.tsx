@@ -492,10 +492,39 @@ function SourceTag({ source }: { source: string }) {
 function TruckingRowDetails({ row }: { row: TruckingListRow }) {
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-xs">
-        <span className="font-semibold text-muted">Item details: </span>
-        <span>{row.itemDetails || <span className="text-muted">none entered</span>}</span>
-      </div>
+      {row.items.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-xs">
+            <thead className="text-muted">
+              <tr>
+                <th className="py-1 pr-3 text-left">#</th>
+                <th className="py-1 pr-3 text-left">Item details</th>
+                <th className="py-1 pr-3 text-right">Weight (kg)</th>
+                <th className="py-1 pr-3 text-left">Pickup</th>
+                <th className="py-1 pr-3 text-left">Destination</th>
+                <th className="py-1 pr-3 text-left">IDM/Ref</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink">
+              {row.items.map((it, i) => (
+                <tr key={i} className="border-t border-line/60">
+                  <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
+                  <td className="py-1 pr-3 font-medium">{it.itemDetails || '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{it.weight ?? '—'}</td>
+                  <td className="py-1 pr-3">{it.pickup || '—'}</td>
+                  <td className="py-1 pr-3">{it.destination || '—'}</td>
+                  <td className="py-1 pr-3">{it.referenceNo || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-xs">
+          <span className="font-semibold text-muted">Item details: </span>
+          <span>{row.itemDetails || <span className="text-muted">none entered</span>}</span>
+        </div>
+      )}
       {row.vehicles.length === 0 ? (
         <div className="text-xs text-muted">No vehicles assigned yet.</div>
       ) : (
