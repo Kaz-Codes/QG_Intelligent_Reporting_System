@@ -449,6 +449,20 @@ class ConsignmentItem(Base, TimestampMixin):
         nullable=True
     )
 
+    # THE LINE'S OWN ARRIVAL DATE.
+    #
+    # A consignment groups every sheet row sharing a payment reference, and
+    # those rows do NOT all arrive together: 19 of 175 consignments carry lines
+    # with different ETAs, one of them spanning seven distinct dates. The header
+    # keeps a single `eta_works` (the first line's), so dating a whole
+    # consignment by it attributes money to a month it did not land in —
+    # ref 65704 reported Rs 10.64m in August when Rs 1.66m of it arrived on
+    # 27 July.
+    #
+    # Nullable: the sheet does not always give a per-line date, and a line
+    # without one falls back to its consignment's.
+    eta_works: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+
     batch_no: Mapped[Optional[str]] = mapped_column(
         String(100),
         nullable=True

@@ -105,9 +105,13 @@ class Issuance(Base):
         Text
     )
 
+    # Indexed because every movement figure on the inventory and overview
+    # dashboards asks "what was issued against this item, and when" — this is
+    # the largest table either screen touches (~49k rows).
     item_code: Mapped[Optional[str]] = mapped_column(
         ForeignKey("items.item_code"),
-        nullable=True
+        nullable=True,
+        index=True
     )
 
     item_name: Mapped[Optional[str]] = mapped_column(Text)
@@ -138,7 +142,7 @@ class Issuance(Base):
 
     status: Mapped[Optional[str]] = mapped_column(Text)
 
-    from_date: Mapped[Optional[date]] = mapped_column(Date)
+    from_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
 
     unit_price: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 3)

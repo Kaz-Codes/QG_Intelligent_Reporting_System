@@ -4,6 +4,27 @@ from app.loading.schemas.stores_schemas import PurchasesData
 from app.masters.models import Item
 from app.dashboard.period import coverage
 
+# The two real procurement events. "What did we commit to in August" and "what
+# did we spend in August" are different questions, both are fully populated,
+# and which one a screen means is a business choice — so the caller picks
+# rather than the backend deciding. Looked up through this map, never
+# interpolated, so an unknown name cannot reach SQL.
+DATE_FIELDS = {
+    "po_date": PurchasesData.po_date,
+    "purchase": PurchasesData.purchase,
+}
+DATE_FIELD_DEFAULT = "purchase"
+
+DATE_FIELD_OPTIONS = [
+    {"value": "po_date", "label": "PO date (ordered)"},
+    {"value": "purchase", "label": "Purchase date (bought)"},
+]
+
+
+def date_column(field):
+    return DATE_FIELDS.get(field or DATE_FIELD_DEFAULT,
+                           DATE_FIELDS[DATE_FIELD_DEFAULT])
+
 
 #-------------------------------------
 # FILTER OPTION LISTS (cheap DISTINCT queries)
@@ -56,33 +77,32 @@ def fetch_consignments(db):
 # rows are loaded.
 #-------------------------------------
 
-def source_coverage(db, date_from, date_to):
+def source_coverage(db, date_from, date_to, date_field=None):
     """What the table holds, and how much of it the chosen window catches.
 
     Reported so an empty period is explained rather than shown as a confident
     Rs 0 — purchases currently stop in January, so the default (this month) is
     legitimately empty and the screen has to be able to say so.
     """
+    column = date_column(date_field)
+    label = "PO date" if (date_field or DATE_FIELD_DEFAULT) == "po_date" else "purchase date"
+
     earliest, latest, total = db.execute(
-        select(
-            func.min(PurchasesData.purchase),
-            func.max(PurchasesData.purchase),
-            func.count(PurchasesData.id),
-        )
+        select(func.min(column), func.max(column), func.count(PurchasesData.id))
     ).one()
 
     in_period = db.execute(
         select(func.count(PurchasesData.id))
-        .where(PurchasesData.purchase.between(date_from, date_to))
+        .where(column.between(date_from, date_to))
     ).scalar_one()
 
-    return coverage(earliest, latest, in_period, total, "purchase date")
+    return coverage(earliest, latest, in_period, total, label)
 
 
 def fetch_filtered_consignments(
         db, supplier, branch, item_category, mop,
         sourcing_o, po_from_date, po_to_date, search,
-        date_from=None, date_to=None
+        date_from=None, date_to=None, date_field=None
     ):
 
     query = select(PurchasesData).options(joinedload(PurchasesData.item))
@@ -91,7 +111,7 @@ def fetch_filtered_consignments(
     # the money was actually spent), not the PO date. po_from_date/po_to_date
     # remain a separate, explicit filter on the PO date for anyone who wants it.
     if date_from is not None and date_to is not None:
-        query = query.where(PurchasesData.purchase.between(date_from, date_to))
+        query = query.where(date_column(date_field).between(date_from, date_to))
 
     if supplier:
         query = query.where(PurchasesData.supplier.in_(supplier))

@@ -45,7 +45,14 @@ def load_purchases(conn):
             clean_int(row.get("Qty")),
             clean_text(row.get("Branch")),
             clean_text(row.get("Amount")),
-            clean_date(row.get("PPC/Store")),
+            # The workbook SPLIT "PPC/Store" into two columns: `PPC` (the store
+            # demand date, as text) and `Store` (the same event as a timestamp).
+            # The loader kept asking for the old combined name, which no longer
+            # exists, so ppc_store came back NULL on all 65,520 rows and the
+            # Overview's "store demand to purchase" cycle time had no basis at
+            # all and rendered blank. PPC is preferred because it is the date
+            # the business writes; Store is the system's own stamp of it.
+            clean_date(row.get("PPC/Store") or row.get("PPC") or row.get("Store")),
             clean_date(row.get("Required D")),
             clean_date(row.get("Purchase")),
             clean_text(row.get("MOP")),

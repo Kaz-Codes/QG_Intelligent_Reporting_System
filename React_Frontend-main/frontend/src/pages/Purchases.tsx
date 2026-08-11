@@ -14,8 +14,10 @@ import { Donut } from '@/components/charts/Donut'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { AgingBuckets } from '@/components/charts/AgingBuckets'
 import { PeriodFilter, PeriodSummary, EMPTY_PERIOD, type Period } from '@/components/PeriodFilter'
+import { Label } from '@/components/ui/label'
 import { money } from '@/lib/format'
 import { PURCHASES_HELP, withBasis } from '@/lib/metricHelp'
+import { purchasesRefPager } from '@/lib/api/dashboardReferences'
 import { usePurchasesDashboard } from '@/lib/api/usePurchasesDashboard'
 
 const INSIGHT_TABS = [
@@ -35,16 +37,32 @@ export function Purchases() {
   const [sourcingOfficer, setSourcingOfficer] = useState<string[]>([])
   // Empty = "this month", resolved by the backend.
   const [period, setPeriod] = useState<Period>(EMPTY_PERIOD)
+  // Which procurement event the period measures. The backend resolves an
+  // unknown value back to its default and echoes the choice, so this and the
+  // server cannot disagree about what is being filtered.
+  const [dateField, setDateField] = useState('purchase')
   const [insightTab, setInsightTab] = useState<(typeof INSIGHT_TABS)[number]['value']>('branch')
+  const [search, setSearch] = useState('')
 
   // Every filter here is applied server-side, so the KPIs and charts below can
-  // be rendered straight from the endpoint's own figures. There's no search box
-  // on this page: search only ever narrowed the row table, which is gone.
+  // be rendered straight from the endpoint's own figures. Search is a server
+  // param here, so it narrows the KPIs and charts too, not just a row table.
   const { data, isLoading, isError, error } = usePurchasesDashboard({
     status, supplier, branch, item_category: category, mop, sourcing_o: sourcingOfficer,
     po_from_date: dateFrom || undefined, po_to_date: dateTo || undefined,
     // Both omitted = the backend's own default, the current month.
     date_from: period.from || undefined, date_to: period.to || undefined,
+    date_field: dateField,
+    search: search || undefined,
+  })
+
+  // Bound to the same filters the screen was rendered with, so page 2 of a
+  // reference list describes the same set as page 1.
+  const refs = (key: string) => purchasesRefPager(key, {
+    status, supplier, branch, item_category: category, mop, sourcing_o: sourcingOfficer,
+    po_from_date: dateFrom, po_to_date: dateTo,
+    date_from: period.from, date_to: period.to,
+    date_field: dateField, search,
   })
 
   const kpis = data?.kpis
@@ -61,8 +79,23 @@ export function Purchases() {
       <PageHeader title="Purchases" subtitle="Track purchase orders, suppliers, and delivery status" module="purchases" />
 
       <div className="rounded-xl border border-line bg-surface p-4">
-        <PeriodFilter period={period} onChange={setPeriod} range={data?.coverage}
-          label="Reporting period (purchase date)" />
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <PeriodFilter period={period} onChange={setPeriod} range={data?.coverage}
+            label="Reporting period" />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="purchases-date-field" className="text-xs">Filter on</Label>
+            <select
+              id="purchases-date-field"
+              value={dateField}
+              onChange={(e) => setDateField(e.target.value)}
+              className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+            >
+              {(data?.dateFieldOptions ?? []).map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
         {data && (
           <div className="mt-3">
             <PeriodSummary period={data.period} coverage={data.coverage} onJumpToLatest={setPeriod} />
@@ -70,7 +103,10 @@ export function Purchases() {
         )}
       </div>
 
-      <FilterBar>
+      <FilterBar search={{
+        value: search, onChange: setSearch,
+        placeholder: 'PO number, item, supplier, bill…',
+      }}>
         <DateRangeFilter label="PO Date" from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
         <MultiSelectFilter label="Branch" options={data?.branches ?? []} value={branch} onChange={setBranch} />
         <MultiSelectFilter label="Supplier" options={data?.suppliers ?? []} value={supplier} onChange={setSupplier} />
@@ -103,25 +139,44 @@ export function Purchases() {
               ? `${data.valueTrend.bucket_days} days` : data.valueTrend.granularity
               } — empty buckets are shown as zero, not skipped`}
             trendUnit="PKR (millions)"
+            refs={data.references.orders}
+            fetchRefs={refs('orders')}
           />
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
             <KpiCard label="Orders" value={kpis.orders_count.toLocaleString()}
+              refs={data.references.orders}
+              fetchRefs={refs('orders')}
               help={PURCHASES_HELP.orders} />
             <KpiCard label="Avg Order Value" value={kpis.orders_count ? money(kpis.avg_order_value) : '—'}
+              refs={data.references.orders}
+              fetchRefs={refs('orders')}
               help={PURCHASES_HELP.avgOrderValue} />
-            <KpiCard label="Delayed Orders" value={kpis.delayed_orders.toLocaleString()}
+            {/* A PERCENTAGE, like On-Time beside it — the two rest on the same
+                denominator and sum to 100, which a count against a percentage
+                could never show. The count is in the sub-line and the list. */}
+            <KpiCard label="Delayed Orders" value={kpis.orders_count ? `${kpis.delayed_pct}%` : '—'}
+              sub={`${kpis.delayed_orders.toLocaleString()} of ${kpis.purchased_orders.toLocaleString()} orders`}
               direction={kpis.delayed_orders ? 'up' : null} goodWhen="down"
+              refs={data.references.delayed}
+              fetchRefs={refs('delayed')}
               help={PURCHASES_HELP.delayed} />
             <KpiCard label="Avg Delay"
               value={proc?.avg_delay_days != null ? `${proc.avg_delay_days} days` : '—'}
-              sub="late lines only"
+              sub={`across ${kpis.delayed_orders.toLocaleString()} late orders`}
+              refs={data.delayedLineReferences}
+              fetchRefs={refs('delayed_lines')}
               help={withBasis(PURCHASES_HELP.avgDelay,
                 proc ? `Measured on ${proc.basis.toLocaleString()} lines that have both a purchase and a required date.` : undefined)} />
             <KpiCard label="On-Time Rate" value={kpis.orders_count ? `${kpis.on_time_pct}%` : '—'}
+              sub={`${kpis.completed_orders.toLocaleString()} of ${kpis.purchased_orders.toLocaleString()} orders`}
+              refs={data.references.on_time}
+              fetchRefs={refs('on_time')}
               help={PURCHASES_HELP.onTimeRate} />
             <KpiCard label="Top Supplier" value={kpis.top_supplier ?? '—'}
               sub={kpis.top_supplier ? money(kpis.top_supplier_amount) : undefined}
+              refs={data.references.top_supplier}
+              fetchRefs={refs('top_supplier')}
               help={withBasis(PURCHASES_HELP.topSupplier,
                 kpis.excluded_supplier_value
                   ? `Import (IOL) is excluded from supplier figures; its ${money(kpis.excluded_supplier_value)} is still inside Total Value.`

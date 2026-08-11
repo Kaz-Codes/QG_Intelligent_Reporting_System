@@ -1,6 +1,7 @@
 import { apiFetch } from './client'
 import type { Coverage, ResolvedPeriod } from '@/components/PeriodFilter'
 import type { ReferenceSet } from '@/components/ReferenceList'
+import type { DataNote } from '@/components/DataNotes'
 
 // Index signatures so these can go straight into the generic chart
 // components (RankedBar/TrendLine take Record<string, unknown>[]) without a
@@ -44,14 +45,18 @@ export interface ImportsDashboardKpis {
  *  them, which would overstate it badly (a consignment usually carries other
  *  items too). Replaces the old "import spend" tile, which restated
  *  kpis.total_value_pkr on a different basis. */
+/** Computed from the shaft LINES and dated by each line's own ETA, so a
+ *  consignment whose rows land in two months contributes to both. It used to
+ *  take the consignments whose HEADER fell in the window and sum all their
+ *  shaft rows, which reported Rs 10.64m for ref 65704 in August when only
+ *  Rs 8.98m of it arrived then. */
 export interface ShaftsValue {
   value: number
   consignments: number
+  lines: number
+  /** Lines with no price or no booked rate — a short total, explained. */
+  unpriced_lines: number
   references: ReferenceSet
-  /** Consignments whose shaft rows were missing a price or a booked rate, so a
-   *  short total is explained rather than silently short. */
-  incomplete_consignments: number
-  item_names: string[]
 }
 
 /** Over half the consignments do not state EFS at all, so "Not stated" is its
@@ -60,6 +65,8 @@ export interface ShaftsValue {
 export interface EfsSplit {
   counts: { label: string; consignments: number; pct: number | null }[]
   efs: number
+  efs_value: number
+  regular_value: number
   regular: number
   not_stated: number
   efs_pct_of_stated: number | null
@@ -67,16 +74,44 @@ export interface EfsSplit {
   efs_references: ReferenceSet
 }
 
+/** A figure that is a SET of consignments: how many, and how much. Every
+ *  related tile uses this shape so a row of them can be read across. */
+export interface CountAndValue {
+  count: number
+  value: number
+  value_pct?: number | null
+}
+
+/** The screen's consignments cut by where they have got to. In Process +
+ *  Arrived + Cancelled = Total, and Total is EVERY status — the same
+ *  population the Overview counts, so the two screens agree. */
+export interface Population {
+  total: CountAndValue
+  in_process: CountAndValue
+  arrived: CountAndValue
+  cancelled: CountAndValue
+  references: {
+    total: ReferenceSet
+    in_process: ReferenceSet
+    arrived: ReferenceSet
+    cancelled: ReferenceSet
+  }
+}
+
 export interface DemandCounts {
   received: number
   processed: number
   in_process: number
   processed_pct: number | null
+  /** The consignments that reached a terminal status. */
+  processed_references: ReferenceSet
 }
 
 /** ETA Works minus the required date. Positive is late; 0 or less is on time. */
 export interface DeliveryDelay {
   delay_pct: number | null
+  /** The money behind the delay, so the tile reports count AND value. */
+  delayed_value: number
   delayed: number
   on_time: number
   basis: number
@@ -112,10 +147,32 @@ export interface CategoryDelay {
   avg_days_late: number | null
 }
 
+/** The screen's headline money, summed over the LINES arriving in the window
+ *  and dated by them — the same basis and the same rows as the Overview's, so
+ *  the two screens cannot report different money for one window. */
+export interface PeriodValue {
+  value: number
+  consignments: number
+  lines: number
+  unpriced_lines: number
+  basis: string
+  references: ReferenceSet
+}
+
 export interface ImportsDashboardData {
   kpis: ImportsDashboardKpis
+  period_value: PeriodValue
+  /** In Process / Arrived / Cancelled, each with count AND value. Replaces the
+   *  hidden "exclude Arrived at Works" filter that made this screen disagree
+   *  with the Overview by Rs 52.7m over the same window. */
+  population: Population
+  /** Echoed back so the screen can label its tiles as the shaft subset. */
+  shafts_only: boolean
   /** Every consignment on the screen, behind the headline count. */
   references: ReferenceSet
+  /** How the money was arrived at, and what it misses — empty when every
+   *  consignment carries a booked total. */
+  data_notes: DataNote[]
   status_split: ValueRow[]
   value_by_country: ValueRow[]
   value_by_branch: ValueRow[]
@@ -125,7 +182,9 @@ export interface ImportsDashboardData {
   demands: DemandCounts
   delivery_delay: DeliveryDelay
   supplier_pareto: { total: number; suppliers_total: number; rows: SupplierParetoRow[] }
-  category_delays: CategoryDelay[]
+  /** null while the Shafts tab is active: every row is a shaft there, so a
+   *  chart of "delay by item category" would be one bar. */
+  category_delays: CategoryDelay[] | null
 }
 
 export interface ImportsDashboardResponse {
@@ -137,6 +196,10 @@ export interface ImportsDashboardResponse {
   countries: string[]
   item_categories: string[]
   status: string[]
+  /** Which date the window is applied to, and the choices — named by the
+   *  backend so the screen and the server cannot disagree. */
+  date_field: string
+  date_field_options: { value: string; label: string }[]
 }
 
 export interface ImportsDashboardFilters {
@@ -148,10 +211,16 @@ export interface ImportsDashboardFilters {
   mode_of_shipment?: string
   from_date?: string
   to_date?: string
-  /** The dashboard-wide reporting window, on ETA Works. Omit BOTH for the
-   *  backend's default, which is the current month. */
+  /** The dashboard-wide reporting window. Omit BOTH for the backend's
+   *  default, which is the current month. */
   date_from?: string
   date_to?: string
+  /** Which date the window applies to: eta_works | required_date. */
+  date_field?: string
+  /** Free text over payment reference, GD number, origin, supplier and item. */
+  search?: string
+  /** Narrows every figure on the screen to shaft consignments. */
+  shafts_only?: boolean
 }
 
 interface RawResponse {
@@ -163,7 +232,8 @@ interface RawResponse {
 export async function getImportsDashboard(filters: ImportsDashboardFilters = {}): Promise<ImportsDashboardResponse> {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(filters)) {
-    if (value) params.set(key, value)
+    // `false` is meaningful for shafts_only, so only skip empty/undefined.
+    if (value !== undefined && value !== '') params.set(key, String(value))
   }
   const qs = params.toString()
   const res = await apiFetch<RawResponse>(`/dashboard/imports${qs ? `?${qs}` : ''}`)

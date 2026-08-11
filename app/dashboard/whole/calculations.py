@@ -1,6 +1,10 @@
 from datetime import date
 from decimal import Decimal
 
+from app.dashboard.stock_runway import (
+    days_of_stock as value_days_of_stock, BASIS as RUNWAY_BASIS,
+)
+
 #-----------------------------------------------------
 # OVERVIEW DASHBOARD CALCULATIONS
 #
@@ -63,19 +67,24 @@ def resolve_period(date_from, date_to, today=None):
 # IMPORTS
 #-------------------------------------
 
-def imports_period_value(total, rows, undated_rows=0, undated_value=None):
-    # Value of imports whose ETD falls in the window. ETD is the activity date
-    # rather than gate-out: gate-out (actual arrival) is populated on well under
-    # half the book and stops months earlier, so using it would under-report the
-    # period rather than measure it.
-    #
-    # `undated` is the money no window can reach — consignments with a value but
-    # no ETD. It is reported beside the period figure so the gap is visible
-    # instead of being quietly dropped from every period at once.
+def imports_period_value(total, rows, undated_rows=0, undated_value=None, lines=None):
+    """Value of the import LINES arriving in the window.
+
+    Summed over lines, each dated by its OWN ETA, so a consignment whose rows
+    land in two months contributes to both instead of crediting everything to
+    the month its header names. `consignments` is the distinct consignments
+    having a line in the window, and `lines` is how many rows that is — the
+    reference list shows exactly those lines, so the two reconcile.
+
+    `undated` is the money no window can reach: consignments carrying a value
+    but no date at all. Reported beside the period figure so the gap is visible
+    instead of being quietly dropped from every period at once.
+    """
     return {
         "value": _num(total),
         "consignments": rows,
-        "basis": "etd",
+        "lines": lines,
+        "basis": "line ETA at works",
         "undated": {
             "consignments": undated_rows,
             "value": _num(undated_value),
@@ -88,6 +97,11 @@ def imports_in_process(stage_counts):
     # the imports list already uses, so the overview and the module agree.
     total = sum(stage_counts.values())
     return {
+        # `count` — the same key Arrived, Cancelled and Delayed use, because
+        # they are the same kind of figure and the front end renders them with
+        # one component. `total` is kept as its alias for the stage chart's own
+        # denominator.
+        "count": total,
         "total": total,
         "by_stage": [
             {"stage": stage, "consignments": count}
@@ -206,13 +220,27 @@ def logistics_trucking_cost(rows):
     return {"total": total, "by_movement": buckets}
 
 
-def logistics_shipments_handled(export_orders, import_consignments):
-    # Lifetime counts, not period ones — "till yet ... handled" is a running
-    # total, so this deliberately ignores the window.
+def logistics_shipments_handled(counts):
+    """Shipments in the window, with how many could be dated at all.
+
+    The coverage figures are the point: only 13.8% of logistics orders carry an
+    ETD, so a windowed export count is small for a reason that has nothing to do
+    with activity. Reporting the datable total lets the screen say "197 of 1,424
+    orders carry an ETD" instead of showing a number that looks like collapse.
+    """
+    export = counts["export"]
+    imports = counts["import"]
+
     return {
-        "export_shipments": export_orders,
-        "import_shipments": import_consignments,
-        "total": export_orders + import_consignments,
+        "export_shipments": export,
+        "import_shipments": imports,
+        "total": export + imports,
+        "coverage": {
+            "export_datable": counts["export_datable"],
+            "export_total": counts["export_total"],
+            "import_datable": counts["import_datable"],
+            "import_total": counts["import_total"],
+        },
     }
 
 
@@ -244,20 +272,14 @@ def stores_value_by_store(rows):
     return stores
 
 
-def stock_days(available_value, daily_consumption_value):
-    # Runway in days: what the stock on hand is worth divided by what leaves the
-    # store per day, both in rupees. Value rather than quantity because a store
-    # holds many units of incomparable things — summing bolts and shafts is
-    # meaningless, summing their rupees is not.
-    if not daily_consumption_value or daily_consumption_value <= 0:
-        return None
-    if available_value is None or available_value <= 0:
-        return None
-    return round(float(available_value / daily_consumption_value), 1)
+# Runway is defined once, in app/dashboard/stock_runway, and the Inventory
+# dashboard reads the same function — the two screens cannot disagree about the
+# same warehouse any more.
+def stock_days(available_value, consumed_value, window_days):
+    return value_days_of_stock(available_value, consumed_value, window_days)
 
 
 def stores_stock_days(stock_by_branch, consumption_by_branch, window_days):
-    window = Decimal(window_days)
 
     per_branch = []
     total_value = ZERO
@@ -266,7 +288,6 @@ def stores_stock_days(stock_by_branch, consumption_by_branch, window_days):
     for branch, value, _lines in stock_by_branch:
         value = _num(value)
         consumed = _num(consumption_by_branch.get(branch))
-        daily = (consumed / window) if window else ZERO
 
         total_value += value
         total_consumed += consumed
@@ -275,7 +296,7 @@ def stores_stock_days(stock_by_branch, consumption_by_branch, window_days):
             "branch": branch,
             "stock_value": value,
             "consumed_value": consumed,
-            "days_of_stock": stock_days(value, daily),
+            "days_of_stock": stock_days(value, consumed, window_days),
         })
 
     per_branch.sort(
@@ -284,12 +305,12 @@ def stores_stock_days(stock_by_branch, consumption_by_branch, window_days):
         key=lambda b: (b["days_of_stock"] is None, b["days_of_stock"])
     )
 
-    total_daily = (total_consumed / window) if window else ZERO
-
     return {
         "by_branch": per_branch,
-        "total_days_of_stock": stock_days(total_value, total_daily),
+        "total_days_of_stock": stock_days(total_value, total_consumed, window_days),
         "window_days": window_days,
+        # The same sentence the Inventory dashboard prints, from the same source.
+        "basis": RUNWAY_BASIS,
     }
 
 
@@ -311,3 +332,14 @@ def stores_dead_stock(items, value, threshold_days, total_items, total_value,
         "history_days": history_days,
         "exceeds_history": bool(history_days) and threshold_days >= history_days,
     }
+
+
+def share(part, whole, digits=1):
+    """One figure's percentage of another, or None when there is no whole.
+
+    Used wherever a tile reports "x% of the book" beside its own value, so the
+    In Process / Arrived / Cancelled tiles all state their share the same way.
+    """
+    if not whole:
+        return None
+    return round(float(part) / float(whole) * 100, digits)

@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from app.dashboard.references import paginate
+
 from app.dashboard.period import build_trend
 from app.enums import Status
 
@@ -27,24 +29,103 @@ UNDER_CLEARANCE_STATUS = Status.UNDER_CUSTOM_CLEARANCE.value
 # a consignment with no rate booked yet has no PKR value.
 #-------------------------------------
 
-def consignment_value_pkr(consignment):
+STORED = "stored"
+COMPUTED = "computed"
+UNVALUED = "unvalued"
+
+
+def computed_value_pkr(consignment):
+    """Rebuilt from the item lines: qty x unit price, at the booked rate.
+
+    Only ever a FALLBACK — see consignment_value_pkr. Returns None when the
+    lines carry no price or the consignment has no rate, so "cannot be valued"
+    stays distinct from "worth nothing".
+    """
     foreign_total = Decimal("0")
     priced = False
 
     for item in consignment.items:
+        if item.is_deleted:
+            continue
         if item.quantity is not None and item.unit_price is not None:
-            foreign_total = foreign_total + (item.quantity * item.unit_price)
+            foreign_total += item.quantity * item.unit_price
             priced = True
 
     if not priced or consignment.exchange_rate is None:
-        return Decimal("0")
+        return None
 
     return foreign_total * consignment.exchange_rate
+
+
+def value_basis(consignment):
+    """Which of the three cases this consignment falls into."""
+    if consignment.pkr_total is not None:
+        return STORED
+    return COMPUTED if computed_value_pkr(consignment) is not None else UNVALUED
+
+
+def consignment_value_pkr(consignment):
+    """The consignment's PKR value: the booked total, or the lines if there is none.
+
+    THE STORED TOTAL WINS. Imports rule 4: the money totals are stored precisely
+    so a later edit or rate change cannot restate a figure that has already been
+    printed, and the overview reads the same column — so the same consignment is
+    no longer worth two different amounts depending which screen you are on.
+
+    Where nothing was booked, the value is rebuilt from the item lines rather
+    than dropped: an unbooked consignment is worth something, and counting it as
+    zero understates the period as surely as the old double-basis overstated the
+    difference between screens.
+
+    Where neither is possible the consignment contributes nothing and is COUNTED
+    as unvalued, so the shortfall is reported rather than absorbed — see
+    value_data_notes.
+
+    (Shafts value is the one figure still derived from the lines by design: it
+    is the value of the shaft ITEMS, which no consignment-level total can give.)
+    """
+    if consignment.pkr_total is not None:
+        return consignment.pkr_total
+
+    return computed_value_pkr(consignment) or Decimal("0")
 
 
 #-------------------------------------
 # THE HEADLINE NUMBERS (KPIS)
 #-------------------------------------
+
+def value_data_notes(consignments):
+    """How the money on this screen was arrived at, and what it misses.
+
+    Two things worth saying, and only when they are true:
+
+      * how many consignments had no booked total and were valued from their
+        item lines instead — a sound fallback, but a different basis, and the
+        reader should know some of the total was reconstructed;
+      * how many could not be valued at all, because those contribute nothing
+        and would otherwise silently shrink the total.
+    """
+    from app.dashboard.data_quality import coverage_note, note, collect, WARNING
+
+    total = len(consignments)
+    if not total:
+        return []
+
+    computed = sum(1 for c in consignments if value_basis(c) == COMPUTED)
+    unvalued = sum(1 for c in consignments if value_basis(c) == UNVALUED)
+
+    return collect(
+        coverage_note(
+            total - unvalued, total, "consignments shown", "a value",
+            "The rest contribute nothing to the money figures.",
+        ),
+        note(WARNING, (
+            f"{computed} of {total} consignments have no booked PKR total, so "
+            f"their value was rebuilt from the item lines (quantity x unit price "
+            f"at the booked rate). The rest use the figure finance booked."
+        )) if computed else None,
+    )
+
 
 def kpis(consignments):
     total_value = Decimal("0")
@@ -241,27 +322,117 @@ TERMINAL_STATUSES = (Status.ARRIVED_AT_WORKS.value, Status.ORDER_CANCELLED.value
 # list can say it is showing the first N.
 #-------------------------------------
 
-REFERENCE_LIMIT = 200
+# The lists are COMPLETE — no cap. Only one page travels per request; the rest
+# is fetched from GET /dashboard/imports/references. See app/dashboard/references.
+
 
 
 def consignment_reference(consignment):
+    """One consignment in the shared reference shape (see ReferenceList).
+
+    `detail` names the items it carries, because "payment ref 70386" alone does
+    not tell you what to chase — the same reason the purchases list shows the
+    item on each line.
+    """
+    items = [i.item_name for i in consignment.items if not i.is_deleted and i.item_name]
+    detail = ", ".join(items[:2])
+    if len(items) > 2:
+        detail += f" +{len(items) - 2} more"
+
+    meta = " · ".join(part for part in (
+        consignment.supplier.name if consignment.supplier else None,
+        consignment.branch.name if consignment.branch else None,
+        f"GD {consignment.gd_number}" if consignment.gd_number else None,
+    ) if part)
+
     return {
         "id": consignment.id,
         "reference": consignment.instrument_number or f"IMP-{consignment.id}",
-        "gd_number": consignment.gd_number,
-        "supplier": consignment.supplier.name if consignment.supplier else None,
-        "works": consignment.branch.name if consignment.branch else None,
-        "status": consignment.current_status,
+        "detail": detail or None,
+        "meta": meta or None,
+        "badge": consignment.current_status,
     }
 
 
-def references(consignments, limit=REFERENCE_LIMIT):
-    """{total, shown, items} for the consignments behind a figure."""
-    rows = list(consignments)
+def references(consignments, page=None, page_size=None):
+    """The consignments behind a figure, as one page of the complete list."""
+    return paginate(
+        [consignment_reference(c) for c in consignments], page, page_size
+    )
+
+
+def late_references(dated_consignments, page=None, page_size=None):
+    """Delayed consignments ranked by how late they are.
+
+    Takes (days_late, consignment) pairs rather than plain consignments so the
+    badge states the lateness instead of repeating the status, which is what
+    makes an average legible: you can see the 200-day outlier behind it.
+    """
+    rows = []
+    for days, consignment in sorted(dated_consignments, key=lambda p: p[0], reverse=True):
+        row = consignment_reference(consignment)
+        row["badge"] = f"{days} days late"
+        rows.append(row)
+
+    return paginate(rows, page, page_size)
+
+
+#-------------------------------------
+# COUNT AND VALUE, IN ONE SHAPE
+#
+# Every consignment figure on this screen — total, in process, arrived,
+# delayed — is a set of consignments, and the two things worth knowing about a
+# set are how many and how much. They used to be inconsistent: the total showed
+# both while In Process showed only a count, so a reader could see that 30
+# consignments were in flight but not that they were Rs 96m of the book.
+#
+# So they all return the SAME shape, valued the SAME way (consignment_value_pkr,
+# stored total first — imports rule 4), and the front end renders them
+# identically. A figure that cannot be compared with the one beside it is not
+# worth showing next to it.
+#-------------------------------------
+
+def count_and_value(consignments, total_value=None):
+    """{count, value, value_pct} — value_pct against the whole screen's money."""
+    value = sum((consignment_value_pkr(c) for c in consignments), Decimal("0"))
+
     return {
-        "total": len(rows),
-        "shown": min(len(rows), limit),
-        "items": [consignment_reference(c) for c in rows[:limit]],
+        "count": len(consignments),
+        "value": value,
+        "value_pct": _pct(float(value), float(total_value)) if total_value else None,
+    }
+
+
+def population_split(consignments):
+    """The screen's consignments cut by where they have got to.
+
+    IN PROCESS is everything not yet terminal. ARRIVED and CANCELLED are the two
+    terminal states, reported separately because they mean opposite things — an
+    arrival is work completed, a cancellation is work abandoned, and folding them
+    into one "closed" tile hides the difference.
+    """
+    total = sum((consignment_value_pkr(c) for c in consignments), Decimal("0"))
+
+    in_process, arrived, cancelled = [], [], []
+    for consignment in consignments:
+        if consignment.current_status == CLOSED_STATUS:
+            arrived.append(consignment)
+        elif consignment.current_status in TERMINAL_STATUSES:
+            cancelled.append(consignment)
+        else:
+            in_process.append(consignment)
+
+    return {
+        "total": count_and_value(consignments),
+        "in_process": count_and_value(in_process, total),
+        "arrived": count_and_value(arrived, total),
+        "cancelled": count_and_value(cancelled, total),
+        "references": {
+            "total": references(consignments),
+            "in_process": references(in_process),
+            "arrived": references(arrived),
+            "cancelled": references(cancelled),
+        },
     }
 
 
@@ -300,7 +471,7 @@ def is_shaft(item):
     return any(shaft.lower() in name for shaft in SHAFT_NAMES)
 
 
-def shafts_value(consignments):
+def shafts_value(consignments, page=None, page_size=None):
     """What the shafts are worth, counted in CONSIGNMENTS.
 
     The value has to be read off the item lines — it is the shaft rows that
@@ -338,7 +509,7 @@ def shafts_value(consignments):
         "consignments": carriers,
         "incomplete_consignments": incomplete,
         "item_names": SHAFT_NAMES,
-        "references": references(carrier_consignments),
+        "references": references(carrier_consignments, page, page_size),
     }
 
 
@@ -357,9 +528,11 @@ NOT_STATED = "Not stated"
 EFS_CLASSES = [EFS, REGULAR, NOT_STATED]
 
 
-def efs_split(consignments):
+def efs_split(consignments, page=None, page_size=None):
     counts = {c: 0 for c in EFS_CLASSES}
     by_class = {c: [] for c in EFS_CLASSES}
+    # Value as well as count, for the same reason every other tile carries both:
+    # 12 EFS shipments worth Rs 400m and 12 worth Rs 4m are not the same news.
 
     for consignment in consignments:
         name = consignment.consignment_type or NOT_STATED
@@ -379,9 +552,11 @@ def efs_split(consignments):
             for name in EFS_CLASSES
         ],
         # The EFS consignments themselves, so the tile can list them.
-        "efs_references": references(by_class[EFS]),
+        "efs_references": references(by_class[EFS], page, page_size),
         "efs": counts[EFS],
+        "efs_value": count_and_value(by_class[EFS])["value"],
         "regular": counts[REGULAR],
+        "regular_value": count_and_value(by_class[REGULAR])["value"],
         "not_stated": counts[NOT_STATED],
         # The share among records that actually say — reported separately so a
         # reader can use it without mistaking it for a share of everything.
@@ -401,10 +576,12 @@ def efs_split(consignments):
 
 def demand_counts(consignments):
     processed = 0
+    processed_consignments = []
 
     for consignment in consignments:
         if consignment.current_status in TERMINAL_STATUSES:
             processed += 1
+            processed_consignments.append(consignment)
 
     received = len(consignments)
     in_process = received - processed
@@ -414,6 +591,8 @@ def demand_counts(consignments):
         "processed": processed,
         "in_process": in_process,
         "processed_pct": _pct(processed, received),
+        # Which ones reached a terminal status, so the tile is not a dead end.
+        "processed_references": references(processed_consignments),
     }
 
 
@@ -427,7 +606,7 @@ def demand_counts(consignments):
 DELAY_GRACE_DAYS = 7
 
 
-def delivery_delay(consignments):
+def delivery_delay(consignments, page=None, page_size=None):
     """Delay = ETA Works - required date, in days, beyond a 7-day grace.
 
     More than 7 days past the required date is delayed. Anything from arriving
@@ -447,7 +626,7 @@ def delivery_delay(consignments):
     within_grace = 0
     total_days_late = 0
     worst = None
-    late_consignments = []
+    late_consignments = []   # (days_late, consignment), so the list can rank
 
     for consignment in consignments:
         required = consignment.required_date
@@ -460,7 +639,7 @@ def delivery_delay(consignments):
 
         if days > DELAY_GRACE_DAYS:
             late += 1
-            late_consignments.append(consignment)
+            late_consignments.append((days, consignment))
             total_days_late += days
             worst = days if worst is None else max(worst, days)
         else:
@@ -470,12 +649,22 @@ def delivery_delay(consignments):
 
     comparable = late + on_time
 
+    late_value = sum(
+        (consignment_value_pkr(c) for _days, c in late_consignments), Decimal("0")
+    )
+
     return {
         "delay_pct": _pct(late, comparable),
         "delayed": late,
+        # The money sitting behind the delay, so the tile reports count AND
+        # value like every other consignment figure on the screen.
+        "delayed_value": late_value,
         "on_time": on_time,
-        # The actual delayed consignments, so the tile can list what to chase.
-        "delayed_references": references(late_consignments),
+        # The actual delayed consignments, WORST FIRST and badged with their
+        # own lateness — the average is only useful if you can see what pulls
+        # it. Serves both the Delivery Delay and Avg Days Late tiles: they are
+        # computed over exactly this set.
+        "delayed_references": late_references(late_consignments, page, page_size),
         # Late, but inside the grace — reported so "on time" is not mistaken
         # for "arrived by the required date".
         "within_grace": within_grace,
@@ -623,3 +812,151 @@ def category_delays(consignments, limit=10):
     # of the real problem. Count first, then percentage to break ties.
     rows.sort(key=lambda r: (r["delayed"], r["delay_pct"] or 0), reverse=True)
     return rows[:limit]
+
+
+#-----------------------------------------------------
+# LINE-LEVEL REFERENCE LISTS
+#
+# A reference list NEVER HIDES LINES. A consignment carrying three shaft rows
+# shows as three rows, each with its own arrival date and its own value.
+#
+# Folding them into one line per consignment is what made payment ref 65704
+# unexplainable: a single row standing for seven lines that arrived on two
+# different dates, Rs 8.98m of it in August and Rs 1.25m the previous month.
+# Nobody could see that from the list, because the list showed the header.
+#
+# The KPI still counts CONSIGNMENTS. The list says so — `unit` and `groups`
+# carry "3 lines across 1 consignment" — so the two numbers are reconcilable
+# instead of merely different.
+#-----------------------------------------------------
+
+def line_reference(row):
+    """One consignment ITEM line in the shared reference shape."""
+    quantity = row.quantity
+    unit = row.unit_of_measurement or ""
+    measure = f"{quantity:,.3f}".rstrip("0").rstrip(".") if quantity is not None else "?"
+
+    return {
+        # The LINE's id, so two identical rows on one consignment stay distinct.
+        "id": f"line-{row.id}",
+        # The number it is looked up by is still the consignment's.
+        "reference": row.instrument_number or f"IMP-{row.consignment_id}",
+        "detail": row.item_name,
+        "meta": " · ".join(part for part in (
+            f"{measure} {unit}".strip() or None,
+            f"ETA {row.line_eta}" if row.line_eta else "no ETA",
+            row.supplier,
+        ) if part),
+        "badge": _money(row.value),
+    }
+
+
+def _money(amount):
+    value = float(amount or 0)
+    if abs(value) >= 1_000_000_000:
+        return f"Rs {value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"Rs {value / 1_000_000:.1f}M"
+    if abs(value) >= 1_000:
+        return f"Rs {value / 1_000:.0f}K"
+    return f"Rs {value:,.0f}"
+
+
+def line_references(rows, page=None, page_size=None):
+    """{total in LINES, groups in CONSIGNMENTS} for a set of item lines."""
+    return paginate(
+        [line_reference(row) for row in rows], page, page_size,
+        unit="line",
+        groups=len({row.consignment_id for row in rows}),
+        group_unit="consignment",
+    )
+
+
+def shafts_from_lines(rows):
+    """The shafts tile, computed from the LINES and dated by them.
+
+    It used to take the consignments whose HEADER fell in the window and sum
+    their shaft lines — so every line of payment ref 65704 counted as August,
+    including the four that arrived on 27 July. Selecting the lines directly and
+    filtering on each line's own ETA is what makes the tile agree with the list
+    it opens.
+    """
+    value = sum((Decimal(str(row.value)) for row in rows if row.value is not None),
+                Decimal("0"))
+    unpriced = sum(1 for row in rows if row.value is None)
+
+    return {
+        "value": value,
+        "lines": len(rows),
+        "consignments": len({row.consignment_id for row in rows}),
+        # Lines with no price or no booked rate cannot be valued; counted rather
+        # than silently treated as zero.
+        "unpriced_lines": unpriced,
+        "references": line_references(rows),
+    }
+
+
+def period_value_from_lines(rows):
+    """The screen's headline money, summed over LINES and dated by them.
+
+    Same basis and same rows as the Overview's imports period value, so the two
+    screens cannot report different money for the same window. `consignments` is
+    the distinct consignments having a line in the window — a consignment that
+    delivered into two months is counted in both, because it did.
+    """
+    value = sum((Decimal(str(r.value)) for r in rows if r.value is not None),
+                Decimal("0"))
+
+    return {
+        "value": value,
+        "consignments": len({r.consignment_id for r in rows}),
+        "lines": len(rows),
+        "unpriced_lines": sum(1 for r in rows if r.value is None),
+        "basis": "line ETA at works",
+        "references": line_references(rows),
+    }
+
+
+def population_from_lines(rows):
+    """In Process / Arrived / Cancelled, on the SAME line-dated money.
+
+    Built from the period's LINES, not from the consignment headers, so this
+    screen carries ONE basis for money rather than two: the population tiles
+    used to sum consignment-level values (Rs 29.27bn) while the headline summed
+    in-window lines (Rs 29.07bn), and two totals on one screen differing only by
+    basis is the bug this whole pass exists to remove.
+
+    A consignment is counted in a bucket if it has a line in the window; its
+    VALUE in that bucket is only the lines that actually arrived in it.
+    """
+    buckets = {"in_process": [], "arrived": [], "cancelled": []}
+
+    for row in rows:
+        if row.current_status == CLOSED_STATUS:
+            buckets["arrived"].append(row)
+        elif row.current_status in TERMINAL_STATUSES:
+            buckets["cancelled"].append(row)
+        else:
+            buckets["in_process"].append(row)
+
+    def block(lines, total_value=None):
+        value = sum((Decimal(str(r.value)) for r in lines if r.value is not None),
+                    Decimal("0"))
+        return {
+            "count": len({r.consignment_id for r in lines}),
+            "lines": len(lines),
+            "value": value,
+            "value_pct": _pct(float(value), float(total_value)) if total_value else None,
+        }
+
+    total = sum((Decimal(str(r.value)) for r in rows if r.value is not None),
+                Decimal("0"))
+
+    return {
+        "total": block(rows),
+        **{name: block(lines, total) for name, lines in buckets.items()},
+        "references": {
+            "total": line_references(rows),
+            **{name: line_references(lines) for name, lines in buckets.items()},
+        },
+    }

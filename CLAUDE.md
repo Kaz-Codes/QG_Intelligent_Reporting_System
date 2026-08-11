@@ -397,7 +397,14 @@ multi-select filters are repeated query params; and each returns **aggregates +
 option lists only — no row lists** (the per-row "view data" table was dropped,
 keeping payloads in KBs).
 
-- **imports** `GET /dashboard/imports` — operational consignments.
+- **imports** `GET /dashboard/imports` — **every consignment in the window, at
+  every status.** It used to hide "Arrived at Works" as an operational view,
+  which is why it reported Rs 210m where the overview reported Rs 262m over the
+  same window: the Rs 52.7m gap was four arrived consignments and nothing else.
+  `population` now splits the set into **In Process / Arrived / Cancelled**, each
+  carrying **count AND value**, so "what is still moving" is a tile rather than a
+  hidden filter. Takes `date_field` (`eta_works` | `required_date`), `search`
+  (payment ref, GD, origin, supplier, item) and `shafts_only`.
 - **logistics** — **three tab endpoints**, each its own data source + filters:
   `GET /dashboard/logistics/shipments` (`LogisticsConsignment`), `/packing`
   (`LogisticsPackage` + its order), and `/transport` (**`TruckingConsignment`** —
@@ -407,9 +414,10 @@ keeping payloads in KBs).
 - **purchases** `GET /dashboard/purchases` and **inventory**
   `GET /dashboard/inventory` — the flat loaded stores tables (`purchases_data`,
   `stock`, `issuance`, `store_requisition`). Purchases derives an order status
-  (Pending/Completed/Delayed) + overdue; inventory derives stock status,
+  (Pending/On Time/Delayed) + overdue; inventory derives stock status,
   **reorder level** (from store requisitions) and **days-of-stock runway** (from
-  issuance).
+  issuance). Inventory takes `date_from`/`date_to` for its **issuance** figure
+  only — stock itself is a snapshot with no date at all.
 - **whole** `GET /dashboard/overview` — the cross-module overview, and the one
   dashboard that reads every module at once (imports, purchases, logistics,
   trucking, stores). It **never materializes rows** — every figure is a single
@@ -452,6 +460,86 @@ keeping payloads in KBs).
     `issuance`/`stock` hold full company names.** They share no values, so the
     purchase-vs-issuance chart is deliberately **not** branch-filtered. Mapping
     them belongs in the loader, agreed with the business.
+### Imports money is counted in the month it ARRIVED
+
+A consignment groups every sheet row sharing a payment reference, and **those
+rows do not all arrive together** — 19 of 175 consignments carry lines with
+different ETAs, one spanning seven dates, and 46 individual lines have an ETA
+that is not their header's. The loader kept only the first line's ETA, so a
+whole consignment was credited to one month: ref 65704 reported Rs 10.64m in
+August when Rs 8.98m arrived on 6 August and Rs 1.25m had landed on 27 July.
+
+So `consignment_items` now carries its **own `eta_works`** (loaded per row;
+`python -m app.loading.scripts.backfill_line_eta_works` repairs an existing
+database), and:
+
+- **Value is summed over LINES**, each dated by its own ETA — falling back to
+  its consignment's where the sheet gave the line none (9 of 450).
+- **Window membership is by line**: a consignment belongs to a window if ANY of
+  its lines arrives in it, so one straddling two months contributes to both.
+- **Counts stay in consignments.** The tile says 1 consignment, the list says
+  3 lines, and the panel states both.
+- The **stored `pkr_total`** is still preferred for un-windowed consignment-level
+  figures (`CONSIGNMENT_VALUE`); it cannot be used for a partial window because
+  there is no stored per-line PKR to split it with. The two agree to within
+  sheet rounding (0.05%) wherever a consignment sits wholly inside one window.
+- **One money basis per screen.** The imports population tiles sum the same
+  in-window lines the headline does; they used to sum consignment-level totals,
+  putting Rs 29.27bn beside Rs 29.07bn on one page.
+
+### One metric, one definition (`app/dashboard/stock_runway.py`)
+
+**A figure that appears on two screens is computed in ONE place.** The rule
+exists because it was broken: Inventory divided stock value by twelve months'
+issuance while the overview's Stores section divided it by ninety days' — and
+printed the answer under a tile captioned "at the last 12 months' usage". The
+same warehouse had 81 days of runway on one screen and 54 on the other, and
+neither number was wrong for its own formula, which is what makes that class of
+bug expensive: both screens looked right.
+
+`stock_runway` is now the only definition of days of stock:
+
+    days of stock = stock value / (value issued in the window / days)
+
+- **Value, not quantity** — a store holds bolts and shafts; summing units is
+  meaningless, summing rupees is not.
+- **Twelve months**, which is what the tiles always claimed.
+- The window ends at the **latest issuance in the data**, not today: the table is
+  historical, and anchoring to today measures an empty window and reports
+  infinite runway everywhere.
+- **Issuance is matched to the stock it depletes**, on `(item_code, branch)`.
+  Counting every issuance instead put Rs 1.75bn of consumption against items with
+  no stock row at all — consumption that cannot deplete anything on hand. That
+  single population difference was the whole 81-against-58 gap once the formulas
+  were unified.
+- No consumption in the window → **`None`**, never 0 and never "infinite".
+
+### The records behind a figure (`app/dashboard/references.py`)
+
+Every KPI can be opened to see the records it counted. Three rules:
+
+- **The list is COMPLETE.** `total` is always the true count and every record is
+  reachable by paging. A cap silently changes the question from "which records is
+  this about" to "which did we feel like showing", and the reader cannot tell.
+- **A list NEVER HIDES LINES.** Where a record has lines under it, the rows ARE
+  the lines: a consignment carrying three shaft rows shows as three rows, each
+  with its own arrival date and value. Folding them up looks tidy and destroys
+  the only view that explains the number — it is what let payment ref 65704 show
+  one row for seven lines arriving in two different months.
+- **Both units are published, never one silently.** A line list carries `unit`,
+  `groups` and `group_unit`, so the panel reads *"3 lines across 1 consignment"*
+  and the tile's own count stays reconcilable. What is banned is a list that
+  quietly reports a different number with nothing saying why — the Delayed tile
+  reading 247 over a list reading 454.
+
+Complete does not mean shipped at once: procurement alone stands over 8,731
+orders (1.3 MB) on a screen that reloads whenever a filter moves. So the payload
+carries the true total plus **page one**, and
+**`GET /dashboard/{overview,imports,purchases,inventory}/references`** serves the
+rest — same filters as the dashboard, plus `key`, `page`, `page_size`
+(default 50, max 500). `key` is matched against a **fixed registry**; an unknown
+key is a 400, never a way to reach a query the screen was not meant to run.
+
 ### The reporting window (`app/dashboard/period.py`)
 
 **Every dashboard defaults to the CURRENT MONTH.** Both bounds omitted → the 1st
@@ -461,6 +549,12 @@ what "this month" means. `date_from`/`date_to` are the dashboard-wide window;
 each screen's own older range filters (`po_from_date`, `from_date`) still exist
 and are separate.
 
+**Every time-based section ships `coverage`** — the four overview sections
+included. Without it the shared period control's "All data" preset fell back to a
+hardcoded `2000-01-01`, putting a date in the From box for a year the data has
+never held, and there was nothing to drive the "jump to the latest month with
+data" control the spec requires on every screen.
+
 **Every period figure ships with `coverage`**, because the sources do not all
 run to today: purchases stop **2026-01-23** while issuance runs to this morning.
 Defaulting to the current month therefore leaves purchases legitimately empty,
@@ -469,6 +563,17 @@ and `is_empty` + `latest_month` let the screen say *"no purchases in August 2026
 Rs 0 that reads as a collapse in spend.
 
 ### Figures deliberately removed (they were duplicates or meaningless)
+
+- overview `Stores holding stock` — a count of branches, which changes about once
+  a year. Replaced by **issuance in the period** (value + items by item code).
+- inventory `Issued (12m)` / `Issued (3m)` — one question at two arbitrary
+  window lengths, neither chosen by anyone, and neither able to say what went out
+  *this month*. Replaced by **one issuance tile with its own date filter**. The
+  12-month figures still drive the movement split and the runway; they are just
+  no longer tiles.
+- inventory `Dead Stock` / `Items in Stock` — dead stock is a block in the
+  movement card with its own drill-down, and the item count is on Stock Value.
+- overview `Categories` — it counted the bars in the chart directly below it.
 
 - imports `import_spend` — restated `kpis.total_value_pkr` on a different basis;
   **shafts value** took the tile.
@@ -491,6 +596,19 @@ Rs 0 that reads as a collapse in spend.
   denominator cannot drift from the data. Opens on hover *and* keyboard focus.
 - `components/PeriodFilter.tsx` is the shared timeline control plus
   `PeriodSummary`, which renders the empty-window message described above.
+- **Related KPIs share one format.** Anything that is a SET of records reports
+  **count and value in the same shape** (`{count, value, value_pct}`), so a row of
+  tiles can be read across. In Process used to show a bare count beside a value —
+  it said 30 consignments were moving without saying whether that was Rs 4m or
+  Rs 400m.
+- **Percentages are compared with percentages.** On-Time and Delayed both report
+  a share of the same denominator (orders actually purchased) and sum to 100; the
+  counts live in the sub-line and the drill-down.
+- **The Shafts tab is a filter, not two tiles.** As tiles, "9 shafts in process"
+  sat beside a 30 that counted everything and the two could not be compared. As a
+  tab it narrows every figure, chart and reference list at once. The
+  category-delay chart is withheld while it is active — with the set restricted
+  to shafts, "delay by item category" is one bar pretending to be a comparison.
 - **All the formulas are in `calculations.md`.**
 
 ## reports — `/reports`
@@ -628,16 +746,37 @@ models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
   **`python -m app.loading.scripts.resync_sequences`** repairs a database loaded
   before that fix (`--check` to report only); it only ever moves a sequence
   forward, so it is safe to run at any time.
-- **`backfill_import_demand_dates` is standalone and must be re-run after any
-  imports reload.** It is the only source of `requisition_date`, `required_date`,
-  `pkr_total` and `foreign_total` on loaded consignments — the imports loader
-  writes none of them. It is *not* part of `load_all`, so a reload silently wipes
-  all four and every figure built on them (the overview's import value, the
-  reports spend column) reads zero without erroring. Run
-  **`python -m app.loading.scripts.backfill_import_demand_dates`** after loading
-  imports. The other backfills do not have this problem — terminal flags, stock
-  rank and the logistics/trucking close flags were folded into their loaders and
-  survive a reload on their own.
+- **A loader keyed on column NAMES fails silently when a workbook is
+  re-shaped.** The purchases export split its old `PPC/Store` column into two
+  (`PPC`, a date; `Store`, a timestamp of the same event). The loader kept asking
+  for the old name, `clean_date` was handed a missing key, and `ppc_store` went
+  NULL on all 65,520 rows — taking the overview's "store demand to purchase"
+  cycle time to a basis of zero and a blank tile. Nothing errored.
+  `load_02_purchases_data` now reads whichever of the three names is present, and
+  **`python -m app.loading.scripts.backfill_purchase_store_dates`** repairs a
+  database already loaded (it verifies the sheet's row order against the stored
+  PO + purchase date before writing, and aborts below 95% agreement).
+- **Every reload ENDS BY CHECKING ITSELF** (`app/loading/scripts/post_load.py`,
+  run automatically by both `load_all` and `reload_changed`). It reports on every
+  column that has silently arrived empty before — purchase store-demand dates,
+  import demand dates + PKR totals, stock ABC ranks, purchase/issuance item codes
+  — and **repairs the ones that have a repair**, naming the rest. Repairs are
+  CONDITIONAL, not unconditional: the loaders write these columns correctly now,
+  so re-running a backfill on every load would re-read a 65,000-row workbook to
+  write values already there. It runs only when the check finds the column empty
+  — which is exactly when a workbook has been re-shaped again. Nothing to
+  remember, and no cost when nothing is wrong.
+- **`backfill_import_demand_dates` runs automatically** from both `load_all` and
+  `reload_changed`, and the post-load check catches it if it did not. It is the
+  only source of `requisition_date`, `required_date`, `pkr_total` and
+  `foreign_total` on loaded consignments — the imports loader writes none of
+  them — so when it was standalone, a reload silently wiped all four and every
+  figure built on them (the overview's import value, the reports spend column)
+  read zero without erroring. It can still be run on its own:
+  **`python -m app.loading.scripts.backfill_import_demand_dates`**. The other
+  backfills never had this problem — terminal flags, stock rank and the
+  logistics/trucking close flags were folded into their loaders and survive a
+  reload on their own.
 
 ---
 

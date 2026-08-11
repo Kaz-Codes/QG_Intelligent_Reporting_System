@@ -1,5 +1,6 @@
 import { apiFetch } from './client'
 import type { Coverage, ResolvedPeriod } from '@/components/PeriodFilter'
+import type { ReferenceSet } from '@/components/ReferenceList'
 
 /**
  * The purchases dashboard endpoint returns the finished figures, not just raw
@@ -44,6 +45,11 @@ export interface PurchaseKpis {
   completed_orders: number
   delayed_orders: number
   on_time_pct: number
+  /** The same denominator as on_time_pct, so the two sum to 100. */
+  delayed_pct: number
+  /** Orders actually purchased — on-time plus delayed. Pending orders are in
+   *  neither percentage, which is why they do not describe `orders_count`. */
+  purchased_orders: number
   top_supplier: string | null
   top_supplier_amount: number
   /** Import (IOL) is the in-house import channel, not a vendor, so it is left
@@ -119,6 +125,11 @@ export interface PurchasesDashboardFilters {
    *  never computes that itself, so the two cannot disagree. */
   date_from?: string
   date_to?: string
+  /** Which procurement event the window measures: po_date | purchase. */
+  date_field?: string
+  /** Free text over PO number, ref, item, supplier and bill number. Applied
+   *  server-side, so it narrows the KPIs and charts, not just a row list. */
+  search?: string
 }
 
 interface RawResponse {
@@ -133,10 +144,14 @@ interface RawResponse {
     procurement_kpis: ProcurementKpis
     period: ResolvedPeriod
     coverage: Coverage
+    date_field: string
+    date_field_options: { value: string; label: string }[]
     status_split: LabelValue[]
     value_by_supplier: LabelValue[]
     value_by_branch: LabelValue[]
     overdue_buckets: OverdueBucket[]
+    delayed_line_references: ReferenceSet
+    references: PurchaseReferences
     value_trend: ValueTrend
     statuses: string[]
     suppliers: string[]
@@ -147,16 +162,33 @@ interface RawResponse {
   }
 }
 
+/** Which orders each headline counted — one set per tile that counts orders. */
+export interface PurchaseReferences {
+  orders: ReferenceSet
+  /** ORDER-level, so its total IS `kpis.delayed_orders`. The LINE-level
+   *  breakdown inside those orders is `delayedLineReferences`. */
+  delayed: ReferenceSet
+  on_time: ReferenceSet
+  top_supplier: ReferenceSet
+}
+
 export interface PurchasesDashboardResponse {
   rows?: PurchaseRow[]
   kpis: PurchaseKpis
   procurementKpis: ProcurementKpis
   period: ResolvedPeriod
   coverage: Coverage
+  dateField: string
+  dateFieldOptions: { value: string; label: string }[]
   statusSplit: LabelValue[]
   valueBySupplier: LabelValue[]
   valueByBranch: LabelValue[]
   overdueBuckets: OverdueBucket[]
+  /** The LINES behind the delay figures: PO, item, its own lateness. The
+   *  headline is per order; this is what an order was late because of. */
+  delayedLineReferences: ReferenceSet
+  /** The ORDERS behind the non-delay tiles, badged with what they cost. */
+  references: PurchaseReferences
   valueTrend: ValueTrend
   statuses: string[]
   suppliers: string[]
@@ -183,10 +215,14 @@ export async function getPurchasesDashboard(filters: PurchasesDashboardFilters =
     procurementKpis: data.procurement_kpis,
     period: data.period,
     coverage: data.coverage,
+    dateField: data.date_field,
+    dateFieldOptions: data.date_field_options,
     statusSplit: data.status_split,
     valueBySupplier: data.value_by_supplier,
     valueByBranch: data.value_by_branch,
     overdueBuckets: data.overdue_buckets,
+    delayedLineReferences: data.delayed_line_references,
+    references: data.references,
     valueTrend: data.value_trend,
     statuses: data.statuses,
     suppliers: data.suppliers,

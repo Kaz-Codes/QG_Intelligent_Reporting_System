@@ -95,12 +95,22 @@ so they move the job count and not the cost.
 
 **Days of stock is measured in rupees, not units** — a store holds many units of
 incomparable things; summing bolts and shafts is meaningless, summing their
-rupees is not. The consumption window is **90 days** (matching the inventory
-dashboard so the two agree) and ends at the **latest issuance in the data**, not
-today: the data is historical, and anchoring to today would measure an empty
-window and report every store as having infinite runway. A branch with no
-consumption history has `days_of_stock: null` and sorts **last**, so it never
-reads as the healthiest store on the list.
+rupees is not.
+
+**The formula lives in `app/dashboard/stock_runway.py` and BOTH screens call
+it.** This section used to divide by a **90-day** window while its tile said "at
+the last 12 months' usage", so the same warehouse read 81 days on Inventory and
+54 here — two right answers to two different questions under one label. The
+canonical window is **twelve months (365 days)**, ending at the **latest issuance
+in the data**, not today: the data is historical, and anchoring to today would
+measure an empty window and report every store as having infinite runway.
+
+Consumption counts only issuance that **depletes stock actually held** — matched
+to a stock row on `(item_code, branch)`. Counting every issuance put Rs 1.75bn
+against items with no stock row at all, which cannot deplete anything on hand;
+that population difference was the rest of the 81-against-58 gap once the windows
+were unified. A branch with no consumption history has `days_of_stock: null` and
+sorts **last**, so it never reads as the healthiest store on the list.
 
 `dead_stock` also returns **`history_days`** (the span of the issuance table,
 currently ~350) and **`exceeds_history`**. Once the threshold reaches back past
@@ -189,21 +199,33 @@ and `search`.
 - **status**
   - no `purchase` date → **Pending**
   - `required_d < purchase` → **Delayed** (purchased late)
-  - otherwise → **Completed**
+  - otherwise → **On Time**
 - **days_overdue** = `(purchase − required_d).days` when Delayed, else `null`.
 
 ### KPIs
 | KPI | Formula |
 |---|---|
-| `orders_count` | row count |
+| `orders_count` | distinct POs (an order, never a line — see below) |
 | `total_value` | Σ `amount` |
 | `avg_order_value` | `total_value / orders_count` |
-| `pending_orders` / `completed_orders` / `delayed_orders` | counts by derived status |
-| `on_time_pct` | `completed / (completed + delayed) × 100` |
+| `pending_orders` / `completed_orders` / `delayed_orders` | counts by derived ORDER status |
+| `purchased_orders` | `completed + delayed` — the denominator both rates use |
+| `on_time_pct` | `completed / purchased_orders × 100` |
+| `delayed_pct` | `delayed / purchased_orders × 100` — sums to 100 with the above |
 | `top_supplier` / `top_supplier_amount` | supplier with the largest Σ `amount` |
 
+**ORDERS AND LINES ARE BOTH REAL, AND ARE NEVER MIXED.** Every KPI counts
+ORDERS: an order's status is the worst of its lines (Pending > Delayed > On
+Time), and its lateness is the **average across its late lines**, so one very
+late line no longer speaks for a whole order. The reference list behind a tile
+therefore counts orders too — `references.delayed` totals exactly
+`delayed_orders`. The LINE-level breakdown is published separately as
+`delayed_line_references`, and is a bigger number by construction: 247 delayed
+orders currently contain 454 late lines. A tile reading 247 over a list reading
+454 was the bug; publishing both, each labelled with its unit, is the fix.
+
 ### Charts
-- **status_split** — Pending / Completed / Delayed counts.
+- **status_split** — Pending / On Time / Delayed counts.
 - **value_by_supplier**, **value_by_branch** — Σ `amount`, top 8.
 - **overdue_buckets** — Delayed rows bucketed by `days_overdue` into the four
   standard aging tiers (`0-30` / `31-60` / `61-90` / `90+ days`), in that fixed
@@ -272,9 +294,13 @@ planner's manual value).
   - `available_qty < reorder_level` → **Below Reorder**
   - otherwise → **OK**
 - **reorder_status** — `available_qty < reorder_level` → **Reorder Needed**, else **Adequate**.
-- **days_of_stock** (runway) = `available_qty ÷ avg daily issuance`, where avg
-  daily issuance = Σ `Issuance.quantity` over the last `CONSUMPTION_WINDOW_DAYS`
-  (ending at the latest `from_date`) ÷ `CONSUMPTION_WINDOW_DAYS`. Rounded to one
+- **days_of_stock** (per item, runway) = `available_qty ÷ avg daily issuance`,
+  where avg daily issuance = Σ `Issuance.quantity` over the last
+  `CONSUMPTION_WINDOW_DAYS` (ending at the latest `from_date`) ÷
+  `CONSUMPTION_WINDOW_DAYS`. This is the per-item QUANTITY runway; the
+  branch/overall roll-up on both this screen and the overview is the VALUE
+  runway from `stock_runway.py` (see above), which is why the two are stated
+  separately rather than one being derived from the other. Rounded to one
   decimal (not floored — a half-day runway is the most urgent, and `int()` would
   truncate it to 0). `null` when there's no issuance history **or the item is
   already out of stock** (`available ≤ 0`) — a "days remaining" figure is

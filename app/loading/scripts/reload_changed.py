@@ -22,11 +22,16 @@ WHAT IT TOUCHES
                          logistics family, trucking family, users/permissions
 
 AFTERWARDS
-    The two standalone backfills are re-run automatically, because a reload
-    wipes what they write:
+    The standalone backfills are re-run automatically, because a reload wipes
+    what they write:
       * backfill_import_demand_dates — the ONLY source of requisition_date,
         required_date, pkr_total and foreign_total on loaded consignments
       * resync_sequences — belt and braces; the loaders bump their own now
+
+    Then `post_load.verify_load` checks that every column the loaders are
+    supposed to write actually arrived, and repairs the ones it can. That is
+    the safety net for a re-shaped workbook: a renamed column does not raise,
+    it just lands NULL, and the figure built on it quietly reads zero.
 
 USAGE
     python -m app.loading.scripts.reload_changed

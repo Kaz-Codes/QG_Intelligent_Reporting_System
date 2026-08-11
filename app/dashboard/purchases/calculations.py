@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from app.dashboard.references import paginate
+
 from app.dashboard.period import build_trend
 
 #-----------------------------------------------------
@@ -117,15 +119,31 @@ def order_value(lines):
     return sum((_amount(line) for line in lines), Decimal("0"))
 
 
+def line_days_late(line):
+    """How late one purchase line was. None if on time or not comparable."""
+    if line.purchase is None or line.required_d is None:
+        return None
+    days = (line.purchase - line.required_d).days
+    return days if days > 0 else None
+
+
 def order_days_late(lines):
-    """How late the order was, i.e. its LAST line to arrive. None if on time."""
-    late = [
-        (line.purchase - line.required_d).days
-        for line in lines
-        if line.purchase is not None and line.required_d is not None
-        and line.purchase > line.required_d
-    ]
-    return max(late) if late else None
+    """How late the order was: the AVERAGE across its late lines.
+
+    Averaged rather than taking the worst line. The worst line answers "when did
+    this order finally complete", which is a real question but a harsh one — a
+    six-line order with five lines on time and one 90 days late read as 90 days
+    late, and the headline average was then an average of worst cases.
+
+    The average says how late the order ran overall, which is what a figure
+    labelled "average delay" should mean. The per-line detail is one click away
+    on the tile, so nothing is lost — the outlier line is still visible, it just
+    no longer speaks for the whole order.
+
+    None when no line was late.
+    """
+    late = [d for d in (line_days_late(line) for line in lines) if d is not None]
+    return (sum(late) / len(late)) if late else None
 
 
 def kpis(rows, orders=None):
@@ -166,6 +184,10 @@ def kpis(rows, orders=None):
     # Of the orders actually purchased, how many landed on time.
     purchased = completed + delayed
     on_time_pct = round((completed / purchased) * 100) if purchased else 0
+    # Stated as a percentage on the SAME denominator as on-time, so the two
+    # tiles are directly comparable and sum to 100. The count is still
+    # published as `delayed_orders` and shown by the tile's drill-down.
+    delayed_pct = round((delayed / purchased) * 100) if purchased else 0
 
     return {
         "orders_count": orders_count,
@@ -175,6 +197,11 @@ def kpis(rows, orders=None):
         "completed_orders": completed,
         "delayed_orders": delayed,
         "on_time_pct": on_time_pct,
+        "delayed_pct": delayed_pct,
+        # The denominator both percentages rest on: orders actually purchased.
+        # Pending orders are in neither, which is why the two do not describe
+        # `orders_count`.
+        "purchased_orders": purchased,
         "top_supplier": top_supplier,
         "top_supplier_amount": top_supplier_amount,
         # Named so the screen can say WHY the supplier figures and the total do
@@ -334,6 +361,167 @@ def value_trend(orders, period_from, period_to):
 # here, computed over the same filtered rows.
 #=====================================================
 
+#-------------------------------------
+# WHAT IS BEHIND A DELAY FIGURE
+#
+# The headline is per ORDER, because that is the unit the screen counts in. But
+# an order is late because particular LINES were late, and "order 4471 is 12
+# days late" is not actionable — which item, and by how much, is.
+#
+# So the drill-down is per line: the PO it belongs to, the item, its own
+# lateness and what it cost. Sorted worst first, because the reason anybody
+# opens this list is to find what to chase.
+#-------------------------------------
+
+# Complete lists, one page per request — see app/dashboard/references.
+
+
+
+def _money(amount):
+    value = float(amount or 0)
+    if abs(value) >= 1_000_000_000:
+        return f"Rs {value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"Rs {value / 1_000_000:.1f}M"
+    if abs(value) >= 1_000:
+        return f"Rs {value / 1_000:.0f}K"
+    return f"Rs {value:,.0f}"
+
+
+def order_references(orders, page=None, page_size=None, badge=None):
+    """The ORDERS behind a figure — PO, what it was for, and what it cost.
+
+    `badge` decides what the right-hand figure says; it defaults to the order's
+    value, which is what most tiles here are about. Sorted by value so the list
+    opens on the orders worth looking at first.
+    """
+    rows = []
+
+    for lines in orders:
+        head = lines[0]
+        items = [line.item_name for line in lines if line.item_name]
+        detail = ", ".join(items[:2])
+        if len(items) > 2:
+            detail += f" +{len(items) - 2} more"
+
+        value = order_value(lines)
+        rows.append({
+            "id": head.id,
+            "reference": head.po_number or head.ref_no or f"row-{head.id}",
+            "detail": detail or None,
+            "meta": " · ".join(p for p in (head.supplier, head.branch) if p) or None,
+            "badge": badge(lines) if badge else _money(value),
+            "sort": float(value),
+        })
+
+    rows.sort(key=lambda r: r["sort"], reverse=True)
+    for row in rows:
+        row.pop("sort")
+
+    return paginate(rows, page, page_size)
+
+
+def orders_with_status(orders, status):
+    return [lines for lines in orders if order_status(lines) == status]
+
+
+def supplier_orders(orders, supplier):
+    """Every order placed with one supplier — behind the Top Supplier tile."""
+    if not supplier:
+        return []
+    return [lines for lines in orders if lines[0].supplier == supplier]
+
+
+#-------------------------------------
+# THE THREE ORDER COUNTS, AND WHY THEY ARE NOW ONE
+#
+# Every KPI on this screen counts ORDERS (see group_orders). The reference list
+# behind a KPI must therefore ALSO count orders, or the tile and the list it
+# opens contradict each other — which is exactly what happened: the Delayed
+# tile read 247 while the list it opened reported 454, because the list was
+# built from LINES. 454 was not wrong, it was a different question: 247 orders
+# were late, and between them they had 454 late lines.
+#
+# So:
+#   delayed_references       247 ORDERS — what the tile counts, badged with
+#                                that order's own average lateness
+#   delayed_line_references  454 LINES  — the breakdown WITHIN those orders,
+#                                for the line-level drill-down
+#
+# Both are published, each labelled with its own unit. Nothing is inferred from
+# the other.
+#-------------------------------------
+
+def _days(value):
+    """23.0 -> "23", 23.5 -> "23.5". A whole number of days should read like one."""
+    return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
+def delayed_references(orders, page=None, page_size=None):
+    """The delayed ORDERS — one row per order, latest first.
+
+    Its total equals `kpis.delayed_orders` by construction: both are
+    `order_status(lines) == STATUS_DELAYED` over the same order list.
+    """
+    rows = []
+
+    for lines in orders:
+        if order_status(lines) != STATUS_DELAYED:
+            continue
+
+        days = order_days_late(lines)
+        head = lines[0]
+        late_items = [l.item_name for l in lines
+                      if line_days_late(l) is not None and l.item_name]
+        detail = ", ".join(late_items[:2])
+        if len(late_items) > 2:
+            detail += f" +{len(late_items) - 2} more"
+
+        rows.append({
+            "id": head.id,
+            "reference": head.po_number or head.ref_no or f"row-{head.id}",
+            "detail": detail or None,
+            "meta": " · ".join(p for p in (head.supplier, head.branch) if p) or None,
+            # "avg" is stated because an order's lateness is the average across
+            # its late lines, not its worst one.
+            "badge": f"{_days(days)} days late (avg)" if days is not None else None,
+            "sort": days or 0,
+        })
+
+    rows.sort(key=lambda r: r["sort"], reverse=True)
+    for row in rows:
+        row.pop("sort")
+
+    return paginate(rows, page, page_size)
+
+
+def delayed_line_references(orders, page=None, page_size=None):
+    """The late LINES inside the delayed orders — the level below the tile."""
+    rows = []
+
+    for lines in orders:
+        for line in lines:
+            days = line_days_late(line)
+            if days is None:
+                continue
+            rows.append({
+                "id": line.id,
+                "reference": line.po_number or line.ref_no or f"row-{line.id}",
+                "detail": line.item_name,
+                "meta": " · ".join(
+                    part for part in (line.supplier, line.branch) if part
+                ) or None,
+                "badge": f"{days} days late",
+                "sort": days,
+            })
+
+    rows.sort(key=lambda r: r["sort"], reverse=True)
+    for row in rows:
+        row.pop("sort")
+
+    return paginate(rows, page, page_size)
+
+
 def procurement_kpis(rows):
     """Total value + how late purchasing runs.
 
@@ -363,9 +551,10 @@ def procurement_kpis(rows):
     return {
         "total_value": value,
         # Positive = purchased AFTER the date it was required, which is how a
-        # figure labelled "delay" is read. Averaged over the late lines only,
-        # so it answers "when we are late, how late" rather than being diluted
-        # by everything that arrived early.
+        # figure labelled "delay" is read. Averaged over the late ORDERS only,
+        # and each order's own figure is the average of its late lines — so a
+        # single very late line no longer speaks for a whole order. The per-line
+        # breakdown is on the tile.
         "avg_delay_days": round(sum(late_days) / len(late_days), 1) if late_days else None,
         "basis": comparable,
     }

@@ -1,5 +1,11 @@
 from decimal import Decimal
 
+from app.dashboard.references import paginate
+
+from app.dashboard.stock_runway import (
+    days_of_stock as value_days_of_stock, BASIS as RUNWAY_BASIS,
+)
+
 #-----------------------------------------------------
 # INVENTORY (STOCKS) DASHBOARD CALCULATIONS
 #
@@ -140,6 +146,77 @@ def group_by_item(rows):
         )
 
     return list(items.values())
+
+
+#-------------------------------------
+# WHAT IS BEHIND AN INVENTORY FIGURE
+#
+# Every headline here counts ITEMS, folded across the branches that stock them.
+# "2,387 dead items" is not actionable on its own — which items, worth what, and
+# at which stores, is. So each tile can open the items it counted.
+#
+# `badge` carries the figure that put the item in the list, so a dead-stock list
+# shows value while an issuance list shows what was issued.
+#-------------------------------------
+
+# Complete lists, one page per request — see app/dashboard/references.
+
+
+
+def _money(amount):
+    value = float(amount or 0)
+    if abs(value) >= 1_000_000_000:
+        return f"Rs {value / 1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"Rs {value / 1_000_000:.1f}M"
+    if abs(value) >= 1_000:
+        return f"Rs {value / 1_000:.0f}K"
+    return f"Rs {value:,.0f}"
+
+
+def item_references(items, badge_key="stock_qty_amount", page=None, page_size=None):
+    """The items behind a figure, biggest first."""
+    rows = []
+
+    for item in items:
+        branches = item.get("branches") or []
+        rows.append({
+            "id": item["item_code"] or item["item"],
+            "reference": item["item_code"] or "(no code)",
+            "detail": item["item"],
+            "meta": " · ".join(p for p in (
+                item.get("item_category"),
+                f"{len(branches)} store{'' if len(branches) == 1 else 's'}"
+                if branches else None,
+            ) if p) or None,
+            "badge": _money(item.get(badge_key)),
+            "sort": float(_num(item.get(badge_key))),
+        })
+
+    rows.sort(key=lambda r: r["sort"], reverse=True)
+    for row in rows:
+        row.pop("sort")
+
+    return paginate(rows, page, page_size)
+
+
+def items_where(items, predicate):
+    return [i for i in items if predicate(i)]
+
+
+def movement_references(items):
+    """One list per movement class, so the fast/slow/dead chart drills down.
+
+    The chart states how many items and how much value sit in each class; these
+    say WHICH items, which is the only form in which the number is actionable —
+    "2,387 dead items" cannot be worked on, a list of them can.
+    """
+    return {
+        movement: item_references(
+            items_where(items, lambda i, m=movement: i["movement"] == m)
+        )
+        for movement in MOVEMENT_CLASSES
+    }
 
 
 def kpis(rows):
@@ -341,13 +418,10 @@ def movement_by_branch(rows):
 # same number the issuance KPI shows — one source, so the two cannot drift.
 #-------------------------------------
 
-def stock_days_from_value(stock_value, issued_value, window_days):
-    if not window_days or issued_value is None or issued_value <= 0:
-        return None
-    if stock_value is None or stock_value <= 0:
-        return None
-    daily = issued_value / Decimal(window_days)
-    return round(float(stock_value / daily), 1)
+# Days of stock is defined once, in app/dashboard/stock_runway — the Overview's
+# Stores section reads the same function, so the two screens cannot report
+# different runways for the same warehouse (they used to: 81 days against 54).
+stock_days_from_value = value_days_of_stock
 
 
 def stock_days(rows, window_days):
@@ -381,7 +455,7 @@ def stock_days(rows, window_days):
         "total_days_of_stock": stock_days_from_value(total_stock, total_issued, window_days),
         "by_branch": branches,
         "window_days": window_days,
-        "basis": "value issued over the last 12 months",
+        "basis": RUNWAY_BASIS,
     }
 
 

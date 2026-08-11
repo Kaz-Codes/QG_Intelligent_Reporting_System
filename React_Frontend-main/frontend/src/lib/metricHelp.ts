@@ -32,22 +32,22 @@ export function measuredOn(n: number | null | undefined, total: number, noun: st
 export const IMPORTS_HELP: Record<string, MetricHelp> = {
   totalValue: {
     what: 'What the imports in this period are worth, in rupees.',
-    how: 'Each line is quantity x unit price, converted at the exchange rate booked on that consignment — never a live rate, so a printed figure never changes afterwards.',
-    differs: 'Shafts Value covers only the shaft item lines; this covers everything imported.',
+    how: 'The PKR total booked against each consignment. Where none was booked, the value is rebuilt from the item lines (quantity x unit price at that consignment’s own rate) rather than counted as zero. Never a live rate, so a printed figure does not change afterwards.',
+    differs: 'Covers EVERY status, arrived consignments included — so it is the same figure, on the same population, as Import Value on the Overview. In Process, Arrived and Cancelled split it three ways. Shafts Value covers only the shaft item lines.',
   },
-  consignments: {
-    what: 'How many consignments are still in progress in this period.',
-    how: 'Counted on ETA Works — when the goods reach the factory. Consignments that have already arrived at works are excluded from this screen entirely: it is an operational view of what is still moving.',
-    differs: 'This is not the total ever imported — landed consignments have dropped off.',
+  arrived: {
+    what: 'The money that has landed at works, and how many consignments it is.',
+    how: 'Consignments in the window at "Arrived at Works".',
+    differs: 'Cancelled is the other terminal state — work abandoned rather than completed — so the two are never folded together.',
   },
   cancelled: {
-    what: 'Consignments cancelled rather than delivered.',
+    what: 'Consignments cancelled rather than delivered, and what they were worth.',
     how: 'Status is "Order Cancelled". They are still shown because the order existed, but they carry no arrival date so they never enter the delay figures.',
-    differs: 'Consignments counts everything on the screen, cancelled ones included.',
+    differs: 'Arrived is work that completed; this is work that stopped. Both are terminal, which is why neither is in In Process.',
   },
   shaftsValue: {
     what: 'What the shaft items specifically are worth — the material the business tracks most closely.',
-    how: 'Quantity x unit price at the booked rate, for lines named Forged Steel Round Bar, Forged Alloy Steel Round Bar or Forged Steel Hollow Drill Bars. Only those lines count, not the whole consignment they arrive in.',
+    how: 'Quantity x unit price at the booked rate, for lines named Forged Steel Round Bar, Forged Alloy Steel Round Bar or Forged Steel Hollow Drill Bars. This is the one figure here read from the ITEM LINES rather than the consignment total — a consignment-level total cannot say what the shafts inside it were worth.',
     differs: 'Total Value is every item imported; this is the shaft lines alone, which is a much smaller number.',
   },
   efs: {
@@ -56,9 +56,9 @@ export const IMPORTS_HELP: Record<string, MetricHelp> = {
     differs: 'The percentage of stated records is shown separately — most records do not state it, so a share of everything and a share of the stated ones are very different numbers.',
   },
   inProcess: {
-    what: 'Consignments still moving — not yet arrived at works and not cancelled.',
-    how: 'Every consignment whose status is not "Arrived at Works" or "Order Cancelled".',
-    differs: 'Demands Processed is the opposite: the ones that have finished.',
+    what: 'The money still moving through the pipeline, and how many consignments it is.',
+    how: 'Consignments in the window whose status is not "Arrived at Works" or "Order Cancelled", valued exactly as Total Import Value is.',
+    differs: 'In Process + Arrived + Cancelled = Total Import Value. This screen used to hide arrived consignments entirely, which is why it disagreed with the Overview by Rs 52.7m.',
   },
   demandsReceived: {
     what: 'Every import demand in this period, finished or not.',
@@ -86,12 +86,12 @@ export const IMPORTS_HELP: Record<string, MetricHelp> = {
 export const PURCHASES_HELP: Record<string, MetricHelp> = {
   totalValue: {
     what: 'What local procurement spent in this period.',
-    how: 'The sum of the amount on every purchase line whose purchase date falls in the window.',
+    how: 'The sum of the amount on every purchase line falling in the window. Which date the window measures is yours to choose: PO date (when the order was placed) or purchase date (when it was bought).',
     differs: 'Top Supplier and the supplier chart exclude Import (IOL), which is the in-house import channel rather than a vendor — so those will not add up to this total.',
   },
   orders: {
     what: 'How many purchase orders the lines in this period belong to.',
-    how: 'Distinct PO numbers. One PO usually covers several lines.',
+    how: 'Distinct PO numbers. One PO usually covers several item lines; nothing on this screen counts lines.',
     differs: 'The delayed and completed figures count LINES, not orders.',
   },
   avgOrderValue: {
@@ -100,18 +100,18 @@ export const PURCHASES_HELP: Record<string, MetricHelp> = {
   },
   delayed: {
     what: 'How many purchase lines were bought after the date they were required.',
-    how: 'A line is Delayed when its purchase date is later than its required date.',
+    how: 'An ORDER is Delayed when any of its lines was bought after the date it was required. Worst case wins: an order is not on time while any part of it is late.',
     differs: 'Average Delay tells you how many days late those lines were; this is just how many.',
   },
   onTimeRate: {
     what: 'The share of purchased lines that were bought by the date they were needed.',
-    how: 'Completed lines divided by all lines that have actually been purchased.',
+    how: 'On Time orders divided by all orders that have actually been purchased. Counted over ORDERS (distinct POs), not item lines.',
     differs: 'This counts lines; Orders counts POs.',
   },
   avgDelay: {
     what: 'When purchasing runs late, how late it typically is.',
-    how: 'The average of (purchase date minus required date) across the LATE lines only, so lines bought early do not mask the late ones.',
-    differs: 'Delayed is the count of late lines; this is their average lateness in days.',
+    how: 'The average of (purchase date minus required date) across the LATE orders only, so orders bought early do not mask them. Each order’s own figure is the average of ITS late lines, so one very late line no longer speaks for a whole order. Open the list icon for the per-line breakdown — the PO, the item and how late each one was.',
+    differs: 'Delayed Orders is how MANY ran late; this is how late they ran.',
   },
   topSupplier: {
     what: 'The vendor the business spent most with in this period.',
@@ -125,13 +125,28 @@ export const PURCHASES_HELP: Record<string, MetricHelp> = {
 export const OVERVIEW_HELP: Record<string, MetricHelp> = {
   importValue: {
     what: 'What the imports landing in this period are worth.',
-    how: 'The stored PKR total of consignments whose ETD falls in the window, converted at the rate booked on each one.',
-    differs: 'Procurement Value is what was bought locally; this is what was imported.',
+    how: 'The PKR total booked against each consignment, falling back to its item lines where none was booked — the same rule the Imports dashboard uses. Which date the window measures is yours to choose: ETA at works, or the date the goods were required.',
+    differs: 'Procurement Value is what was bought locally; this is what was imported. This section still includes consignments that have arrived at works, which the Imports dashboard excludes — so its count is higher.',
   },
   importsInProcess: {
-    what: 'Consignments still moving through the pipeline right now.',
-    how: 'Every consignment not yet at "Arrived at Works" and not cancelled. A snapshot, so it ignores the reporting period.',
-    differs: 'Import Value is a period figure; this is where things stand today.',
+    what: 'The money still moving through the pipeline, and how many consignments it is.',
+    how: 'Consignments in the window that have not reached "Arrived at Works" and were not cancelled, valued at their booked PKR total (or their item lines at the booked rate where no total was entered).',
+    differs: 'Import Value is every consignment in the window; this is the part still in flight. Arrived and Cancelled are the other two, and the three add up to it.',
+  },
+  importsArrived: {
+    what: 'The money that has landed at works, and how many consignments it is.',
+    how: 'Consignments in the window at "Arrived at Works", valued the same way as every other figure on this screen.',
+    differs: 'Cancelled is the other terminal state — work abandoned rather than completed — so the two are never folded together.',
+  },
+  importsCancelled: {
+    what: 'Consignments that were cancelled, and what they were worth.',
+    how: 'Consignments in the window at "Order Cancelled".',
+    differs: 'Arrived is work that completed; this is work that stopped. Both are terminal, which is why neither is in the In Process figure.',
+  },
+  importsDelayed: {
+    what: 'Consignments that landed materially later than they were needed, and what they were worth.',
+    how: 'ETA at works minus the required date, counted as delayed only beyond a 7-day grace — a slip of a day or two is normal port scheduling, not a problem to chase. Only consignments carrying both dates can be measured.',
+    differs: 'In Process says what has not arrived yet; this says what did arrive, late. The two overlap only where a consignment is both still moving and already past its date.',
   },
   shafts: {
     what: 'How the shaft material — the item the business watches most closely — is moving.',
@@ -140,12 +155,12 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
   },
   procurementValue: {
     what: 'What local procurement spent in this period.',
-    how: 'Total amount on purchase lines bought in the window, counted as ORDERS (distinct POs) rather than lines.',
+    how: 'Total amount on purchase lines in the window, counted as ORDERS (distinct POs) rather than lines. The window measures the PO date by default; switch it to the purchase date with the control above.',
     differs: 'Import Value covers goods bought abroad; this is domestic purchasing only.',
   },
   procurementDelay: {
     what: 'How often local purchasing lands after the date it was needed.',
-    how: 'Orders whose purchase date is later than the required date, over the orders that have a required date at all.',
+    how: 'Orders bought after the date they were required, over the orders that have a required date at all. Both are counted within whichever date the section is filtered on.',
     differs: 'Cycle Time is how LONG buying takes; this is how often it is late.',
   },
   cycleTime: {
@@ -153,19 +168,15 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
     how: 'Average days from the store demand date to the purchase date. Orders where the demand date falls after the purchase are excluded as data errors rather than counted as negative time.',
     differs: 'Delay Rate measures lateness against a required date; this measures duration regardless of whether it was late.',
   },
-  categories: {
-    what: 'How many distinct item categories the business bought from this period.',
-    how: 'Distinct categories on the purchased items, taken from the item master.',
-  },
   truckingCost: {
     what: 'What has been spent moving goods by road.',
-    how: 'Actual freight summed across every trucking job to date — a running total, not a period figure.',
-    differs: 'Jobs with no movement type are shown separately as Unclassified; there is no "Local" type in the data and none can be inferred.',
+    how: 'Actual freight summed across the trucking jobs in the window. ETD means the job’s execution date; ETA means its arrival at works. Jobs with no movement type are shown separately as Unclassified rather than folded into a category they may not belong to.',
+    differs: 'There is no "Local" movement type in the data and none can be inferred, so those jobs are Unclassified rather than guessed at.',
   },
   shipmentsHandled: {
     what: 'How much the business has shipped and imported in total.',
-    how: 'Standard logistics orders plus import consignments, all-time. Rework service jobs are excluded — they are not shipments handled for a customer.',
-    differs: 'A running total, so it does not move with the reporting period.',
+    how: 'Standard logistics orders plus import consignments falling in the window. Rework service jobs are excluded — they are not shipments handled for a customer. Most logistics orders carry no ETD or arrival date, so the export half covers only the dated ones; the note above the section says how many.',
+    differs: 'Unlike Trucking Cost this counts shipments, not money.',
   },
   stockValue: {
     what: 'What is sitting in the stores right now.',
@@ -180,23 +191,29 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
     how: 'Items with value on hand and no issuance within the threshold. An item still moving at one store is not dead because it sat still at another.',
     differs: 'Stock Value is everything held; this is the part of it nobody has drawn on.',
   },
-  stores: {
-    what: 'How many stores are holding stock.',
-    how: 'Distinct branches with at least one stock record.',
+  issued: {
+    what: 'What left the stores in this period, and across how many distinct items.',
+    how: 'Issuance value summed over the window, with items counted by ITEM CODE folded across the branches that issued them — the same unit the Inventory dashboard counts, so the figure is identical on both screens.',
+    differs: 'Stock Value is what is on the shelf right now; this is what went out over the period. Days of Stock is the two divided into each other.',
   },
 }
 
 /* -------------------------------------------------------------- inventory */
 
 export const INVENTORY_HELP: Record<string, MetricHelp> = {
+  issued: {
+    what: 'What left the stores in the chosen period, and across how many distinct items.',
+    how: 'Issuance value summed over the window, with items counted by ITEM CODE folded across the branches that issued them — the same unit the Overview’s Stores section uses, so the figure is identical on both screens.',
+    differs: 'This replaced the fixed 12-month and 3-month tiles, which asked one question at two lengths nobody chose. Those windows still drive the movement split and the days-of-stock runway; they are just no longer tiles. Stock Value is what is on the shelf now, this is what went out.',
+  },
   stockValue: {
     what: 'What the stock on hand is worth across every store.',
-    how: 'The sum of the stock value on every stock line. A snapshot of today, not a period figure.',
+    how: 'Stock value summed across every store, counted as distinct ITEMS rather than item-at-a-branch records. A snapshot of today, not a period figure.',
     differs: 'Available Value excludes stock that is held or reserved.',
   },
   availableValue: {
     what: 'What of the stock is actually free to use.',
-    how: 'The sum of the available value per line — stock value less anything held.',
+    how: 'Available value summed per item across the stores holding it — stock value less anything held.',
     differs: 'Total Stock Value counts everything, including held stock.',
   },
   stockDays: {
@@ -216,12 +233,12 @@ export const INVENTORY_HELP: Record<string, MetricHelp> = {
   },
   deadStock: {
     what: 'Stock that has not moved at all in a year — the money sitting still.',
-    how: 'Stock lines with value on hand and no issuance at all in the last 12 months.',
+    how: 'ITEMS with value on hand and no issuance at all in the last 12 months, judged on the item’s total issuance across every store — an item still moving at one factory is not dead because it sat still at another.',
     differs: 'Slow moving items DID move in the last year, just not in the last 3 months.',
   },
   fastMoving: {
     what: 'Items that have been issued recently and are genuinely turning over.',
-    how: 'Stock lines with at least one issuance in the last 3 months.',
+    how: 'Items with at least one issuance in the last 3 months, anywhere they are stocked.',
     differs: 'Slow moving items moved within the year but not the last 3 months; dead ones have not moved at all.',
   },
   outOfStock: {

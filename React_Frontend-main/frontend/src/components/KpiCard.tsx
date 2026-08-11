@@ -1,6 +1,6 @@
 import { Check, TriangleAlert, Circle, type LucideIcon } from 'lucide-react'
 import { MetricInfo, type MetricHelp } from './MetricInfo'
-import { ReferenceList, type ReferenceSet } from './ReferenceList'
+import { ReferenceList, type ReferenceSet, type ReferencePager } from './ReferenceList'
 import { Card, CardContent } from './ui/card'
 import { useTheme } from '@/theme/ThemeContext'
 import { BRAND } from '@/theme/tokens'
@@ -27,6 +27,9 @@ export interface KpiData {
    *  scrollable panel of their reference numbers — a count nobody can trace
    *  back to actual records cannot be acted on. */
   refs?: ReferenceSet
+  /** Fetches further pages of `refs`. Without it the panel shows page one
+   *  and says so, rather than looking like the whole list. */
+  fetchRefs?: ReferencePager
 }
 
 function Sparkline({ values, color, gradientId }: { values: number[]; color: string; gradientId: string }) {
@@ -59,7 +62,7 @@ function Sparkline({ values, color, gradientId }: { values: number[]; color: str
   )
 }
 
-export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon, help, refs }: KpiData) {
+export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon, help, refs, fetchRefs }: KpiData) {
   const { colors } = useTheme()
   const hasDirection = direction === 'up' || direction === 'down'
   const isGood = hasDirection && direction === goodWhen
@@ -88,7 +91,7 @@ export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub
                 {direction === 'up' ? '▲' : '▼'} {delta}
               </span>
             )}
-            {refs && <ReferenceList label={label} refs={refs} />}
+            {refs && <ReferenceList label={label} refs={refs} fetchPage={fetchRefs} />}
             {help && <MetricInfo help={help} label={label} />}
           </span>
         </div>

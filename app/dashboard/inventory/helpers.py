@@ -1,13 +1,15 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, or_, func, case
+from sqlalchemy import select, or_, func, case, desc
 from sqlalchemy.orm import joinedload
 
 from app.loading.schemas.stores_schemas import (
     Stock, Issuance, StoreRequisition, PurchasesData,
 )
 from app.masters.models import Item
+from app.dashboard.period import coverage
+from app.dashboard.references import clamp, paginate
 
 # How far back the consumption rate for the runway is measured.
 CONSUMPTION_WINDOW_DAYS = 90
@@ -376,3 +378,115 @@ def reorder_level_map(db):
         result[key] = (avg_daily * lead * buffer_multiplier).quantize(Decimal("0.001"))
 
     return result
+
+
+#-----------------------------------------------------
+# ISSUANCE IN A PERIOD
+#
+# Replaces the fixed 12-month and 3-month issuance tiles. Those two answered one
+# question at two arbitrary window lengths, neither of which anybody chose, and
+# a reader could not ask "what went out THIS month" — the thing a storekeeper
+# actually wants — without doing arithmetic in their head.
+#
+# One tile with its own date filter, defaulting to the current month like every
+# other window on the system. Items are counted BY ITEM CODE, folded across the
+# branches that issued them, exactly as the rest of this screen counts items and
+# exactly as the Overview's Stores section does — so "633 items" is one number
+# wherever it appears.
+#
+# The 12-month figures have NOT gone away: the movement classification (fast /
+# slow / dead) and the days-of-stock runway are still built on them. They are
+# just no longer shown as tiles of their own, because the movement split says
+# the same thing with a reason attached.
+#-----------------------------------------------------
+
+def issuance_in_period(db, date_from, date_to, branch=None, category=None):
+    """{value, items, lines, quantity} for what was issued in the window."""
+    conditions = [Issuance.from_date.between(date_from, date_to)]
+    if branch:
+        conditions.append(Issuance.branch.in_(branch))
+
+    value, items, lines, quantity = db.execute(
+        select(
+            func.coalesce(func.sum(Issuance.total_price), 0),
+            func.count(func.distinct(Issuance.item_code)),
+            func.count(Issuance.id),
+            func.coalesce(func.sum(Issuance.quantity), 0),
+        ).where(*conditions)
+    ).one()
+
+    return {"value": value, "items": items, "lines": lines, "quantity": quantity}
+
+
+def issuance_item_references(db, date_from, date_to, branch=None,
+                             page=None, page_size=None):
+    """The items issued in the window, biggest value first, with quantities.
+
+    Grouped onto the item code rather than listed line by line: the tile counts
+    items, so its drill-down has to as well or the two disagree. Quantity
+    travels with the value because an issuance is a physical movement — how much
+    left the store is half of what was asked.
+    """
+    conditions = [Issuance.from_date.between(date_from, date_to),
+                  Issuance.item_code.isnot(None)]
+    if branch:
+        conditions.append(Issuance.branch.in_(branch))
+
+    total = db.execute(
+        select(func.count(func.distinct(Issuance.item_code))).where(*conditions)
+    ).scalar()
+
+    page, size = clamp(page, page_size)
+    rows = db.execute(
+        select(
+            Issuance.item_code,
+            func.min(Issuance.item_name),
+            func.coalesce(func.sum(Issuance.quantity), 0),
+            func.count(Issuance.id),
+            func.coalesce(func.sum(Issuance.total_price), 0).label("value"),
+        )
+        .where(*conditions)
+        .group_by(Issuance.item_code)
+        .order_by(desc("value"), Issuance.item_code)
+        .offset((page - 1) * size).limit(size)
+    ).all()
+
+    def money(amount):
+        v = float(amount or 0)
+        if abs(v) >= 1_000_000_000:
+            return f"Rs {v / 1_000_000_000:.2f}B"
+        if abs(v) >= 1_000_000:
+            return f"Rs {v / 1_000_000:.1f}M"
+        if abs(v) >= 1_000:
+            return f"Rs {v / 1_000:.0f}K"
+        return f"Rs {v:,.0f}"
+
+    def qty(value):
+        number = float(value or 0)
+        return f"{number:,.0f}" if number.is_integer() else f"{number:,.3f}".rstrip("0").rstrip(".")
+
+    items = [
+        {
+            "id": code,
+            "reference": code,
+            "detail": name,
+            "meta": f"{qty(quantity)} issued over {lines} line{'' if lines == 1 else 's'}",
+            "badge": money(value),
+        }
+        for code, name, quantity, lines, value in rows
+    ]
+
+    return paginate(items, page, size, total=total or 0)
+
+
+def issuance_coverage(db, date_from, date_to):
+    earliest, latest, total = db.execute(
+        select(func.min(Issuance.from_date), func.max(Issuance.from_date),
+               func.count(Issuance.id))
+    ).one()
+    in_period = db.execute(
+        select(func.count(Issuance.id))
+        .where(Issuance.from_date.between(date_from, date_to))
+    ).scalar_one()
+
+    return coverage(earliest, latest, in_period, total, "issuance date")

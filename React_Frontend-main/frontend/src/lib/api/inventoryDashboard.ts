@@ -1,4 +1,6 @@
 import { apiFetch } from './client'
+import type { ReferenceSet } from '@/components/ReferenceList'
+import type { ResolvedPeriod, Coverage } from '@/components/PeriodFilter'
 
 /**
  * Like the purchases endpoint, this returns finished figures — kpis,
@@ -138,6 +140,10 @@ export interface InventoryDashboardFilters {
   branch?: string[]
   item?: string[]
   search?: string
+  /** The ISSUANCE window. Stock is a snapshot, so these do not touch the stock
+   *  figures. Omit BOTH for the backend's default, the current month. */
+  date_from?: string
+  date_to?: string
 }
 
 interface RawResponse {
@@ -150,6 +156,10 @@ interface RawResponse {
     rows?: StockRow[]
     kpis: InventoryKpis
     movement_kpis: MovementKpis
+    references: InventoryReferences
+    issuance: IssuancePeriod
+    period: ResolvedPeriod
+    coverage: Coverage
     stock_days: StockDays
     movement_split: MovementBucket[]
     movement_by_branch: BranchMovement[]
@@ -166,9 +176,42 @@ interface RawResponse {
   }
 }
 
+/** The ITEMS behind each headline. Everything on this screen counts items
+ *  folded across branches, so every list is a list of items — badged with the
+ *  figure that put them there (stock value, or what was issued). */
+export interface InventoryReferences {
+  items: ReferenceSet
+  dead: ReferenceSet
+  fast: ReferenceSet
+  issued_12m: ReferenceSet
+  issued_3m: ReferenceSet
+  out_of_stock: ReferenceSet
+  below_reorder: ReferenceSet
+  /** The items issued in the window, with quantities. */
+  issuance: ReferenceSet
+  /** One list per movement class, keyed by the name the chart shows, so its
+   *  fast / slow / dead blocks drill straight through. */
+  movement: Record<string, ReferenceSet>
+}
+
+/** What went out in the window. Items are counted BY ITEM CODE, folded across
+ *  the branches that issued them — the same unit the Overview's Stores section
+ *  uses, so the figure is identical on both screens. */
+export interface IssuancePeriod {
+  value: number
+  items: number
+  lines: number
+  quantity: number
+}
+
 export interface InventoryDashboardResponse {
   rows?: StockRow[]
   kpis: InventoryKpis
+  references: InventoryReferences
+  issuance: IssuancePeriod
+  /** The issuance window actually used, and what the issuance table holds. */
+  period: ResolvedPeriod
+  coverage: Coverage
   movementKpis: MovementKpis
   stockDays: StockDays
   movementSplit: MovementBucket[]
@@ -199,6 +242,10 @@ export async function getInventoryDashboard(filters: InventoryDashboardFilters =
   return {
     rows: data.rows,
     kpis: data.kpis,
+    references: data.references,
+    issuance: data.issuance,
+    period: data.period,
+    coverage: data.coverage,
     movementKpis: data.movement_kpis,
     stockDays: data.stock_days,
     movementSplit: data.movement_split,

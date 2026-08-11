@@ -11,8 +11,11 @@ import { CategoryBar } from '@/components/charts/CategoryBar'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { Donut } from '@/components/charts/Donut'
 import { MetricInfo } from '@/components/MetricInfo'
+import { ReferenceList } from '@/components/ReferenceList'
 import { useTheme } from '@/theme/ThemeContext'
 import { money } from '@/lib/format'
+import { PeriodFilter, PeriodSummary, EMPTY_PERIOD, type Period } from '@/components/PeriodFilter'
+import { inventoryRefPager } from '@/lib/api/dashboardReferences'
 import { INVENTORY_HELP, withBasis } from '@/lib/metricHelp'
 import { useDebounced } from '@/lib/useDebounced'
 import { useInventoryDashboard } from '@/lib/api/useInventoryDashboard'
@@ -34,6 +37,15 @@ const INSIGHT_TABS = [
  * item code — none of which identifies the bar — so charts show just the
  * leading name. The table below still shows the field in full.
  */
+/** The chart's own class names against the reference keys the API serves them
+ *  under — declared once so a renamed class cannot silently break a drill-down. */
+const MOVEMENT_KEYS: Record<string, string> = {
+  'Fast moving': 'fast',
+  'Slow moving': 'slow',
+  Dead: 'dead',
+}
+
+
 function itemChartLabel(label: string): string {
   const [name] = label.split('|')
   return name.trim() || label
@@ -49,6 +61,10 @@ export function Inventory() {
   const [item, setItem] = useState<string[]>([])
   const [search, setSearch] = useState('')
   const [insightTab, setInsightTab] = useState<(typeof INSIGHT_TABS)[number]['value']>('branch')
+  // Stock itself is a snapshot with no date at all, but what was ISSUED happens
+  // in a period — so the window here covers that one figure. Empty = this
+  // month, resolved by the backend.
+  const [period, setPeriod] = useState<Period>(EMPTY_PERIOD)
 
   // Search narrows the KPIs and charts on this page (not just the table, the
   // way it does on Purchases), so it has to reach the server for those figures
@@ -59,13 +75,24 @@ export function Inventory() {
   const { data, isLoading, isError, error } = useInventoryDashboard({
     status, reorder_status: reorderStatus, movement, category, branch, item,
     search: debouncedSearch.trim() || undefined,
+    date_from: period.from || undefined,
+    date_to: period.to || undefined,
   })
 
-  // Stock is a point-in-time snapshot — the table has no restock date at all,
-  // so unlike Purchases there is no date filter to offer here.
+  // Bound to the same filters the screen was rendered with, so page 2 of a
+  // reference list describes the same set as page 1.
+  const pager = (key: string) => inventoryRefPager(key, {
+    status, reorder_status: reorderStatus, movement, category, branch, item,
+    search: debouncedSearch.trim(),
+    date_from: period.from, date_to: period.to,
+  })
+
   const kpis = data?.kpis
 
   const mov = data?.movementKpis
+  // The items behind each tile, so a count is never a dead end.
+  const refs = data?.references
+  const issuance = data?.issuance
   // One sentence naming the exact dates the 12m/3m windows cover, reused by
   // every tooltip that depends on them — so "last 12 months" is never assumed
   // to end today when the issuance data stops earlier.
@@ -85,6 +112,19 @@ export function Inventory() {
     <div className="flex flex-col gap-6">
       <PageHeader title="Inventory" subtitle="Current stock levels and usage-based reorder risk" module="inventory" />
 
+      {/* Stock is today's position, so the window applies only to what was
+          ISSUED. Said plainly on the control rather than left to be inferred
+          from a tile that moves while the ones beside it do not. */}
+      <div className="rounded-xl border border-line bg-surface p-4">
+        <PeriodFilter period={period} onChange={setPeriod} range={data?.coverage}
+          label="Issuance period (stock figures are today's position)" />
+        {data && (
+          <div className="mt-3">
+            <PeriodSummary period={data.period} coverage={data.coverage} onJumpToLatest={setPeriod} />
+          </div>
+        )}
+      </div>
+
       <FilterBar search={{ value: search, onChange: setSearch, placeholder: 'Search by item, item code, branch, category, or specs…' }}>
         <MultiSelectFilter label="Branch" options={data?.branches ?? []} value={branch} onChange={setBranch} />
         <MultiSelectFilter label="Category" options={data?.itemCategories ?? []} value={category} onChange={setCategory} />
@@ -96,7 +136,7 @@ export function Inventory() {
 
       <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && mov && (
+      {data && kpis && mov && refs && issuance && (
         <>
           {/* Spotlight: stock days, the single number that says how long the
               money on the shelf lasts. Inventory is a snapshot, not a series,
@@ -142,28 +182,44 @@ export function Inventory() {
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          {/* Three tiles, three columns — the row fills rather than leaving a
+              half-empty stretch where the removed tiles used to be. */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <KpiCard label="Stock Value" value={money(kpis.total_stock_value)}
+              sub={`${kpis.items_shown.toLocaleString()} of ${kpis.items_total.toLocaleString()} items`}
+              refs={refs.items}
+              fetchRefs={pager('items')}
               help={INVENTORY_HELP.stockValue} />
             <KpiCard label="Available Value" value={money(kpis.available_value)}
+              sub={`${kpis.out_of_stock.toLocaleString()} out of stock · ${kpis.below_reorder.toLocaleString()} below reorder`}
+              refs={refs.items}
+              fetchRefs={pager('items')}
               help={INVENTORY_HELP.availableValue} />
-            <KpiCard label="Issued (12m)" value={money(mov.issued_value_12m)}
-              help={withBasis(INVENTORY_HELP.issued12m, windowNote)} />
-            <KpiCard label="Issued (3m)" value={money(mov.issued_value_3m)}
-              sub="included in the 12m figure"
-              help={withBasis(INVENTORY_HELP.issued3m, windowNote)} />
-            <KpiCard label="Dead Stock" value={money(mov.dead_value)}
-              sub={`${mov.dead_items.toLocaleString()} lines · ${mov.dead_value_pct ?? 0}% of value`}
-              direction={mov.dead_items ? 'up' : null} goodWhen="down"
-              help={withBasis(INVENTORY_HELP.deadStock, windowNote)} />
-            <KpiCard label="Items in Stock" value={kpis.items_shown.toLocaleString()}
-              sub={`of ${kpis.items_total.toLocaleString()} items`}
-              help={INVENTORY_HELP.outOfStock} />
+            {/* ONE issuance tile with a window you choose, replacing the fixed
+                12m and 3m pair — those answered one question at two arbitrary
+                lengths, neither of which anybody picked, and neither of which
+                could say what went out THIS month. Same layout as Stock Value:
+                money on top, the item count under it.
+
+                The 12-month figures have not gone away; the movement split and
+                the days-of-stock runway are still built on them. They are just
+                no longer tiles, because the split says the same thing with a
+                reason attached.
+
+                Dead Stock and Items in Stock are gone for the same reason:
+                dead stock is a block in the movement card below, with its own
+                drill-down, and the item count is already on Stock Value. */}
+            <KpiCard label={`Issued · ${data.period.label}`} value={money(issuance.value)}
+              sub={`${issuance.items.toLocaleString()} items · ${issuance.lines.toLocaleString()} lines`}
+              refs={refs.issuance}
+              fetchRefs={pager('issuance')}
+              help={withBasis(INVENTORY_HELP.issued,
+                `${issuance.lines.toLocaleString()} issuance lines over ${issuance.items.toLocaleString()} distinct item codes.`)} />
           </div>
 
           {/* Dead stock is half the LINES but a seventh of the VALUE — stating
               both stops the count being read as the whole story. */}
-          <ChartCard title="Movement — lines against value">
+          <ChartCard title="Movement — items against value">
             <p className="-mt-2 mb-3 text-xs text-muted">
               Fast = issued in the last 3 months · Slow = issued within 12 months but
               not the last 3 · Dead = no issuance in 12 months. Windows end at the
@@ -172,7 +228,15 @@ export function Inventory() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               {data.movementSplit.map((m) => (
                 <div key={m.movement} className="rounded-lg border border-line p-3">
-                  <p className="text-sm font-semibold text-ink">{m.movement}</p>
+                  <div className="flex items-center gap-1">
+                    <p className="text-sm font-semibold text-ink">{m.movement}</p>
+                    {/* Which items — "2,387 dead" cannot be worked on, a list can. */}
+                    <ReferenceList
+                      label={`${m.movement} items`}
+                      refs={refs.movement[m.movement]}
+                      fetchPage={pager(MOVEMENT_KEYS[m.movement])}
+                    />
+                  </div>
                   <p className="font-display mt-1 text-2xl font-bold text-navy">{money(m.value)}</p>
                   <p className="text-xs text-muted">
                     {m.value_pct ?? 0}% of value · {m.items.toLocaleString()} items ({m.items_pct ?? 0}%)

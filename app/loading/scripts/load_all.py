@@ -117,6 +117,12 @@ def run_post_load_steps():
         creates in the app dies on a duplicate key.
 
     Each is guarded so one failing does not hide the others.
+
+    It ENDS WITH A CHECK. The loaders' dangerous failure is not a crash but a
+    column that quietly arrives empty when a workbook is re-shaped — that is how
+    `ppc_store` went NULL on all 65,520 rows and left the cycle time blank with
+    nobody any the wiser. `verify_load` reports on every column that has done
+    that before, and repairs the ones it can.
     """
     print("\n" + "=" * 60)
     print("POST-LOAD STEPS")

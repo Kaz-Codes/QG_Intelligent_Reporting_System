@@ -6,6 +6,7 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_PURCHASES_DASHBOARD
 from app.dashboard.purchases.helpers import (
     fetch_filtered_consignments, option_lists, source_coverage,
+    DATE_FIELDS, DATE_FIELD_DEFAULT, DATE_FIELD_OPTIONS,
 )
 from app.dashboard.period import resolve_period, serialize_period
 from app.dashboard.purchases.serializers import serialize_purchases_dashboard
@@ -31,6 +32,8 @@ def purchases_dashboard(
     # The dashboard-wide reporting window. Both omitted -> the current month.
     date_from : Optional[date] = None,
     date_to : Optional[date] = None,
+    # Which procurement event the window measures: po_date | purchase.
+    date_field : Optional[str] = None,
     ):
 
     db = SessionLocal()
@@ -46,11 +49,15 @@ def purchases_dashboard(
         # Only the filtered set is materialized; the dropdown values come from
         # cheap DISTINCT queries, not from loading the whole table.
         period_from, period_to, period_kind = resolve_period(date_from, date_to)
+        # An unrecognised field falls back rather than 400ing — the dashboard
+        # should still render, and the resolved choice comes back below so the
+        # screen shows which date it actually used.
+        field = date_field if date_field in DATE_FIELDS else DATE_FIELD_DEFAULT
 
         rows = fetch_filtered_consignments(
             db, supplier, branch, item_category, mop,
             sourcing_o, po_from_date, po_to_date, search,
-            period_from, period_to,
+            period_from, period_to, field,
         )
 
         # Status is derived, so it is filtered here rather than in SQL — and
@@ -75,7 +82,9 @@ def purchases_dashboard(
             # month reads as "no purchases in Aug 2026, latest is 23 Jan 2026"
             # rather than as a confident zero.
             "period": serialize_period(period_from, period_to, period_kind),
-            "coverage": source_coverage(db, period_from, period_to),
+            "coverage": source_coverage(db, period_from, period_to, field),
+            "date_field": field,
+            "date_field_options": DATE_FIELD_OPTIONS,
             "statuses": PURCHASE_STATUSES,
             **option_lists(db),
         }

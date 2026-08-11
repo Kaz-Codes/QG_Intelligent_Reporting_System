@@ -133,6 +133,11 @@ def group_sheet_rows(df):
 
 
 def first_value(rows, column, cleaner):
+    """The first non-null value across a consignment's rows.
+
+    Right for a HEADER attribute — every row of a group repeats the same
+    demand date, required date and incoterm, so the first one is the value.
+    """
     for row in rows:
         value = cleaner(row.get(column))
         if value is not None:
@@ -140,7 +145,44 @@ def first_value(rows, column, cleaner):
     return None
 
 
-def run(with_incoterm=False, dry_run=False):
+def summed_value(rows, column, cleaner):
+    """The SUM across a consignment's rows.
+
+    Right for a MONEY column, and the distinction matters: the sheet is one row
+    per item line, and "Total Value(PKR)" is that LINE's value, not the
+    consignment's. Taking the first row's figure — which is what this used to do
+    — silently stored one line's money as the whole import.
+
+    It went unnoticed because it is invisible on a single-line consignment: 80
+    of 80 of those matched, while 0 of 67 multi-line ones did, understating them
+    by everything after the first line.
+
+    ONE EXCEPTION. In 5 of the 72 multi-row groups the identical figure is
+    repeated on every line — a header value copied down rather than a per-line
+    one. Summing those multiplies the consignment by its line count (ref 2582
+    became 37.5m instead of 18.75m). So when every line of a group reports
+    exactly the same number, it is taken ONCE.
+
+    That is a heuristic, and it is wrong if two lines genuinely cost the same to
+    the paisa. Across a whole multi-line import that is vanishingly unlikely,
+    and being out by one line beats being out by a factor of the line count.
+
+    Returns None when no row carries a value, so "nothing to say" stays distinct
+    from a genuine zero.
+    """
+    values = [cleaner(row.get(column)) for row in rows]
+    values = [v for v in values if v is not None]
+
+    if not values:
+        return None
+
+    if len(values) > 1 and len(set(values)) == 1:
+        return values[0]
+
+    return sum(values[1:], values[0])
+
+
+def run(with_incoterm=False, dry_run=False, recompute_totals=False):
     files = list_excel_files(DIRECTORY)
     if not files:
         print(f"no workbooks in {DIRECTORY}")
@@ -202,8 +244,9 @@ def run(with_incoterm=False, dry_run=False):
             updates = {
                 "requisition_date": first_value(rows, "Demand Dt.", clean_date),
                 "required_date": first_value(rows, "Req. Dt.", clean_date),
-                "pkr_total": first_value(rows, "Total Value(PKR)", clean_money),
-                "foreign_total": first_value(rows, "Total Value(FC)", clean_money),
+                # SUMMED, not first: these are per-LINE figures in the sheet.
+                "pkr_total": summed_value(rows, "Total Value(PKR)", clean_money),
+                "foreign_total": summed_value(rows, "Total Value(FC)", clean_money),
             }
 
             if with_incoterm:
@@ -215,11 +258,21 @@ def run(with_incoterm=False, dry_run=False):
 
             # COALESCE semantics: only ever fill an empty column. Anything a
             # user has since entered through the app wins over the sheet.
+            # The money columns can be REPLACED rather than filled, because a
+            # value written by the old first-row logic is wrong rather than
+            # merely present — COALESCE would leave every multi-line
+            # consignment understated for ever. Off by default so a normal run
+            # still never overwrites what a user typed.
+            overwrite = {"pkr_total", "foreign_total"} if recompute_totals else set()
+
             sets, params = [], {"id": cid}
             for column, value in updates.items():
                 if value is None:
                     continue
-                sets.append(f"{column} = COALESCE({column}, :{column})")
+                if column in overwrite:
+                    sets.append(f"{column} = :{column}")
+                else:
+                    sets.append(f"{column} = COALESCE({column}, :{column})")
                 params[column] = value
                 filled[column] += 1
 
@@ -264,4 +317,11 @@ def run(with_incoterm=False, dry_run=False):
 
 
 if __name__ == "__main__":
-    run(with_incoterm="--incoterm" in sys.argv, dry_run="--dry-run" in sys.argv)
+    run(
+        with_incoterm="--incoterm" in sys.argv,
+        dry_run="--dry-run" in sys.argv,
+        # --recompute-totals REPLACES pkr_total / foreign_total instead of only
+        # filling empties. Needed once, to correct consignments stored by the
+        # earlier first-row logic; harmless afterwards.
+        recompute_totals="--recompute-totals" in sys.argv,
+    )

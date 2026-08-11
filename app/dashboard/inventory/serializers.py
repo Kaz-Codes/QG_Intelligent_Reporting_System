@@ -2,7 +2,8 @@ from app.dashboard.inventory.calculations import (
     kpis, items_by_branch, lowest_days_of_stock,
     stock_health_split, derive_stock_status, derive_reorder_status, days_of_stock,
     derive_movement, movement_kpis, movement_split, movement_by_branch, stock_days,
-    group_by_item,
+    group_by_item, item_references, items_where, movement_references,
+    MOVE_FAST, MOVE_DEAD, OUT_OF_STOCK, BELOW_REORDER,
 )
 
 
@@ -63,7 +64,8 @@ def serialize_rows(stocks, consumption, reorder_levels, issuance=None):
 # THE AGGREGATES (computed from the serialized rows)
 #-------------------------------------
 
-def serialize_inventory_dashboard(rows, windows):
+def serialize_inventory_dashboard(rows, windows, issuance=None,
+                                  issuance_references=None):
     """One screen, one set of numbers.
 
     TWO groupings, each used where it belongs:
@@ -84,6 +86,38 @@ def serialize_inventory_dashboard(rows, windows):
 
     return {
         "kpis": kpis(items),
+        # What went out in the chosen window (the current month by default).
+        # Replaces the fixed 12m/3m issuance tiles — see helpers.issuance_in_period.
+        "issuance": issuance,
+        # What is behind each headline. Every tile counts ITEMS, so every list
+        # is items — with the figure that put them there as the badge.
+        "references": {
+            "items": item_references(items),
+            "dead": item_references(
+                items_where(items, lambda i: i["movement"] == MOVE_DEAD)
+            ),
+            "fast": item_references(
+                items_where(items, lambda i: i["movement"] == MOVE_FAST)
+            ),
+            "issued_12m": item_references(
+                items_where(items, lambda i: i["issued_value_12m"]),
+                badge_key="issued_value_12m",
+            ),
+            "issued_3m": item_references(
+                items_where(items, lambda i: i["issued_value_3m"]),
+                badge_key="issued_value_3m",
+            ),
+            "out_of_stock": item_references(
+                items_where(items, lambda i: i["stock_status"] == OUT_OF_STOCK)
+            ),
+            "below_reorder": item_references(
+                items_where(items, lambda i: i["stock_status"] == BELOW_REORDER)
+            ),
+            "issuance": issuance_references,
+            # One list per movement class, keyed by the class name the chart
+            # shows, so its bars drill straight through.
+            "movement": movement_references(items),
+        },
         "movement_kpis": movement_kpis(items, windows["days_12m"], windows["days_3m"]),
         "stock_days": stock_days(rows, windows["days_12m"]),
         "stock_health": stock_health_split(items),

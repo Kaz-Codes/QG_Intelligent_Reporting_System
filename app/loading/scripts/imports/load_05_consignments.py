@@ -119,8 +119,8 @@ def terminal_flags(status):
 
 ITEM_COLUMNS = [
     "consignment_id", "item_id", "item_code", "item_name", "specification",
-    "hs_code", "quantity", "unit_price", "unit_of_measurement", "batch_no",
-    "job_number", "mo_number",
+    "hs_code", "quantity", "unit_price", "unit_of_measurement", "eta_works",
+    "batch_no", "job_number", "mo_number",
     "is_deleted",
 ]
 
@@ -292,6 +292,10 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
                 clean_number(r.get("Qty.")),
                 clean_number(r.get("Unit Price")),
                 clean_text(r.get("UOM")),
+                # The LINE's own ETA, not the header's. The rows grouped under
+                # one payment reference do not all arrive together — see the
+                # column's comment on ConsignmentItem for what that cost.
+                clean_date(r.get("ETA Works")),
                 clean_text(r.get("Batch No")),
                 clean_text(r.get("Job No")),
                 clean_text(r.get("MO No")),
