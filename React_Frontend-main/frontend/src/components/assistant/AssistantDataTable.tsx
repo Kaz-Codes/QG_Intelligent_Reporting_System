@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { useRowWindow } from './useRowWindow'
 import { ArrowDown, ArrowUp, Download, GripVertical, Sheet } from 'lucide-react'
 
 // Renders the rows behind an assistant answer as a real, interactive table:
@@ -154,6 +155,9 @@ export function AssistantDataTable({ columns, rows }: Props) {
     })
   }, [filteredRows, sort])
 
+  // Only the rows in view are drawn; see useRowWindow for why.
+  const win = useRowWindow(visibleRows.length)
+
   if (!rows.length || !cols.length) return null
 
   const toggleSort = (column: string) =>
@@ -243,7 +247,7 @@ export function AssistantDataTable({ columns, rows }: Props) {
         </div>
       </div>
 
-      <div className="max-h-[380px] overflow-auto">
+      <div ref={win.scrollRef} className="max-h-[380px] overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-canvas-alt">
             <tr>
@@ -285,8 +289,15 @@ export function AssistantDataTable({ columns, rows }: Props) {
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((row, i) => (
-              <tr key={i} className="odd:bg-canvas">
+            {/* Stands in for the rows scrolled off the top, so the scrollbar
+                keeps reporting the real length of the result. */}
+            {win.padTop > 0 && (
+              <tr aria-hidden="true" style={{ height: win.padTop }}>
+                <td colSpan={order.length} className="p-0" />
+              </tr>
+            )}
+            {visibleRows.slice(win.start, win.end).map((row, i) => (
+              <tr key={win.start + i} className="odd:bg-canvas">
                 {order.map((c) => (
                   <td
                     key={c}
@@ -297,6 +308,11 @@ export function AssistantDataTable({ columns, rows }: Props) {
                 ))}
               </tr>
             ))}
+            {win.padBottom > 0 && (
+              <tr aria-hidden="true" style={{ height: win.padBottom }}>
+                <td colSpan={order.length} className="p-0" />
+              </tr>
+            )}
             {visibleRows.length === 0 && (
               <tr>
                 <td colSpan={order.length} className="px-3 py-6 text-center text-muted">

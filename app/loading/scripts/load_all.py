@@ -11,6 +11,8 @@ from app.loading.scripts.imports.load_05_consignments import load_consignments
 from app.loading.scripts.logistics.load_01_logistics import load_logistics
 from app.loading.scripts.logistics.load_03_trucking import load_trucking
 
+from pathlib import Path
+
 from app.loading.database_connection import cursor, connection
 
 """
@@ -165,6 +167,49 @@ def call_load():
     print("\nAll load steps complete.")
 
 
+# The chatbot reads business definitions (branch aliases, stock position, the
+# per-item demand picture) out of SQL views. Those views are built ON the tables
+# DROP_SQL drops, so CASCADE takes every one of them with it. Recreating them is
+# part of a reload, not a separate chore: skip it and the chatbot answers
+# "relation v_item_stock_position does not exist" until somebody notices. This
+# has already happened three times.
+#
+# The path is resolved from THIS file, and the repo layout has moved once
+# (the ERP used to be nested one level deeper), so it is searched rather than
+# assumed - a wrong hard-coded depth fails silently, which is the whole problem.
+def _find_semantic_views_sql():
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        candidate = base / "chatbot_backend" / "database" / "semantic_views.sql"
+        if candidate.exists():
+            return candidate
+        candidate = base / "database" / "semantic_views.sql"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def create_semantic_views():
+    path = _find_semantic_views_sql()
+    if path is None:
+        print("\n!! semantic views: semantic_views.sql not found, SKIPPED.")
+        print("   The chatbot will fail on stock, branch and item questions.")
+        return
+
+    print(f"\nCreating semantic views from {path} ...")
+    try:
+        cursor.execute(path.read_text(encoding="utf-8"))
+        connection.commit()
+        cursor.execute(
+            "SELECT count(*) FROM information_schema.views "
+            r"WHERE table_schema = 'public' AND table_name LIKE 'v\_%'"
+        )
+        print(f"Semantic views created ({cursor.fetchone()[0]} views).")
+    except Exception as exc:
+        connection.rollback()
+        print(f"!! semantic views FAILED - {type(exc).__name__}: {exc}")
+
+
 def reset_and_load():
     """The destructive full reload, run from the command line.
 
@@ -180,6 +225,7 @@ def reset_and_load():
     drop_transaction_tables()
     main_app.create_tables()   # recreate the tables just dropped
     call_load()
+    create_semantic_views()
 
 
 if __name__ == "__main__":

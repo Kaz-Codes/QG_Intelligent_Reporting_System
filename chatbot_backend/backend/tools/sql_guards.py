@@ -75,6 +75,44 @@ _IN = re.compile(r"(?:(\w+)\.)?(\w+)\s+IN\s*\(([^)]*)\)", re.IGNORECASE)
 _LITERAL = re.compile(r"'([^']*)'")
 
 
+def _exists_in_db(column: str, value: str, tables: List[str]) -> bool:
+    """
+    Does this value actually exist in that column right now?
+
+    The profile can be stale - a status set through the ERP UI changes no row
+    count, so the cached vocabulary may not list it yet. Blocking on a stale
+    cache would refuse a correct query, so the database gets the final word.
+    Runs at most once per suspect literal, and only when the profile already
+    disagrees, so the normal path costs nothing.
+    """
+    if not tables:
+        return False
+    try:
+        from sqlalchemy import text
+
+        from backend.config import get_engine
+
+        with get_engine().connect() as conn:
+            for table in tables:
+                # Identifiers come from the profile (our own column/table names),
+                # never from the user; the VALUE is bound as a parameter.
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table) or \
+                   not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", column):
+                    continue
+                hit = conn.execute(
+                    text(
+                        f"SELECT 1 FROM {table} WHERE {column} = :v LIMIT 1"
+                    ),
+                    {"v": value},
+                ).first()
+                if hit:
+                    return True
+    except Exception:
+        # If the lookup itself fails, do not block on a guess.
+        return True
+    return False
+
+
 def check_literals(sql: str, profile: Dict) -> List[str]:
     """Literals filtered on that do not exist in that column. Silent killers."""
     vocab = _vocabularies(profile)
@@ -99,6 +137,11 @@ def check_literals(sql: str, profile: Dict) -> List[str]:
 
         # Case-only mismatch is worth its own message: it is invisible on
         # screen and matches nothing in Postgres.
+        # The profile says no. Confirm against the live database before
+        # blocking - the cache may simply predate this value.
+        if _exists_in_db(column, literal, list(tables.keys())):
+            return
+
         lowered = {v.lower(): v for v in every}
         if literal.lower() in lowered:
             problems.append(
@@ -170,6 +213,65 @@ def check_distinct(sql: str) -> List[str]:
     ]
 
 
+_FULL_JOIN = re.compile(r"\bFULL\s+(?:OUTER\s+)?JOIN\b", re.IGNORECASE)
+_RIGHT_JOIN = re.compile(r"\bRIGHT\s+(?:OUTER\s+)?JOIN\b", re.IGNORECASE)
+_CROSS_JOIN = re.compile(r"\bCROSS\s+JOIN\b", re.IGNORECASE)
+
+
+def check_joins(sql: str) -> List[str]:
+    """
+    FULL OUTER / RIGHT / CROSS joins, which here mean a row explosion.
+
+    Every table in this schema is joined child-to-parent, so an answer is built
+    by NARROWING from one side. A FULL OUTER JOIN does the opposite: it keeps
+    the unmatched rows of BOTH sides, so joining a filtered set to an unfiltered
+    view drags the whole view in.
+
+    Measured, on "show the resin import records and the resin items": 15 resin
+    import lines FULL OUTER JOINed to v_item_demand_picture returned 4,776 rows
+    - every item in the company - because only the import side was filtered.
+    Two of the 15 lines actually matched. A LEFT JOIN returns 15. The answer
+    opened with "the result contains 4,776 combined rows", and the response call
+    cost 94,829 input tokens instead of ~8,000.
+
+    Blocking, not advisory: the query is valid SQL that runs cleanly, so nothing
+    downstream can catch it, and one wasted retry is far cheaper than an answer
+    built on the entire item master.
+    """
+    problems: List[str] = []
+
+    if _FULL_JOIN.search(sql):
+        problems.append(
+            "`FULL OUTER JOIN` keeps the unmatched rows of BOTH sides, so a "
+            "filtered set joined to an unfiltered table returns that whole "
+            "table. This exact query shape returned 4,776 rows - every item in "
+            "the company - when the honest answer was 15. Anchor the query on "
+            "the side the question is about and LEFT JOIN the rest, or filter "
+            "BOTH sides on the same material before combining them. If you "
+            "genuinely need two independent result sets, UNION ALL them with a "
+            "literal label column saying which side each row came from."
+        )
+
+    if _RIGHT_JOIN.search(sql):
+        problems.append(
+            "`RIGHT JOIN` keeps every row of the RIGHT-hand table, including "
+            "those matching nothing on the left - so the table you are joining "
+            "TO decides the row count, not the one you are asking about. Swap "
+            "the operands and use LEFT JOIN, which makes the anchor table "
+            "obvious to anyone reading it."
+        )
+
+    if _CROSS_JOIN.search(sql):
+        problems.append(
+            "`CROSS JOIN` multiplies both sides together. It is legitimate only "
+            "against a single-row helper (a date window, a constant). Against "
+            "anything else it is a cartesian product - give the join an ON "
+            "condition."
+        )
+
+    return problems
+
+
 def inspect(sql: str, profile: Optional[Dict] = None) -> Tuple[List[str], List[str]]:
     """
     Check a query. Returns (blocking, advisory).
@@ -192,7 +294,9 @@ def inspect(sql: str, profile: Optional[Dict] = None) -> Tuple[List[str], List[s
         except Exception:
             return [], []
 
-    blocking = check_literals(sql, profile)
+    # check_joins is blocking: the query runs cleanly and returns a whole table,
+    # so nothing after this point can tell it was wrong.
+    blocking = check_literals(sql, profile) + check_joins(sql)
     advisory = check_sums(sql, profile) + check_distinct(sql)
     return blocking, advisory
 
@@ -203,10 +307,10 @@ def as_hint(problems: List[str]) -> str:
         return ""
     body = "\n".join(f"  - {p}" for p in problems)
     return (
-        "Your query was checked against what the database ACTUALLY contains and "
-        "these problems were found:\n"
+        "Your query was checked before running and these problems were found:\n"
         f"{body}\n"
-        "Rewrite the query using the real values listed above. Do not guess a "
-        "different value - use one that exists, or drop the filter if the "
-        "question did not ask for it."
+        "Rewrite it to address each one. Where a real value is listed above, use "
+        "one of those rather than guessing another, or drop the filter if the "
+        "question did not ask for it. Do not work around a problem by widening "
+        "the query - the point is to answer the question that was asked."
     )

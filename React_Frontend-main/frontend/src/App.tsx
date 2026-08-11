@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
+import { ChatProvider } from '@/lib/chatbot/ChatProvider'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
 import { RequirePage } from '@/features/auth/RequirePage'
@@ -25,6 +26,9 @@ import { TruckingChangeHistory } from '@/features/truckingStatus/TruckingChangeH
 function App() {
   return (
     <BrowserRouter>
+      {/* Above <Routes> on purpose: navigating away from /assistant must not
+          unmount the conversation, or an in-flight answer is lost. */}
+      <ChatProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
@@ -74,6 +78,7 @@ function App() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="*" element={<RootRedirect />} />
       </Routes>
+      </ChatProvider>
     </BrowserRouter>
   )
 }

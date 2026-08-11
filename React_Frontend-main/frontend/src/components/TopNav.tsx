@@ -47,7 +47,7 @@ function GroupNavItem({ item }: { item: PageDef & { children: NonNullable<PageDe
         onClick={() => setOpen((o) => !o)}
         className={cn(
           'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-          childActive ? 'bg-brand text-white shadow-sm' : 'text-ink hover:bg-canvas-alt',
+          childActive ? 'bg-brand text-black shadow-sm' : 'text-ink hover:bg-canvas-alt',
         )}
       >
         <Icon size={16} />
@@ -64,7 +64,7 @@ function GroupNavItem({ item }: { item: PageDef & { children: NonNullable<PageDe
               className={({ isActive }) =>
                 cn(
                   'rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  isActive ? 'bg-brand text-white' : 'text-ink hover:bg-canvas-alt',
+                  isActive ? 'bg-brand text-black' : 'text-ink hover:bg-canvas-alt',
                 )
               }
             >
@@ -99,7 +99,7 @@ export function TopNav() {
         <img src={logo} alt="Qadri Group" className="h-8 w-8 object-contain" />
         <div className="leading-tight">
           <p className="font-display text-sm font-bold text-navy">QG-IRS</p>
-          <p className="text-[10px] font-semibold text-gold">Intelligent Reporting System</p>
+          <p className="text-[10px] font-bold text-brand">Intelligent Reporting System</p>
         </div>
       </div>
 
@@ -116,7 +116,7 @@ export function TopNav() {
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  isActive ? 'bg-brand text-white shadow-sm' : 'text-ink hover:bg-canvas-alt',
+                  isActive ? 'bg-brand text-black shadow-sm' : 'text-ink hover:bg-canvas-alt',
                 )
               }
             >
