@@ -131,8 +131,7 @@ def fetch_orders(db):
 
 def fetch_filtered_orders(db, status, shipping_line, country, customer,
                           etd_from, etd_to, search,
-                          date_from=None, date_to=None, date_field=None,
-                          order_type=None):
+                          date_from=None, date_to=None, date_field=None):
     query = select(LogisticsConsignment).where(
         LogisticsConsignment.is_deleted == False
     # Containers are eager-loaded too: the container-type usage chart reads
@@ -150,18 +149,10 @@ def fetch_filtered_orders(db, status, shipping_line, country, customer,
         query = query.where(LogisticsConsignment.origin_country.in_(country))
     if customer:
         query = query.where(LogisticsConsignment.customer_name.in_(customer))
-    # Local against export. 392 of 745 orders do not state it, so the screen
-    # offers "Not stated" as a real choice rather than pretending the column is
-    # complete — see the data note this drives.
-    if order_type:
-        wanted = [t for t in order_type if t != NOT_STATED]
-        clauses = []
-        if wanted:
-            clauses.append(LogisticsConsignment.order_type.in_(wanted))
-        if NOT_STATED in order_type:
-            clauses.append(LogisticsConsignment.order_type.is_(None))
-        if clauses:
-            query = query.where(or_(*clauses))
+    # There is deliberately NO local/export filter here. Local orders carry no
+    # date at all, so filtering by type on a windowed screen would appear to
+    # work while always returning nothing for local. The split is shown as a
+    # whole-book COUNT instead — see order_type_counts.
     # The dashboard-wide window, on the caller's chosen date. etd_from/etd_to
     # stay as the screen's own explicit range on the port-in date.
     if date_from is not None and date_to is not None:
@@ -337,3 +328,88 @@ def logistics_links(db, jobs):
         str(order_id): {"customer": customer, "city": city, "province": province}
         for order_id, customer, city, province in rows
     }
+
+
+#=====================================================
+# EXPORT AGAINST LOCAL — WINDOWED, WITH THE UNDATED SHOWN
+#
+# Counted in the period like every other figure on the screen. But the count
+# alone would be a lie by omission, because NOT ONE local order carries a
+# business date: across port-in, ETD, CRO arrival, actual arrival, effective
+# and gate-out, all 7 local orders and all 392 that state no type are empty.
+# Only exports are dated.
+#
+# So a windowed split reads "N export, 0 local" in every period there has ever
+# been — and a reader takes that to mean there is no local business, rather
+# than that local orders are undated.
+#
+# `undated` is therefore returned alongside: the orders that can fall in NO
+# window at all. Same treatment as imports' undated money — the gap is put on
+# the screen instead of being quietly dropped from every period at once.
+#=====================================================
+
+def order_type_counts(db, date_from=None, date_to=None, date_field=None):
+    """Export / local / not-stated in the window, plus the ones no window reaches."""
+    def split(conditions):
+        rows = db.execute(
+            select(
+                LogisticsConsignment.order_type,
+                func.count(LogisticsConsignment.id),
+            )
+            .where(LogisticsConsignment.is_deleted == False)
+            .where(*conditions)
+            .group_by(LogisticsConsignment.order_type)
+        ).all()
+
+        counts = {(name or NOT_STATED): total for name, total in rows}
+        export = counts.get("Export", 0)
+        local = counts.get("Local", 0)
+        not_stated = counts.get(NOT_STATED, 0)
+        return {
+            "export": export,
+            "local": local,
+            "not_stated": not_stated,
+            "total": export + local + not_stated,
+        }
+
+    column = shipment_date_column(date_field)
+
+    if date_from is None or date_to is None:
+        windowed = split([])
+        undated = {"export": 0, "local": 0, "not_stated": 0, "total": 0}
+    else:
+        windowed = split([column.between(date_from, date_to)])
+        # Orders with nothing in the chosen column — they are in no period.
+        undated = split([column.is_(None)])
+
+    return {
+        **windowed,
+        "windowed": date_from is not None and date_to is not None,
+        "undated": undated,
+    }
+
+
+def orders_of_type(orders, order_type):
+    """The subset of an already-fetched list carrying one order type."""
+    if order_type == NOT_STATED:
+        return [o for o in orders if not o.order_type]
+    return [o for o in orders if o.order_type == order_type]
+
+
+def fetch_undated_orders(db, date_field=None, order_type=None):
+    """Orders with no date in the chosen column — reachable by no window.
+
+    Fetched separately because they are, by definition, outside the filtered
+    list every other figure on the screen is built from.
+    """
+    query = (
+        select(LogisticsConsignment)
+        .where(LogisticsConsignment.is_deleted == False)
+        .where(shipment_date_column(date_field).is_(None))
+    )
+    if order_type == NOT_STATED:
+        query = query.where(LogisticsConsignment.order_type.is_(None))
+    elif order_type:
+        query = query.where(LogisticsConsignment.order_type == order_type)
+
+    return db.execute(query).scalars().all()

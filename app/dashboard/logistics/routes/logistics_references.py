@@ -29,17 +29,19 @@ from app.dashboard.logistics.calculations import (
 )
 from app.dashboard.logistics.helpers import (
     fetch_filtered_orders, fetch_filtered_packages, fetch_filtered_trucking,
+    fetch_undated_orders,
 )
 from app.dashboard.logistics.routes.router import router
 
 KEYS = {
-    "shipments": ("orders", "delivered", "not_linked"),
+    "shipments": ("orders", "delivered", "not_linked",
+                  "export", "local", "not_stated", "undated"),
     "packing": ("packages", "packed"),
     "transport": ("jobs", "delivered", "in_progress"),
 }
 
 
-@router.get("/logistics/references")
+@router.get("/references")
 def logistics_references(
     request: Request,
     tab: str = Query(..., description="shipments | packing | transport"),
@@ -59,7 +61,6 @@ def logistics_references(
     shipping_line: Optional[list[str]] = Query(None),
     country: Optional[list[str]] = Query(None),
     customer: Optional[list[str]] = Query(None),
-    order_type: Optional[list[str]] = Query(None),
     etd_from: Optional[date] = None,
     etd_to: Optional[date] = None,
 
@@ -98,7 +99,7 @@ def logistics_references(
             orders = fetch_filtered_orders(
                 db, status, shipping_line, country, customer,
                 etd_from, etd_to, search,
-                period_from, period_to, date_field, order_type,
+                period_from, period_to, date_field,
             )
             # Stage is a derived roll-up of the status, so it is applied here —
             # exactly as the dashboard does, or the list counts a different set.
@@ -107,7 +108,13 @@ def logistics_references(
                 wanted = set(stage)
                 orders = [o for o in orders if shipment_stage(o) in wanted]
 
-            data = refs.shipment_sets(orders, DELIVERED, page, page_size)[key]
+            # The undated list is outside every window by definition, so it is
+            # fetched on its own rather than filtered out of `orders`.
+            undated = (fetch_undated_orders(db, date_field)
+                       if key == "undated" else None)
+            data = refs.shipment_sets(
+                orders, DELIVERED, page, page_size, undated=undated,
+            )[key]
 
         elif tab == "packing":
             packages = fetch_filtered_packages(

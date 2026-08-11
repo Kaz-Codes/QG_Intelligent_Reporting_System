@@ -123,15 +123,30 @@ def job_references(jobs, page=None, page_size=None, badge=None):
 # tile — the bug that had the Shafts tab showing 1 consignment over a list of 7.
 #=====================================================
 
-def shipment_sets(orders, delivered_status, page=None, page_size=None):
+def shipment_sets(orders, delivered_status, page=None, page_size=None,
+                  undated=None):
+    """The lists each shipments tile opens.
+
+    `undated` is the orders carrying no date in the chosen column — they are in
+    no window, so they cannot come out of `orders` and are passed in separately.
+    Their tile is the one that would otherwise read a silent zero.
+    """
     delivered = [o for o in orders if o.current_status == delivered_status]
     unlinked = [o for o in orders if not o.mo_no]
+    by_type = lambda t: [o for o in orders
+                         if (o.order_type == t if t else not o.order_type)]
 
-    return {
+    sets = {
         "orders": order_references(orders, page, page_size),
         "delivered": order_references(delivered, page, page_size),
         "not_linked": order_references(unlinked, page, page_size),
+        "export": order_references(by_type("Export"), page, page_size),
+        "local": order_references(by_type("Local"), page, page_size),
+        "not_stated": order_references(by_type(None), page, page_size),
     }
+    if undated is not None:
+        sets["undated"] = order_references(undated, page, page_size)
+    return sets
 
 
 def packing_sets(packages, packed_status, page=None, page_size=None):

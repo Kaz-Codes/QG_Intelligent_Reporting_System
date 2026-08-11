@@ -2,7 +2,7 @@ from sqlalchemy import select, or_, func
 from sqlalchemy.orm import joinedload
 from app.loading.schemas.stores_schemas import PurchasesData
 from app.masters.models import Item
-from app.dashboard.period import coverage
+from app.dashboard.period import coverage, PURCHASES_DATE_DEFAULT
 
 # The two real procurement events. "What did we commit to in August" and "what
 # did we spend in August" are different questions, both are fully populated,
@@ -13,7 +13,9 @@ DATE_FIELDS = {
     "po_date": PurchasesData.po_date,
     "purchase": PurchasesData.purchase,
 }
-DATE_FIELD_DEFAULT = "purchase"
+# Defined once in app/dashboard/period, so this screen and the Overview
+# cannot default to different dates for the same figure again.
+DATE_FIELD_DEFAULT = PURCHASES_DATE_DEFAULT
 
 DATE_FIELD_OPTIONS = [
     {"value": "po_date", "label": "PO date (ordered)"},

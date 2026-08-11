@@ -21,7 +21,8 @@ from typing import Optional
 from app.dashboard.period import resolve_period, serialize_period
 from app.dashboard.data_quality import coverage_note, collect
 from app.dashboard.logistics.helpers import (
-    shipments_coverage, packing_coverage, transport_coverage,
+    shipments_coverage, packing_coverage, transport_coverage, order_type_counts,
+    fetch_undated_orders,
     SHIPMENT_DATE_OPTIONS, SHIPMENT_DATE_DEFAULT,
     PACKING_DATE_OPTIONS, PACKING_DATE_DEFAULT,
     TRANSPORT_DATE_OPTIONS, TRANSPORT_DATE_DEFAULT,
@@ -45,9 +46,6 @@ def shipments_dashboard(
     etd_from : Optional[date] = None,
     etd_to : Optional[date] = None,
     search : Optional[str] = None,
-    # Local against export. Its own filter rather than a hidden assumption:
-    # 392 of 745 orders do not say, so "Not stated" is a selectable bucket.
-    order_type : Optional[list[str]] = Query(None),
     # The dashboard-wide window. Both omitted -> the current month.
     date_from : Optional[date] = None,
     date_to : Optional[date] = None,
@@ -64,7 +62,7 @@ def shipments_dashboard(
 
         orders = fetch_filtered_orders(
             db, status, shipping_line, country, customer, etd_from, etd_to, search,
-            period_from, period_to, date_field, order_type,
+            period_from, period_to, date_field,
         )
 
         cover = shipments_coverage(db, period_from, period_to, date_field)
@@ -78,7 +76,8 @@ def shipments_dashboard(
             coverage_note(
                 stated, len(orders), "orders in this period",
                 "a local/export type",
-                "The Local/Export filter can only narrow the ones that say.",
+                "The Orders tile counts the split over the whole book, because "
+                "local orders carry no date and so fall in no period at all.",
             ),
         )
 
@@ -102,12 +101,19 @@ def shipments_dashboard(
                 customers.add(o.customer_name)
 
         data = {
-            **serialize_shipments(orders, cover, notes),
+            **serialize_shipments(
+                orders, cover, notes,
+                # Undated orders sit outside every window, so they cannot come
+                # out of the filtered list and are fetched on their own.
+                undated=fetch_undated_orders(db, date_field),
+            ),
             "period": serialize_period(period_from, period_to, period_kind),
             "date_field": date_field or SHIPMENT_DATE_DEFAULT,
             "date_field_options": SHIPMENT_DATE_OPTIONS,
-            # A real bucket, offered alongside the values the column holds.
-            "order_types": ["Export", "Local", NOT_STATED],
+            # Export against local, counted IN THE WINDOW, with the orders no
+            # window can reach reported alongside — see order_type_counts.
+            "order_type_counts": order_type_counts(
+                db, period_from, period_to, date_field),
             "statuses": sorted(statuses),
             "stages": SHIPMENT_STAGES,
             "shipping_lines": sorted(shipping_lines),

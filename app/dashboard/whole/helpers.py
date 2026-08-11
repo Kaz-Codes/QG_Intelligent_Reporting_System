@@ -14,7 +14,9 @@ from app.masters.models import Item
 from app.enums import Status, JobKind
 from app.reports.helpers import SHAFT_ITEMS
 from app.dashboard.stock_runway import RUNWAY_WINDOW_DAYS, runway_window
-from app.dashboard.period import coverage
+from app.dashboard.period import (
+    coverage, PURCHASES_DATE_DEFAULT as SHARED_PURCHASES_DATE_DEFAULT,
+)
 
 #-----------------------------------------------------
 # OVERVIEW DASHBOARD QUERIES
@@ -75,7 +77,8 @@ PURCHASES_DATE_FIELDS = {
     "po_date": PurchasesData.po_date,
     "purchase": PurchasesData.purchase,
 }
-PURCHASES_DATE_DEFAULT = "po_date"
+# Defined once in app/dashboard/period — see why it is not "po_date".
+PURCHASES_DATE_DEFAULT = SHARED_PURCHASES_DATE_DEFAULT
 
 
 def purchases_date_column(field):

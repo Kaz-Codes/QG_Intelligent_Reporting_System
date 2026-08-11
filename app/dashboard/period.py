@@ -27,6 +27,27 @@ from decimal import Decimal
 MONTH_TO_DATE = "month_to_date"
 CUSTOM = "custom"
 
+#-----------------------------------------------------
+# WHICH PROCUREMENT DATE A SCREEN DEFAULTS TO
+#
+# Purchases carries two real events — when the order was PLACED (`po_date`) and
+# when it was actually BOUGHT (`purchase`) — and both are fully populated, so
+# the caller picks. But the DEFAULT has to be one value in one place.
+#
+# It was two. The Overview defaulted to `po_date` while the Purchases dashboard
+# defaulted to `purchase`, so the same window showed Rs 7.33bn over 5,036
+# orders on one screen and Rs 7.40bn over 5,187 on the other. Neither was
+# wrong; they were answering different questions under the same label, and
+# nothing on either screen said which.
+#
+# `purchase` wins because it is what "procurement value this month" is normally
+# taken to mean — money spent, not money committed — and because every other
+# section of the Overview dates on when something HAPPENED (goods landing,
+# stock issuing) rather than when it was promised.
+#-----------------------------------------------------
+
+PURCHASES_DATE_DEFAULT = "purchase"
+
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",

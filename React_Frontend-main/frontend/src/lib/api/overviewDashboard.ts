@@ -136,12 +136,26 @@ export interface OverviewLogistics extends SectionMeta {
   freight_per_kg: { rate: number | null; freight: number; kilograms: number; basis: number }
   /** Sailing to arrival. Only 23% of orders record both dates. */
   transit_time: { days: number | null; basis: number }
+  /** Export against local IN THE WINDOW. `undated` is the orders no window
+   *  reaches — not one local order carries a business date, so without it the
+   *  local tile is a silent zero. */
+  order_types: {
+    export: number
+    local: number
+    not_stated: number
+    total: number
+    windowed: boolean
+    undated: { export: number; local: number; not_stated: number; total: number }
+  }
   /** `by_movement` is keyed by movement type, with the NULL group under
    *  "Unclassified" — the same name its tile shows. */
   references: {
     trucking_cost: ReferenceSet
     by_movement: Record<string, ReferenceSet>
     shipments_handled: ReferenceSet
+    export_orders: ReferenceSet
+    local_orders: ReferenceSet
+    undated_orders: ReferenceSet
   }
 }
 

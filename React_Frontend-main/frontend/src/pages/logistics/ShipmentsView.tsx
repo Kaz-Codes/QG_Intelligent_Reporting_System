@@ -11,7 +11,7 @@ import { money } from '@/lib/format'
 import { PeriodFilter, PeriodSummary, EMPTY_PERIOD, type Period } from '@/components/PeriodFilter'
 import { DataNotes } from '@/components/DataNotes'
 import { Label } from '@/components/ui/label'
-import { LOGISTICS_HELP } from '@/lib/metricHelp'
+import { LOGISTICS_HELP, withBasis } from '@/lib/metricHelp'
 import { useDebounced } from '@/lib/useDebounced'
 import { useShipmentsDashboard } from '@/lib/api/useLogisticsDashboard'
 import { logisticsRefPager } from '@/lib/api/dashboardReferences'
@@ -26,10 +26,18 @@ import { logisticsRefPager } from '@/lib/api/dashboardReferences'
  * doesn't need a tab bar, so it's a plain card until those figures exist.
  *
  * THE TAB IS "SHIPMENTS", NOT "EXPORT SHIPMENTS". Local orders live in this
- * table too; the Local/Export filter below is what says which is on screen,
- * rather than a tab label that quietly asserts one of them. 392 of 745 orders
- * do not state a type at all, so "Not stated" is a selectable bucket and the
- * data note says how many that is.
+ * table too, and the Orders tile below shows the split.
+ *
+ * It is a TILE rather than a filter, because filtering by it would not work:
+ * local orders carry no date at all — no ETD, no arrival, no gate-out — so
+ * every windowed view of this screen contains only exports. A Local/Export
+ * filter would have appeared to work while always returning nothing for local,
+ * which is worse than not offering it.
+ *
+ * The tile is windowed like everything else here, and reports the UNDATED
+ * orders beside it. That is what stops "0 local" reading as "no local
+ * business" when it actually means "local orders carry no date": the orders
+ * are there, in a list you can open, just in no period.
  */
 export function ShipmentsView() {
   const [status, setStatus] = useState<string[]>([])
@@ -40,7 +48,6 @@ export function ShipmentsView() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [search, setSearch] = useState('')
-  const [orderType, setOrderType] = useState<string[]>([])
   // Empty = this month, resolved by the backend.
   const [period, setPeriod] = useState<Period>(EMPTY_PERIOD)
   // Sailing or arrival. "What sailed in August" and "what landed in August" are
@@ -53,7 +60,6 @@ export function ShipmentsView() {
     status, stage, shipping_line: shippingLine, country, customer,
     etd_from: dateFrom || undefined, etd_to: dateTo || undefined,
     search: debouncedSearch.trim() || undefined,
-    order_type: orderType,
     date_from: period.from || undefined,
     date_to: period.to || undefined,
     date_field: dateField,
@@ -68,7 +74,6 @@ export function ShipmentsView() {
     tab: 'shipments',
     status, stage, shipping_line: shippingLine, country, customer,
     etd_from: dateFrom, etd_to: dateTo, search: debouncedSearch.trim(),
-    order_type: orderType,
     date_from: period.from, date_to: period.to, date_field: dateField,
   })
 
@@ -103,8 +108,6 @@ export function ShipmentsView() {
 
       <FilterBar search={{ value: search, onChange: setSearch, placeholder: 'Search by export no, customer, or country…' }}>
         <DateRangeFilter label="ETD" from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
-        {/* Which business this is — the thing the tab label used to assert. */}
-        <MultiSelectFilter label="Local / Export" options={data?.orderTypes ?? []} value={orderType} onChange={setOrderType} />
         <MultiSelectFilter label="Customer" options={data?.customers ?? []} value={customer} onChange={setCustomer} />
         <MultiSelectFilter label="Shipment Stage" options={data?.stages ?? []} value={stage} onChange={setStage} />
         <MultiSelectFilter label="Shipment Status" options={data?.statuses ?? []} value={status} onChange={setStatus} />
@@ -120,7 +123,23 @@ export function ShipmentsView() {
               rather than left to be discovered. */}
           {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+            <KpiCard label="Orders"
+              value={data.orderTypeCounts.total.toLocaleString()}
+              sub={`${data.orderTypeCounts.export.toLocaleString()} export · ${data.orderTypeCounts.local.toLocaleString()} local · ${data.orderTypeCounts.not_stated.toLocaleString()} not stated`}
+              refs={refs.orders} fetchRefs={pager('orders')}
+              help={withBasis(LOGISTICS_HELP.orderTypes,
+                data.orderTypeCounts.undated.total
+                  ? `${data.orderTypeCounts.undated.total.toLocaleString()} orders carry no ${data.dateField.toUpperCase()} at all and fall in no period — ${data.orderTypeCounts.undated.local.toLocaleString()} of them local. Open the Undated tile to see them.`
+                  : undefined)} />
+            {/* The tile that stops "0 local" being read as "no local business". */}
+            {data.orderTypeCounts.undated.total > 0 && (
+              <KpiCard label="Undated Orders"
+                value={data.orderTypeCounts.undated.total.toLocaleString()}
+                sub={`${data.orderTypeCounts.undated.export.toLocaleString()} export · ${data.orderTypeCounts.undated.local.toLocaleString()} local · ${data.orderTypeCounts.undated.not_stated.toLocaleString()} not stated`}
+                refs={refs.undated} fetchRefs={pager('undated')}
+                help={LOGISTICS_HELP.undatedOrders} />
+            )}
             <KpiCard label="Shipments" value={kpis.shipments_shown.toLocaleString()}
               refs={refs.orders} fetchRefs={pager('orders')}
               help={LOGISTICS_HELP.shipments} />

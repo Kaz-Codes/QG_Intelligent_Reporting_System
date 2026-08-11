@@ -487,6 +487,44 @@ database), and:
   in-window lines the headline does; they used to sum consignment-level totals,
   putting Rs 29.27bn beside Rs 29.07bn on one page.
 
+### A ZERO needs a reason beside it
+
+The logistics Shipments tab and the Overview both split orders into export and
+local, **windowed like every other figure**. Local reads **zero in every period
+there has ever been** — and that is a fact about the DATA, not the business:
+across port-in, ETD, CRO arrival, actual arrival, effective and gate-out, **not
+one** of the 7 local orders (or the 392 that state no type) carries a date. Only
+exports are dated.
+
+So an **Undated Orders** tile sits beside them, carrying the 501 orders no
+window can reach, split by type and openable like any other. Without it "0
+local" reads as *"we do no local business"* rather than *"local orders carry no
+date"* — the same class of error as a bare Rs 0 on an empty period, and the same
+fix: put the gap on the screen.
+
+The Local/Export FILTER was removed for the same reason. Filtering a windowed
+screen by a type only one value of which is ever dated would have appeared to
+work while always returning nothing for local.
+
+### A DEFAULT is part of the metric
+
+Two screens can share a formula, share a window, agree on every figure you check
+by hand — and still disagree the moment somebody just opens them. Procurement
+did: the Overview defaulted to **`po_date`** while the Purchases dashboard
+defaulted to **`purchase`**, so one month read Rs 7.33bn over 5,036 orders on
+one screen and Rs 7.40bn over 5,187 on the other. Forced onto the same date
+field they matched to the rupee; nothing was wrong with either calculation.
+
+Both dates are real and the caller still picks between them. What cannot be two
+values is the DEFAULT, so it lives in `app/dashboard/period.PURCHASES_DATE_DEFAULT`
+and both screens import it. It is **`purchase`**: "procurement value this month"
+normally means money spent rather than money committed, and every other Overview
+section dates on when something HAPPENED (goods landing, stock issuing) rather
+than when it was promised.
+
+The consistency suite now asserts the shared default, not only that the two
+agree once you force them onto the same field.
+
 ### One metric, one definition (`app/dashboard/stock_runway.py`)
 
 **A figure that appears on two screens is computed in ONE place.** The rule

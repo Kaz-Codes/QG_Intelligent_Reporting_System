@@ -56,6 +56,36 @@ check("delayed matches", o["delayed"]["count"] == i["delivery_delay"]["delayed"]
 check("in-process + arrived + cancelled = total",
       p["in_process"]["count"] + p["arrived"]["count"] + p["cancelled"]["count"] == p["total"]["count"])
 
+print("\n== Procurement: Overview vs Purchases dashboard ==")
+# These agreed on any window you FORCED to the same date field, and disagreed on
+# every window if you touched nothing — because the two screens defaulted to
+# different dates for one figure (po_date against purchase). A default is part
+# of the metric, so it is asserted here.
+PW2 = ("2026-01-01", "2026-08-31")
+op = get("/dashboard/overview",
+         purchases_date_from=PW2[0], purchases_date_to=PW2[1])["procurement"]
+pp = get("/dashboard/purchases", date_from=PW2[0], date_to=PW2[1])
+check("same default date field", op["date_field"] == pp["date_field"], op["date_field"])
+check("value matches on DEFAULTS",
+      float(op["period_value"]["value"]) == float(pp["kpis"]["total_value"]),
+      f'{float(op["period_value"]["value"]):,.0f}')
+check("order count matches on DEFAULTS",
+      op["period_value"]["orders"] == pp["kpis"]["orders_count"],
+      f'{op["period_value"]["orders"]:,}')
+# The same figure stated to different precision still reads as two figures.
+check("delay rate matches on DEFAULTS, to the same precision",
+      op["delay"]["delay_pct"] == pp["kpis"]["delayed_pct"],
+      f'{op["delay"]["delay_pct"]}% from {op["delay"]["late_orders"]:,} of {op["delay"]["basis"]:,}')
+check("on-time + delayed = 100",
+      round(pp["kpis"]["on_time_pct"] + pp["kpis"]["delayed_pct"], 1) == 100.0)
+for _field in ("po_date", "purchase"):
+    _o = get("/dashboard/overview", purchases_date_from=PW2[0],
+             purchases_date_to=PW2[1], purchases_date_field=_field)["procurement"]
+    _p = get("/dashboard/purchases", date_from=PW2[0], date_to=PW2[1], date_field=_field)
+    check(f"still agree when switched to '{_field}'",
+          float(_o["period_value"]["value"]) == float(_p["kpis"]["total_value"]))
+
+
 print("\n== Stock days: Inventory vs Overview Stores ==")
 inv = get("/dashboard/inventory")
 sto = get("/dashboard/overview")["stores"]
@@ -163,6 +193,45 @@ ct = proc["cycle_time"]
 check("store-to-purchase cycle time present", ct["store_to_purchase_days"] is not None,
       f'{ct["store_to_purchase_days"]} days over {ct["store_to_purchase_basis"]} orders')
 check("cycle time has a real basis", ct["store_to_purchase_basis"] > 0)
+
+print("\n== Logistics: windowed order types, with the undated visible ==")
+lg = get("/dashboard/logistics/shipments")
+t = lg["order_type_counts"]
+check("order split is windowed", t["windowed"] is True)
+check("split sums to its own total",
+      t["export"] + t["local"] + t["not_stated"] == t["total"],
+      f'{t["total"]} in {lg["period"]["label"]}')
+# The point of the undated tile: local orders carry no business date, so a
+# windowed local count is structurally zero. If that ever stops being true this
+# check fires and the tile can be reconsidered.
+check("undated orders are reported, not dropped",
+      t["undated"]["total"] > 0,
+      f'{t["undated"]["total"]} orders in no period ({t["undated"]["local"]} local)')
+check("every windowed tile has a list behind it",
+      all(lg["references"][k]["total"] == t[k]
+          for k in ("export", "local", "not_stated")))
+check("undated list matches the undated tile",
+      lg["references"]["undated"]["total"] == t["undated"]["total"])
+
+ol = get("/dashboard/overview")["logistics"]
+check("overview and the tab agree on the export count",
+      ol["order_types"]["export"] == t["export"], str(t["export"]))
+check("overview and the tab agree on the undated count",
+      ol["order_types"]["undated"]["total"] == t["undated"]["total"])
+check("overview order tiles have lists behind them",
+      ol["references"]["export_orders"]["total"] == ol["order_types"]["export"]
+      and ol["references"]["undated_orders"]["total"]
+      == ol["order_types"]["undated"]["total"])
+
+for _tab, _key in (("shipments", "undated"), ("packing", "packages"),
+                   ("transport", "jobs")):
+    _r = c.get("/dashboard/logistics/references",
+               params={"tab": _tab, "key": _key, "page": 1, "page_size": 5})
+    check(f"logistics references {_tab}/{_key} pages", _r.status_code == 200)
+check("logistics references rejects an unknown tab",
+      c.get("/dashboard/logistics/references",
+            params={"tab": "nope", "key": "orders"}).status_code == 400)
+
 
 print("\n== Logistics left unchanged ==")
 lg = c.get("/dashboard/logistics/shipments")

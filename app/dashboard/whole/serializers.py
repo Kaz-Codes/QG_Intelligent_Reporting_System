@@ -1,6 +1,7 @@
 from app.dashboard.whole import calculations as calc
 from app.dashboard.whole import helpers
 from app.dashboard.whole import references as refs
+from app.dashboard.logistics import helpers as logistics_helpers
 from app.dashboard.data_quality import coverage_note, note, collect, WARNING
 from app.dashboard.period import serialize_period, resolve_period
 
@@ -178,6 +179,11 @@ def serialize_logistics(db, date_from, date_to, date_field, period_kind):
             db, date_from, date_to, date_field),
         "transit_time": helpers.logistics_transit_time(
             db, date_from, date_to, date_field),
+        # Export against local, counted IN THE WINDOW like everything else
+        # here, with the orders no window can reach reported alongside — not
+        # one local order carries a business date.
+        "order_types": logistics_helpers.order_type_counts(
+            db, date_from, date_to, date_field),
         # One list per movement bucket as well as the total, because each
         # bucket is its own tile. Keyed by movement type, with the NULL group
         # under "Unclassified" — the same name the tile shows.
@@ -192,6 +198,12 @@ def serialize_logistics(db, date_from, date_to, date_field, period_kind):
             "shipments_handled": refs.shipments_handled_references(
                 db, date_from, date_to, date_field
             ),
+            "export_orders": refs.order_type_references(
+                db, "Export", date_from, date_to, date_field),
+            "local_orders": refs.order_type_references(
+                db, "Local", date_from, date_to, date_field),
+            "undated_orders": refs.order_type_references(
+                db, None, date_from, date_to, date_field, undated=True),
         },
     }
 

@@ -600,3 +600,56 @@ def consignment_line_rows(db, conditions, page, page_size):
 
     return paginate(items, page, size, total=total or 0,
                     unit="line", groups=groups or 0, group_unit="consignment")
+
+
+def order_type_references(db, order_type, date_from, date_to, date_field=None,
+                          undated=False, page=None, page_size=None):
+    """Logistics orders of one type, in the window — or the undated ones.
+
+    `undated=True` returns the orders carrying NO date in the chosen column,
+    whatever their type. They are in no period, which is exactly why they need
+    a list of their own: not one local order has a business date, so the local
+    tile would otherwise be a zero with nothing behind it.
+    """
+    from app.dashboard.whole.helpers import LOGISTICS_ORDER_DATE_FIELDS
+
+    column = LOGISTICS_ORDER_DATE_FIELDS.get(
+        date_field or LOGISTICS_DATE_DEFAULT,
+        LOGISTICS_ORDER_DATE_FIELDS[LOGISTICS_DATE_DEFAULT],
+    )
+
+    conditions = [LogisticsConsignment.is_deleted.is_(False)]
+    if undated:
+        conditions.append(column.is_(None))
+    else:
+        conditions.append(column.between(date_from, date_to))
+        conditions.append(LogisticsConsignment.order_type == order_type)
+
+    total = db.execute(
+        select(func.count(LogisticsConsignment.id)).where(*conditions)
+    ).scalar()
+
+    page, size = clamp(page, page_size)
+    rows = db.execute(
+        select(
+            LogisticsConsignment.id,
+            LogisticsConsignment.mo_no,
+            LogisticsConsignment.customer_name,
+            LogisticsConsignment.order_type,
+            LogisticsConsignment.current_status,
+        )
+        .where(*conditions)
+        .order_by(LogisticsConsignment.id.desc())
+        .offset((page - 1) * size).limit(size)
+    ).all()
+
+    return _set(total, [
+        {
+            "id": oid,
+            "reference": mo or f"LOG-{oid}",
+            "detail": customer,
+            "meta": _joined(kind or "type not stated", status),
+            "badge": kind or "not stated",
+        }
+        for oid, mo, customer, kind, status in rows
+    ], page, size, unit="order")

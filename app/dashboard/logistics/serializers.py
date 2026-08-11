@@ -14,7 +14,7 @@ from app.dashboard.logistics import references as refs
 # SHIPMENTS
 #=====================================================
 
-def serialize_shipments(orders, coverage=None, notes=None):
+def serialize_shipments(orders, coverage=None, notes=None, undated=None):
     return {
         "kpis": shipments_kpis(orders),
         # What the source holds against what the window caught, and where the
@@ -22,7 +22,7 @@ def serialize_shipments(orders, coverage=None, notes=None):
         # other dashboard, so this screen is no longer the quiet one.
         "coverage": coverage,
         "data_notes": notes or [],
-        "references": refs.shipment_sets(orders, DELIVERED),
+        "references": refs.shipment_sets(orders, DELIVERED, undated=undated),
         "status_split": count_split(orders, lambda o: o.current_status),
         "cost_per_kg_by_country": cost_per_kg_by_country(orders),
 

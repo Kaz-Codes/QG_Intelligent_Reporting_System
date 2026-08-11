@@ -191,6 +191,21 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
     how: 'Items with value on hand and no issuance within the threshold. An item still moving at one store is not dead because it sat still at another.',
     differs: 'Stock Value is everything held; this is the part of it nobody has drawn on.',
   },
+  exportOrders: {
+    what: 'How many logistics orders in this period are export business.',
+    how: 'Orders with order type "Export" whose chosen date falls in the window.',
+    differs: 'Only exports carry dates, so in practice this is nearly the whole windowed count. The Undated tile holds the rest.',
+  },
+  localOrders: {
+    what: 'How many logistics orders in this period are local business.',
+    how: 'Orders with order type "Local" whose chosen date falls in the window.',
+    differs: 'This will read zero in every period, and that is a DATA fact rather than a business one: not one local order records a sailing, arrival or gate-out date, so none can fall in any window. The Undated tile beside it holds them.',
+  },
+  undatedOrders: {
+    what: 'Orders that carry no date at all, so no period can reach them.',
+    how: 'Orders with nothing in the date column currently selected. Split by type, because the local ones are all here.',
+    differs: 'These are real orders excluded from every windowed figure on the screen — not deleted, not cancelled, just undated. Shown so the money and volume do not disappear silently between periods.',
+  },
   packedTonnage: {
     what: 'How much weight was packed for shipping in this period.',
     how: 'Gross weight summed across the packages packed in the window, in tonnes.',
@@ -300,6 +315,16 @@ export const LOGISTICS_HELP: Record<string, MetricHelp> = {
   countries: {
     what: 'How many destination countries these shipments went to.',
     how: 'Distinct origin/destination countries on the orders in the period.',
+  },
+  orderTypes: {
+    what: 'The orders in this period, split into export, local and not stated.',
+    how: 'Counted in the window on the date you chose above.',
+    differs: 'Local reads zero in every period because local orders carry no date at all — not because there is no local business. The Undated tile beside this one holds them, and can be opened.',
+  },
+  undatedOrders: {
+    what: 'Orders carrying no date in the column currently selected.',
+    how: 'They fall in no period, so no windowed figure on this screen counts them. Split by type, because every local order is one of them.',
+    differs: 'Not deleted and not cancelled — just undated. Shown so they do not disappear silently from every period at once.',
   },
   packages: {
     what: 'How many packages were packed in this period.',

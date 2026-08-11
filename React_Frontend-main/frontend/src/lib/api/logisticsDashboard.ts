@@ -62,13 +62,28 @@ export interface ShipmentsFilters {
   etd_from?: string
   etd_to?: string
   search?: string
-  /** Local / Export / Not stated — the thing the tab label used to assert. */
-  order_type?: string[]
   /** The dashboard-wide window. Omit BOTH for the current month. */
   date_from?: string
   date_to?: string
   /** Which date it applies to: etd (sailing) | eta (arrival). */
   date_field?: string
+}
+
+export interface OrderTypeSplit {
+  export: number
+  local: number
+  /** Orders whose type the sheet never states — shown rather than folded
+   *  into either side. */
+  not_stated: number
+  total: number
+}
+
+export interface OrderTypeCounts extends OrderTypeSplit {
+  windowed: boolean
+  /** Orders with NO date in the chosen column, so they fall in no period at
+   *  all. NOT ONE local order carries a business date, so without this the
+   *  local tile is a silent zero that reads as "we do no local business". */
+  undated: OrderTypeSplit
 }
 
 export interface ShipmentsResponse extends TabMeta {
@@ -77,9 +92,14 @@ export interface ShipmentsResponse extends TabMeta {
     orders: ReferenceSet
     delivered: ReferenceSet
     not_linked: ReferenceSet
+    export: ReferenceSet
+    local: ReferenceSet
+    not_stated: ReferenceSet
+    /** The orders no window reaches. */
+    undated: ReferenceSet
   }
-  /** The buckets the Local/Export filter offers, including "Not stated". */
-  orderTypes: string[]
+  /** Export against local IN THE WINDOW, with the undated orders alongside. */
+  orderTypeCounts: OrderTypeCounts
   statusSplit: LabelValue[]
   costPerKgByCountry: LabelValue[]
   statuses: string[]
@@ -96,7 +116,7 @@ export async function getShipmentsDashboard(filters: ShipmentsFilters = {}): Pro
     statuses: string[]; stages: string[]; shipping_lines: string[]
     countries: string[]; customers: string[]
     references: ShipmentsResponse['references']
-    order_types: string[]
+    order_type_counts: OrderTypeCounts
     period: ResolvedPeriod
     coverage: Coverage
     data_notes: DataNote[]
@@ -113,7 +133,7 @@ export async function getShipmentsDashboard(filters: ShipmentsFilters = {}): Pro
     countries: data.countries,
     customers: data.customers,
     references: data.references,
-    orderTypes: data.order_types,
+    orderTypeCounts: data.order_type_counts,
     period: data.period,
     coverage: data.coverage,
     dataNotes: data.data_notes,

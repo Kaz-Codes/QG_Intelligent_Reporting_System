@@ -194,11 +194,15 @@ def kpis(rows, orders=None):
 
     # Of the orders actually purchased, how many landed on time.
     purchased = completed + delayed
-    on_time_pct = round((completed / purchased) * 100) if purchased else 0
+    # ONE DECIMAL PLACE, matching the Overview's delay rate. Rounding the same
+    # 64-of-180 to a whole number here and to a decimal there put "36%" beside
+    # "35.6%" for one figure — a trivial-looking difference that still makes a
+    # reader check whether the two screens are counting the same thing.
+    on_time_pct = round((completed / purchased) * 100, 1) if purchased else 0
     # Stated as a percentage on the SAME denominator as on-time, so the two
     # tiles are directly comparable and sum to 100. The count is still
     # published as `delayed_orders` and shown by the tile's drill-down.
-    delayed_pct = round((delayed / purchased) * 100) if purchased else 0
+    delayed_pct = round((delayed / purchased) * 100, 1) if purchased else 0
 
     return {
         "orders_count": orders_count,
