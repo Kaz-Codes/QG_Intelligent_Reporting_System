@@ -12,6 +12,12 @@ import type { AssistantMessage } from '@/lib/chatbot/types'
 // of transparent padding baked into its square canvas (top/bottom), which
 // stacked with this page's own spacing read as a large gap before "QG-IRS".
 import logo from '@/assets/qadri_logo_tight.webp'
+// Same crop, but the wordmark + ring outline are recolored from black to the
+// dark theme's ink (#F2EDE4) — flat black disappears against the dark
+// canvas. A dedicated asset instead of a drop-shadow halo: blurring a glow
+// around the whole silhouette also haloed the ring's soft anti-aliased edge,
+// which read as sparkly/glittery rather than a clean outline.
+import logoDark from '@/assets/qadri_logo_tight_dark.webp'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/theme/ThemeContext'
 
@@ -27,26 +33,16 @@ const SUGGESTED_QUERIES = [
 // The mark is a transparent cut-out, so it gets no tile treatment — a rounded
 // card + ring + shadow would draw a box around the empty space in the logo's
 // corners rather than around the logo itself.
-// The mark's wordmark is flat black (no bevel), which reads fine on light
-// surfaces but disappears against the dark theme's near-black canvas — a
-// stacked drop-shadow halo (the standard transparent-PNG outline trick)
-// keeps it legible without touching the artwork or its brand colors.
 function BotAvatar({ size = 44 }: { size?: number }) {
   const { dark } = useTheme()
   return (
     <img
-      src={logo}
+      src={dark ? logoDark : logo}
       alt={BOT_NAME}
       width={size}
       height={size}
       className="shrink-0 object-contain"
-      style={{
-        width: size,
-        height: size,
-        filter: dark
-          ? 'drop-shadow(0 0 1px rgba(255,255,255,0.9)) drop-shadow(0 0 2.5px rgba(255,255,255,0.55))'
-          : undefined,
-      }}
+      style={{ width: size, height: size }}
     />
   )
 }
