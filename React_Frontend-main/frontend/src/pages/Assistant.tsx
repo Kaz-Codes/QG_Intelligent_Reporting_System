@@ -8,7 +8,7 @@ import { DevDetailsPanel } from '@/components/assistant/DevDetailsPanel'
 import { useChat } from '@/lib/chatbot/useChat'
 import { useChatHealth } from '@/lib/chatbot/useHealth'
 import type { AssistantMessage } from '@/lib/chatbot/types'
-import logo from '@/assets/qadri_logo_transparent.png'
+import logo from '@/assets/qg_logo_transparent.webp'
 import { cn } from '@/lib/utils'
 
 const BOT_NAME = 'QG-IRS'
@@ -20,14 +20,17 @@ const SUGGESTED_QUERIES = [
   'Show imports pending clearance',
 ]
 
-function BotAvatar({ size = 36 }: { size?: number }) {
+// The mark is a transparent cut-out, so it gets no tile treatment — a rounded
+// card + ring + shadow would draw a box around the empty space in the logo's
+// corners rather than around the logo itself.
+function BotAvatar({ size = 44 }: { size?: number }) {
   return (
     <img
       src={logo}
       alt={BOT_NAME}
       width={size}
       height={size}
-      className="shrink-0 rounded-xl shadow-sm ring-1 ring-line"
+      className="shrink-0 object-contain"
       style={{ width: size, height: size }}
     />
   )
@@ -143,8 +146,10 @@ export function Assistant() {
     return (
       <div className="flex h-[calc(100vh-4rem)] flex-col items-center justify-center px-4">
         <div className="animate-fade-in-up w-full max-w-xl text-center">
-          <div className="mx-auto mb-5 w-fit rounded-2xl shadow-lg" style={{ boxShadow: '0 10px 28px rgba(79,70,229,.28)' }}>
-            <BotAvatar size={64} />
+          {/* No drop shadow on the wrapper: with a transparent mark it renders
+              as a rectangular glow behind empty space. */}
+          <div className="mx-auto mb-5 w-fit">
+            <BotAvatar size={96} />
           </div>
           <h1 className="font-display text-3xl font-extrabold tracking-tight text-navy">{BOT_NAME}</h1>
           <p className="mt-2 text-sm text-muted">Purchases, inventory, imports, or logistics — in plain language.</p>
@@ -172,7 +177,7 @@ export function Assistant() {
       {/* Header — only shown once a conversation is underway. */}
       <div className="flex items-center justify-between pb-4">
         <div className="flex items-center gap-3">
-          <BotAvatar size={40} />
+          <BotAvatar size={52} />
           <div>
             <div className="flex items-center gap-2">
               <h1 className="font-display text-xl font-bold text-navy">{BOT_NAME}</h1>

@@ -119,7 +119,17 @@ HARD RULES
    shipment. But LISTING what is on those shipments is a line-level question:
    count headers, list lines. If the user asks for both, give the shipment count
    AND the line detail, and say which is which.
-12. SELECT ONLY THE COLUMNS THE ANSWER NEEDS. The rows go into a table the user
+12. SELECT ONLY THE COLUMNS THE ANSWER NEEDS.
+   ONE EXEMPTION, deliberate: when the question is about a MATERIAL's position -
+   what we hold, how long it lasts, who wants it, whether to buy - query
+   v_item_demand_picture and SELECT EVERY COLUMN OF IT. Its columns are not
+   padding; each is a required part of the answer (stock + issued + days of
+   cover in one section, open demand + inbound ETA in the next, the shortfall
+   in the last). Dropping suggested_buy_qty because the user did not say the
+   word "buy" produced an answer that had to state "a calculated buy quantity
+   is not available" when it was one column away. Take the whole row.
+   For every other question the rest of this rule applies.
+   The rows go into a table the user
    reads, not a data dump. Every extra column is noise they have to scan past.
    The working set is: what identifies the record, what they ASKED about, and
    what is needed to make sense of it. That is usually 4-7 columns. If you are

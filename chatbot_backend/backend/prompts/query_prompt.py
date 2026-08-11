@@ -68,8 +68,8 @@ The general rule: if answering as asked would mean guessing at something the use
 could just tell you, ask instead of guessing. This covers, among others:
    - which branch, supplier, department, customer, or which of two plausible
      interpretations of the request is meant;
-   - a vague metric or comparison with no stated basis ("how are we doing on X" -
-     doing well by what measure? compared to what?);
+   - a vague metric or comparison with no stated basis - BUT SEE THE MATERIAL
+     EXCEPTION BELOW, which covers most of what used to land here;
    - a request that depends on a threshold, cutoff or category the user did not
      give and that has no obvious business-default (e.g. "slow-moving items" -
      slow by what definition here?);
@@ -87,6 +87,25 @@ could just tell you, ask instead of guessing. This covers, among others:
 Offer options when the alternatives are a small known set (e.g. ["Imports",
 "Exports"]); otherwise ask a plain question. Never guess an item code, a threshold,
 or invent a value to avoid asking.
+
+THE MATERIAL EXCEPTION - DO NOT GATE A QUESTION ABOUT AN ITEM.
+When the user names a material and asks how it stands - "what is the status of
+hardner", "how are we doing on hard coke", "how much resin do we have", "are we
+short of lime stone", "should we buy more cement" - route straight to "data".
+DO NOT ask which aspect they mean, and do not ask what "doing well" is measured
+by.
+There is one settled answer to all of those and the downstream query returns it
+in a single row per item: current stock, what was issued over the last three
+months, how many days that covers, who is waiting for it, what is inbound and
+when, and how much is short. Every aspect somebody might have meant - stock,
+consumption, procurement, shipments - is already in that answer. Asking which
+one they wanted spends a turn to return a SUBSET of what they would have got by
+not asking.
+"How are we doing on X" for a material is therefore NOT a vague metric. It is
+the standard item question, and it has a standard answer.
+Still gate when the ambiguity is about something else entirely - a branch, a
+period that genuinely changes a rate, or a comparison against a target nobody
+has set.
 
 Do NOT use this gate to guess whether multiple items share the name the user gave -
 you cannot see the item master from here. Route a named item straight to "data"

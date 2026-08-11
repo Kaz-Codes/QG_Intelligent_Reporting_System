@@ -15,17 +15,88 @@ that is needed.
 
 BUSINESS_TERMS = [
     {
+        "term": (
+            "how are we doing on <item> / item position / days of cover / "
+            "how long will stock last / should we buy more / item status"
+        ),
+        "meaning": (
+            "The standing question about a single material: what have we got, "
+            "how fast is it going, how long will it last, is anyone waiting for "
+            "it, and is more on the way. One row per item answers all of it."
+        ),
+        "maps_to": (
+            "v_item_demand_picture(item_code, item_name, available_qty, "
+            "stock_qty, hold_qty, issued_qty_3m, issue_lines_3m, "
+            "last_issued_on, issued_since, data_through, daily_burn, "
+            "days_of_cover, open_demand_qty, open_requisitions, "
+            "earliest_required_date, demand_statuses, demand_purchased_qty, "
+            "demand_overdue, incoming_qty, incoming_consignments, "
+            "earliest_eta, incoming_statuses, suggested_buy_qty).\n"
+            "'THE STATUS OF <MATERIAL>' MEANS THIS VIEW. A settled ruling: it "
+            "is the item's POSITION - stock, cover, demand, inbound - not a "
+            "list of its shipments. Do not answer it by unioning imports, "
+            "issuance and trucking rows.\n"
+            "USE THIS VIEW for any question about how an item is doing, how "
+            "long stock lasts, whether to reorder, or what is coming. Filter "
+            "with:  WHERE item_name ~* '[[:<:]]<word>s?[[:>:]]'  or by "
+            "item_code. Do NOT reassemble these figures from issuance, stock, "
+            "store_requisition and consignments by hand - that produced a "
+            "different number every run.\n"
+            "SELECT THE WHOLE ROW for an item question. The answer needs all "
+            "three lenses at once: stock + issued_qty_3m + days_of_cover "
+            "(descriptive), open_demand_qty + earliest_eta (diagnostic), "
+            "suggested_buy_qty (prescriptive)."
+        ),
+        "notes": (
+            "issued_qty_3m is the last 3 months from TODAY. days_of_cover "
+            "divides by the days in that window that could actually hold data, "
+            "because issuance currently ends before today - dividing by the "
+            "full 90 days would overstate cover, which is the direction that "
+            "causes a stockout. `data_through` is the last issuance date; say "
+            "it when the figures are not current.\n"
+            "days_of_cover is NULL when the item has not moved in 3 months. "
+            "That means 'no recent consumption to measure', NOT 'infinite "
+            "cover' - say so plainly rather than implying the item is fine.\n"
+            "suggested_buy_qty = open demand MINUS stock MINUS what is already "
+            "on the way. It covers committed demand only; it is not a reorder "
+            "policy and assumes no safety stock, because the business has not "
+            "set one. If asked for a cover target, multiply daily_burn by the "
+            "days wanted and add that.\n"
+            "WHEN DEMAND IS PLACED, ITS STATE MATTERS AS MUCH AS ITS SIZE. "
+            "`demand_statuses` says where each open requisition has got to, "
+            "with counts - 'Sourced x2, Procuring x1'. `demand_purchased_qty` "
+            "is how much of it has ALREADY been bought (open_demand_qty is the "
+            "REMAINING pending quantity, so the two never double-count). "
+            "`demand_overdue` is true when a required date has already passed. "
+            "`incoming_statuses` says where the inbound consignments have got "
+            "to ('In Transit', 'Ready Awaiting Sailing'). Telling someone to "
+            "buy 18,660 kg without saying the requisition is already at "
+            "'Procuring' invites a duplicate order."
+        ),
+    },
+    {
         "term": "stock / inventory on hand",
         "meaning": (
             "Current quantity physically held, per item per branch. "
             "available_qty is stock_qty minus hold_qty (reserved stock)."
         ),
         "maps_to": (
-            "Use the view v_item_stock_position(item_code, item_name, "
-            "branches_held_at, stock_qty, hold_qty, available_qty, "
-            "available_amount, is_out_of_stock) - already one row per ITEM with "
-            "the branches summed. Go to the raw stock table only for a "
-            "per-branch breakdown."
+            "WHICH VIEW DEPENDS ON THE QUESTION:\n"
+            "* ASKING ABOUT A NAMED MATERIAL ('how much hardner do we have', "
+            "'resin stock', 'are we short of lime stone', 'should we buy X') - "
+            "use v_item_demand_picture. It carries available_qty AND the things "
+            "the answer has to say next: issued_qty_3m, days_of_cover, "
+            "open_demand_qty, earliest_eta, suggested_buy_qty. SELECT THE WHOLE "
+            "ROW. Returning available_qty alone forces an answer that cannot "
+            "say how long the stock lasts, whether anyone is waiting for it, or "
+            "whether more is coming - which is most of what was actually being "
+            "asked.\n"
+            "* COUNTING OR RANKING ACROSS THE PORTFOLIO ('how many items are "
+            "out of stock', 'top 10 by value') - use v_item_stock_position"
+            "(item_code, item_name, branches_held_at, stock_qty, hold_qty, "
+            "available_qty, available_amount, is_out_of_stock), one row per "
+            "ITEM with branches summed.\n"
+            "* A PER-BRANCH BREAKDOWN - only then go to the raw stock table."
         ),
         "notes": (
             "stock is a snapshot with no date column - it cannot be trended.\n"

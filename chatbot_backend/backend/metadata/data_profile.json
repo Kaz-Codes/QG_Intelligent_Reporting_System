@@ -1,21 +1,21 @@
 {
-  "fingerprint": "items:27749|suppliers:67|branches:5|ports:39|clearing_agents:5|stock:6070|issuance:260715|store_requisition:7075|purchases_data:68298|consignments:206|consignment_items:451|payments:0|logistics_consignments:1424|logistics_items:1399|logistics_packages:962|logistics_containers:157|trucking_consignments:399|trucking_vehicles:464",
+  "fingerprint": "items:27719:2026-08-08 13:26:00.213571+05:00|suppliers:67:2026-08-08 13:26:42.729177+05:00|branches:5:2026-08-08 13:26:42.938994+05:00|ports:39:2026-08-08 13:26:43.518821+05:00|clearing_agents:5:2026-08-08 13:26:43.254920+05:00|stock:6070:|issuance:49447:|store_requisition:7075:|purchases_data:2778:|consignments:206:2026-08-08 13:26:43.854711+05:00|consignment_items:451:2026-08-08 13:26:44.121911+05:00|payments:0:|logistics_consignments:1424:2026-08-08 13:26:44.160207+05:00|logistics_items:1399:2026-08-08 13:26:47.487026+05:00|logistics_packages:962:2026-08-08 13:26:47.644556+05:00|logistics_containers:157:2026-08-08 13:26:47.682702+05:00|trucking_consignments:399:2026-08-08 13:26:47.706198+05:00|trucking_vehicles:464:2026-08-08 13:26:48.060447+05:00",
   "tables": {
     "items": {
-      "rows": 27749,
+      "rows": 27719,
       "vocabularies": {
         "default_unit_of_measurement": [
           {
             "value": "No.",
-            "rows": 17427
+            "rows": 17403
           },
           {
             "value": "kg",
-            "rows": 5206
+            "rows": 5201
           },
           {
             "value": "Ft.",
-            "rows": 1376
+            "rows": 1368
           },
           {
             "value": "Sets",
@@ -23,7 +23,7 @@
           },
           {
             "value": "Nos.",
-            "rows": 594
+            "rows": 591
           },
           {
             "value": "Ltr.",
@@ -368,104 +368,146 @@
       }
     },
     "issuance": {
-      "rows": 260715,
+      "rows": 49447,
       "vocabularies": {
         "branch": [
           {
             "value": "Qadri Engineering (Pvt) Ltd.",
-            "rows": 76377
+            "rows": 19738
           },
           {
             "value": "Qadbros Engineering (Pvt) Ltd.",
-            "rows": 68565
+            "rows": 10928
           },
           {
             "value": "Qadcast (Pvt) Ltd.",
-            "rows": 56347
+            "rows": 9545
           },
           {
             "value": "Qadri Brothers (Pvt.) Ltd. (Unit-II)",
-            "rows": 52657
-          },
-          {
-            "value": "Qadri Brothers (Pvt) Ltd.",
-            "rows": 6769
+            "rows": 9236
           }
         ],
         "issue_to_others": [
-          {
-            "value": "Qadri Hardware Store",
-            "rows": 25
-          },
-          {
-            "value": "Qadri Engineering (Pvt) Ltd.",
-            "rows": 5
-          },
-          {
-            "value": "Riaz Qadri Sb",
-            "rows": 3
-          },
           {
             "value": "Popu Butt",
             "rows": 3
           },
           {
-            "value": "Ameer Ahmad Qadri Foam House",
-            "rows": 2
-          },
-          {
-            "value": "Ameer Ahmad Qadri Sb",
-            "rows": 2
-          },
-          {
-            "value": "Ammar butt",
-            "rows": 2
-          },
-          {
             "value": "Malik Saleem",
+            "rows": 1
+          }
+        ],
+        "issued_by": [
+          {
+            "value": "Abdul Farooq | Store Assistant - QBL II",
+            "rows": 8187
+          },
+          {
+            "value": "Imran | Store Helper - QEN  | 757",
+            "rows": 7882
+          },
+          {
+            "value": "Mubarak Ahmed | Store Assistant - QE & Raw Material",
+            "rows": 7530
+          },
+          {
+            "value": "Muhammad Jahangir | Warehouse Assistant - QCL",
+            "rows": 7429
+          },
+          {
+            "value": "Muhammad Zaid Asghar | Store Assistant - QEN",
+            "rows": 6498
+          },
+          {
+            "value": "Jamshaid Razzaq | Store Helper - QEN  | 1637",
+            "rows": 4622
+          },
+          {
+            "value": "Ubaid Ur Rehman | Store Assistant - QE & Raw Material",
+            "rows": 3189
+          },
+          {
+            "value": "Muhammad Safdar Ali | Store Assistant - QCL",
+            "rows": 1189
+          },
+          {
+            "value": "Uzair Kareem | Store Assistant - QBL II",
+            "rows": 791
+          },
+          {
+            "value": "Ahtsham Nizam Din | Store Assistant - QCL",
+            "rows": 715
+          },
+          {
+            "value": "Muhammad Imran | Store Assistant - QEN",
+            "rows": 592
+          },
+          {
+            "value": "Ali Raza | Store Assistant - QCL",
+            "rows": 166
+          },
+          {
+            "value": "Ali Hamza | Store Helper | 426",
+            "rows": 143
+          },
+          {
+            "value": "Adnan Khadam | Incharge Store - QEN",
+            "rows": 131
+          },
+          {
+            "value": "Rizwan Ali | Incharge Store & Raw Material - QE",
+            "rows": 104
+          },
+          {
+            "value": "Muhammad Mughees Ahmad | Store Assistant - QBL II",
+            "rows": 83
+          },
+          {
+            "value": "Ameer Hamza | Store Helper | 1056",
+            "rows": 75
+          },
+          {
+            "value": "Ibrar Haroon | Store Helper - QCL | 2442",
+            "rows": 44
+          },
+          {
+            "value": "Safeer Ahmed | Incharge Store - QBL II",
+            "rows": 32
+          },
+          {
+            "value": "Muhammad Asim Nazir | Store Assistant - Central",
+            "rows": 18
+          },
+          {
+            "value": "Shahbaz Khan | Departmental Driver - Store (QEN)",
+            "rows": 13
+          },
+          {
+            "value": "Muneeb Aqeel | Store Assistant - Central",
+            "rows": 10
+          },
+          {
+            "value": "Saif Ullah | Store & Design Support Assistant",
             "rows": 2
           },
           {
-            "value": "Qadri Brother (Ltd.) Pvt.",
-            "rows": 1
-          },
-          {
-            "value": "Imran Taj",
-            "rows": 1
-          },
-          {
-            "value": "Customer INGENIO",
-            "rows": 1
-          },
-          {
-            "value": "Rehmani",
-            "rows": 1
-          },
-          {
-            "value": "Customer ALIANZA",
-            "rows": 1
-          },
-          {
-            "value": "Sale to Areeba Enterprises",
-            "rows": 1
-          },
-          {
-            "value": "Sale to Attique C/O Qadri Hammer",
-            "rows": 1
+            "value": "Muhammad Naveed | Jr. General Helper | 2582",
+            "rows": 2
           }
         ],
         "status": [
           {
             "value": "Issue",
-            "rows": 256983
+            "rows": 48226
           },
           {
             "value": "HoldIssuence",
-            "rows": 3486
+            "rows": 1139
           },
           {
             "value": "Hold",
-            "rows": 234
+            "rows": 82
           }
         ]
       },
@@ -632,123 +674,91 @@
       "patchy": {}
     },
     "purchases_data": {
-      "rows": 68298,
+      "rows": 2778,
       "vocabularies": {
         "branch": [
           {
-            "value": "QE",
-            "rows": 25980
+            "value": "QEN",
+            "rows": 1060
           },
           {
-            "value": "QEN",
-            "rows": 20208
+            "value": "QE",
+            "rows": 913
           },
           {
             "value": "QCL",
-            "rows": 9936
+            "rows": 422
           },
           {
             "value": "QB2",
-            "rows": 9517
+            "rows": 299
           },
           {
             "value": "QBL",
-            "rows": 1521
-          },
-          {
-            "value": "IOL",
-            "rows": 569
+            "rows": 58
           },
           {
             "value": "QE-II",
-            "rows": 567
+            "rows": 17
+          },
+          {
+            "value": "IOL",
+            "rows": 9
           }
         ],
         "mop": [
           {
             "value": "On Credit",
-            "rows": 46693
+            "rows": 2279
           },
           {
             "value": "By Cash",
-            "rows": 16720
+            "rows": 304
           },
           {
             "value": "On Advance",
-            "rows": 4838
-          },
-          {
-            "value": "Payment after Delivery",
-            "rows": 47
+            "rows": 195
           }
         ],
         "sourcing_o": [
           {
-            "value": "Muhammad Rehan Mazhar",
-            "rows": 11946
-          },
-          {
-            "value": "Adnan Shami",
-            "rows": 9793
-          },
-          {
             "value": "Muhammad Adeel Ahmed",
-            "rows": 9767
+            "rows": 660
           },
           {
             "value": "Nazim Maqbool Butt",
-            "rows": 8707
+            "rows": 414
           },
           {
-            "value": "Muhammad Usman",
-            "rows": 7776
+            "value": "Adnan Shami",
+            "rows": 403
           },
           {
             "value": "Ghulam Mustafa",
-            "rows": 3729
+            "rows": 385
           },
           {
-            "value": "Sumair Fazil",
-            "rows": 3590
-          },
-          {
-            "value": "Hamza Ahmad",
-            "rows": 3275
-          },
-          {
-            "value": "Muhammad Sajawal Khan",
-            "rows": 2979
-          },
-          {
-            "value": "Abdul Manan",
-            "rows": 1435
-          },
-          {
-            "value": "Rehan Sarwar",
-            "rows": 1167
-          },
-          {
-            "value": "Muhammad Moeeb",
-            "rows": 1071
-          },
-          {
-            "value": "Umer Siddique",
-            "rows": 1024
-          },
-          {
-            "value": "Asad Tariq",
-            "rows": 876
+            "value": "Muhammad Usman",
+            "rows": 247
           },
           {
             "value": "Muhammad Ahmad Raza",
-            "rows": 553
+            "rows": 245
           },
           {
-            "value": "Syed Muhammad Waqas Javed",
-            "rows": 45
+            "value": "Muhammad Sajawal Khan",
+            "rows": 186
           },
           {
-            "value": "Muhammad Tariq",
+            "value": "Muhammad Moeeb",
+            "rows": 134
+          },
+          {
+            "value": "Hamza Ahmad",
+            "rows": 65
+          },
+          {
+            "value": "Asad Tariq",
             "rows": 1
           }
         ]
@@ -1114,6 +1124,11 @@
       },
       "patchy": {
         "unit_price": 0.9002,
+        "net_weight": 0.0,
+        "gross_weight": 0.0,
+        "length": 0.0,
+        "width": 0.0,
+        "height": 0.0,
         "elc": 0.0,
         "alc": 0.0,
         "variance_absolute": 0.0,

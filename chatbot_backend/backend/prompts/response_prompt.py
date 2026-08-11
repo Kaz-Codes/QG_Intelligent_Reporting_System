@@ -209,6 +209,19 @@ answers.
   it here rather than repeating every value.
   Do NOT put a projection here - a forward-looking number belongs under
   Forecasting, even when the user asked one combined question.
+  ITEM/STOCK QUESTIONS - three figures are REQUIRED here whenever the rows
+  carry them, and an answer missing any of them is incomplete:
+    1. CURRENT STOCK - available quantity with its unit;
+    2. WHAT WAS ISSUED in the last 3 months (`issued_qty_3m`), naming the
+       window from `issued_since` - "3,240 kg issued since 11-May-2026";
+    3. DAYS OF COVER (`days_of_cover`).
+  Say `data_through` once if issuance ends before today, so a stale burn rate
+  is not read as current. An empty `days_of_cover` means the item has not moved
+  in three months - say exactly that; it is NOT "no risk" and must not be
+  dropped silently.
+  Across several variants of one material, give these for the variants that
+  carry the stock and the movement rather than every row - but never reduce the
+  answer to quantities alone.
 
 ### Diagnostic - why it looks like this
   A diagnosis is a CONTRAST, and you must name BOTH sides of it. Not "sales
@@ -237,6 +250,25 @@ answers.
   scope, not here.
   Never restate an effect as its own cause ("consumption rose because usage
   increased" is circular).
+
+  ITEM/STOCK QUESTIONS - the diagnosis is DEMAND AGAINST SUPPLY, and the rows
+  carry both sides. Required here whenever present:
+    1. IS ANYONE WAITING FOR IT - `open_demand_qty` and `open_requisitions`,
+       plus `earliest_required_date` when it is set. AND WHERE THAT DEMAND HAS
+       GOT TO: `demand_statuses` ("Sourced x2, Procuring x1"), whether any of
+       it is already bought (`demand_purchased_qty`), and whether it is past
+       its required date (`demand_overdue`). A quantity alone does not say
+       whether anyone is acting on it - the status does;
+    2. WHEN THE NEXT DELIVERY LANDS - `earliest_eta` with `incoming_qty`, and
+       `incoming_statuses` so the user knows whether that ETA is firm ("In
+       Transit") or still early in the pipeline ("Under Production");
+    3. THE CONSEQUENCE - how long `days_of_cover` lasts, and whether stock runs
+       out BEFORE that ETA or that required date.
+  That comparison IS the diagnosis and it is what makes this section not a
+  restatement: "4.1 days of cover against 200,000 kg of open demand and the
+  next 150 kg not landing until 31-Jul-2026" names both sides and the gap.
+  No open demand, or nothing inbound, is itself an answer - say so plainly
+  rather than omitting the line.
 
   If nothing in the data contrasts with anything, write exactly N/A as the
   body. A single series over time frequently has nothing to contrast against,
@@ -274,6 +306,25 @@ answers.
   If the honest recommendation is "look at all of these", there is no
   prescription - write exactly N/A as the body. One or two lines when it is
   earned.
+  ITEM/STOCK QUESTIONS - `suggested_buy_qty` IS the prescription and it is
+  never N/A when it is above zero. State it with its unit and show what it is
+  made of: "open demand 200,000 kg, less 4,653 kg in stock and 150 kg inbound,
+  leaves 195,197 kg to buy". Tie it to the trigger already named in Diagnostic
+  (the required date, or the ETA that arrives too late).
+  SAY WHETHER THE DEMAND IS ALREADY BEING ACTED ON, in the same breath. If
+  `demand_statuses` shows the requisitions are at 'Procuring' or 'Sourced',
+  the action is to CHASE what is already moving, not to raise a fresh order -
+  "25,000 kg is already at Sourced across 2 requisitions; expedite rather than
+  re-order". If part is bought (`demand_purchased_qty` above zero), say so, and
+  note that the buy figure is what REMAINS after it. If `demand_overdue` is
+  true, lead with that - a required date already passed is the strongest
+  trigger on the row.
+  Recommending a purchase while silent on requisitions already in flight is how
+  a duplicate order gets raised.
+  Say once that this covers COMMITTED DEMAND ONLY and assumes no safety stock,
+  because none is set - do not present it as a reorder level.
+  When it is zero, stock and inbound already cover what is asked for: say that
+  instead of inventing an action.
 
 WHEN NOT TO USE THE HEADINGS AT ALL
 Three cases skip the four headings entirely:

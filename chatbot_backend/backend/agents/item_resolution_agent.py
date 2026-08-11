@@ -214,6 +214,28 @@ def _is_aggregate_question(*texts: str) -> bool:
     return any(_AGGREGATE_RE.search(t or "") for t in texts)
 
 
+# A question about where an item STANDS - what we hold, how long it lasts, who
+# wants it, whether to buy. These are answered per item_code by
+# v_item_demand_picture, so several matching codes are extra ROWS, not a choice
+# the user has to make first.
+_POSITION_RE = re.compile(
+    r"\b(?:"
+    r"stock|on hand|available|availability|inventory|balance"
+    r"|cover|how long|runs? out|left"
+    r"|consum\w+|issued?|issuance|usage|used|burn"
+    r"|demand|requisition|pending|short|shortage|shortfall"
+    r"|buy|purchase|order|reorder|procure|replenish"
+    r"|status|position|situation|doing"
+    r"|how much|how many"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_position_question(*texts: str) -> bool:
+    return any(_POSITION_RE.search(t or "") for t in texts)
+
+
 def _looks_like_category(query: str, candidates: List[dict]) -> bool:
     """True when the phrase names a KIND of thing, not a specific item."""
     if len(candidates) < 2:
@@ -401,6 +423,30 @@ def item_resolution_agent(state: dict) -> dict:
             if len(codes) == 1:
                 resolved["item_code"] = codes[0]
             return {"item_context": [_pin_note(item_name, codes)], "entities": resolved}
+
+    # POSITION QUESTIONS DO NOT NEED A CHOICE. "how much lime stone do we have",
+    # "days of cover for X", "should we buy more X" are answered per item_code
+    # anyway - the item picture returns one row per code, so every candidate is
+    # simply a row in the answer. Asking which one first spends a turn to return
+    # LESS than not asking would have, and the user can still narrow afterwards
+    # by reading the rows.
+    # A choice is still worth asking for when picking the wrong code changes the
+    # answer rather than adding a row - which is what the branches above handle.
+    if _is_position_question(
+        state.get("rewritten_query", ""), state.get("user_query", "")
+    ):
+        return {
+            "item_context": [
+                _all_note(item_name, sorted(valid_codes)),
+                (
+                    f'"{item_name}" matches {len(candidates)} item codes. This is '
+                    f"a stock-position question, so answer for ALL of them - one "
+                    f"row each - rather than picking one. Say in the answer that "
+                    f"several variants matched, and give the figures per variant "
+                    f"so the user can see which one they meant."
+                ),
+            ]
+        }
 
     # Still ambiguous - ask, with the real candidates attached so the normal
     # table rendering shows them under the question.

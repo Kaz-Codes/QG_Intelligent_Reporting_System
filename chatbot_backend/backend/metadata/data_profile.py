@@ -63,16 +63,58 @@ SKIP_COLUMNS = {"id", "is_deleted", "is_active", "is_verified", "is_locked",
                 "deleted_at"}
 
 
+def _tables_with_updated_at(conn) -> set:
+    """Which of our tables actually carry updated_at.
+
+    Asked once, from information_schema, because PROBING for the column is not
+    safe: a failed statement aborts the transaction in Postgres and every query
+    after it on the same connection fails. That is not hypothetical - it rebuilt
+    this profile to empty and silently disabled the guards.
+    """
+    try:
+        rows = conn.execute(
+            text(
+                "SELECT table_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND column_name = 'updated_at'"
+            )
+        ).fetchall()
+        return {r[0] for r in rows}
+    except Exception:
+        return set()
+
+
 def _fingerprint(conn) -> str:
-    """Cheap signature of the data. Changes when rows are added or reloaded."""
-    counts = []
+    """
+    Cheap signature of the data. Moves when rows are added, reloaded or EDITED.
+
+    Row counts alone miss an edit: changing a consignment's status through the
+    ERP screens changes no count, so a count-only fingerprint kept serving a
+    stale profile. MAX(updated_at) catches most edits.
+
+    It is NOT airtight - editing an older row does not move a table's MAX - so
+    the guards no longer trust this cache on its own: sql_guards confirms a
+    suspect value against the live database before blocking anything.
+    """
+    stamped = _tables_with_updated_at(conn)
+    parts = []
     for table in TABLES:
         try:
             n = conn.execute(text(f"SELECT count(*) FROM {table}")).scalar()
         except Exception:
-            n = -1
-        counts.append(f"{table}:{n}")
-    return "|".join(counts)
+            parts.append(f"{table}:-1")
+            continue
+
+        touched = ""
+        if table in stamped:
+            try:
+                touched = conn.execute(
+                    text(f"SELECT MAX(updated_at) FROM {table}")
+                ).scalar() or ""
+            except Exception:
+                touched = ""
+
+        parts.append(f"{table}:{n}:{touched}")
+    return "|".join(parts)
 
 
 def _columns(conn, table: str) -> List[Dict[str, str]]:

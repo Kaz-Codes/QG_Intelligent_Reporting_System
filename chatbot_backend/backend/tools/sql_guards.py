@@ -75,6 +75,44 @@ _IN = re.compile(r"(?:(\w+)\.)?(\w+)\s+IN\s*\(([^)]*)\)", re.IGNORECASE)
 _LITERAL = re.compile(r"'([^']*)'")
 
 
+def _exists_in_db(column: str, value: str, tables: List[str]) -> bool:
+    """
+    Does this value actually exist in that column right now?
+
+    The profile can be stale - a status set through the ERP UI changes no row
+    count, so the cached vocabulary may not list it yet. Blocking on a stale
+    cache would refuse a correct query, so the database gets the final word.
+    Runs at most once per suspect literal, and only when the profile already
+    disagrees, so the normal path costs nothing.
+    """
+    if not tables:
+        return False
+    try:
+        from sqlalchemy import text
+
+        from backend.config import get_engine
+
+        with get_engine().connect() as conn:
+            for table in tables:
+                # Identifiers come from the profile (our own column/table names),
+                # never from the user; the VALUE is bound as a parameter.
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table) or \
+                   not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", column):
+                    continue
+                hit = conn.execute(
+                    text(
+                        f"SELECT 1 FROM {table} WHERE {column} = :v LIMIT 1"
+                    ),
+                    {"v": value},
+                ).first()
+                if hit:
+                    return True
+    except Exception:
+        # If the lookup itself fails, do not block on a guess.
+        return True
+    return False
+
+
 def check_literals(sql: str, profile: Dict) -> List[str]:
     """Literals filtered on that do not exist in that column. Silent killers."""
     vocab = _vocabularies(profile)
@@ -99,6 +137,11 @@ def check_literals(sql: str, profile: Dict) -> List[str]:
 
         # Case-only mismatch is worth its own message: it is invisible on
         # screen and matches nothing in Postgres.
+        # The profile says no. Confirm against the live database before
+        # blocking - the cache may simply predate this value.
+        if _exists_in_db(column, literal, list(tables.keys())):
+            return
+
         lowered = {v.lower(): v for v in every}
         if literal.lower() in lowered:
             problems.append(

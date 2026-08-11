@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { backendLogin, backendLogout } from '@/lib/api/auth'
+import { mockLogin } from '@/lib/mockAuth'
 import type { Permission } from '@/lib/roleAccess'
 
 export interface User {
