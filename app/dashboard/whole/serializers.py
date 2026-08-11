@@ -170,6 +170,14 @@ def serialize_logistics(db, date_from, date_to, date_field, period_kind):
         "data_notes": notes,
         "trucking_cost": calc.logistics_trucking_cost(trucking),
         "shipments_handled": calc.logistics_shipments_handled(counts),
+        # One figure from each of the section's three areas, so "logistics"
+        # stops meaning "trucking". Each carries its own basis — see the
+        # helpers for why these three and not the more obvious ones.
+        "packed_tonnage": helpers.logistics_packed_tonnage(db, date_from, date_to),
+        "freight_per_kg": helpers.logistics_freight_per_kg(
+            db, date_from, date_to, date_field),
+        "transit_time": helpers.logistics_transit_time(
+            db, date_from, date_to, date_field),
         # One list per movement bucket as well as the total, because each
         # bucket is its own tile. Keyed by movement type, with the NULL group
         # under "Unclassified" — the same name the tile shows.

@@ -191,6 +191,21 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
     how: 'Items with value on hand and no issuance within the threshold. An item still moving at one store is not dead because it sat still at another.',
     differs: 'Stock Value is everything held; this is the part of it nobody has drawn on.',
   },
+  packedTonnage: {
+    what: 'How much weight was packed for shipping in this period.',
+    how: 'Gross weight summed across the packages packed in the window, in tonnes.',
+    differs: 'This is what PACKING handled; freight per kg is what ROAD movement cost. A package can be packed in one month and trucked in the next.',
+  },
+  freightPerKg: {
+    what: 'What it costs to move a kilogram by road.',
+    how: 'Actual freight divided by the gross weight on the vehicles, over the jobs that record both.',
+    differs: 'A RATE, not another cost total — Trucking Cost already reports the money. This says whether that money is buying more or less movement than it used to.',
+  },
+  transitTime: {
+    what: 'How long a shipment takes from sailing to arrival.',
+    how: 'Average days from ETD to actual arrival. Orders arriving before they sailed are excluded as data errors rather than counted as negative transit.',
+    differs: 'Measured only on the orders recording BOTH dates, which is a minority of the book — the basis line says how many.',
+  },
   issued: {
     what: 'What left the stores in this period, and across how many distinct items.',
     how: 'Issuance value summed over the window, with items counted by ITEM CODE folded across the branches that issued them — the same unit the Inventory dashboard counts, so the figure is identical on both screens.',

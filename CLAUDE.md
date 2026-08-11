@@ -746,6 +746,24 @@ models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
   **`python -m app.loading.scripts.resync_sequences`** repairs a database loaded
   before that fix (`--check` to report only); it only ever moves a sequence
   forward, so it is safe to run at any time.
+- **A workbook can SPILL onto a second sheet, and the loader must follow it.**
+  The purchases export is an old-format `.xls`, capped at 65,536 rows per sheet:
+  Sheet1 fills to 65,520 and the rest continues on **Sheet2 with no header of
+  its own** (its first data row, Record No 65521, was being read AS the header).
+  Reading only Sheet1 lost **13,411 purchase lines** — and Sheet1 stops at
+  **2026-01-23** while Sheet2 runs to **2026-08-07**, so the purchases dashboard
+  reporting "no data this month, latest is 23 Jan" was never a data-entry gap;
+  it was seven months of purchases on a sheet nothing read.
+  `read_purchases_frames` now loads every sheet, treating one whose header does
+  not look like the first sheet's as a headerless continuation.
+- **In-house companies are not suppliers.** `Qadbros Engineering Pvt Ltd` is a
+  Qadri company, so a purchase booked against it is the group buying from
+  itself. Its supplier is **NULLED AT LOAD** (7,238 of 78,931 rows) rather than
+  filtered on the dashboards: the column should not claim a vendor that was
+  never one, and a value nulled here cannot be missed by a screen that forgets
+  to exclude it. The purchase itself is kept — the money is real, only the
+  vendor attribution is not. `Import (IOL)` is the same idea one layer up, in
+  `purchases.calculations.NON_SUPPLIERS`.
 - **A loader keyed on column NAMES fails silently when a workbook is
   re-shaped.** The purchases export split its old `PPC/Store` column into two
   (`PPC`, a date; `Store`, a timestamp of the same event). The loader kept asking

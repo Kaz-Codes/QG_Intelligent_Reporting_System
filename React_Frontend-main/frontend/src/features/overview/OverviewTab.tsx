@@ -364,7 +364,7 @@ export function OverviewTab() {
               fieldOptions={data.date_field_options.logistics}
               field={logisticsField} onFieldChange={setLogisticsField}
             />
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
               <KpiCard label="Trucking Cost" value={money(data.logistics.trucking_cost.total)}
                 sub="all jobs to date" icon={Truck}
                 refs={data.logistics.references.trucking_cost}
@@ -386,6 +386,29 @@ export function OverviewTab() {
                 fetchRefs={logisticsRefs('logistics.shipments_handled')}
                 help={withBasis(OVERVIEW_HELP.shipmentsHandled,
                   `Only ${data.logistics.shipments_handled.coverage.export_datable.toLocaleString()} of ${data.logistics.shipments_handled.coverage.export_total.toLocaleString()} logistics orders carry this date, so the export count covers the dated ones only.`)} />
+
+              {/* One figure from each of the section's three areas. The tiles
+                  above are both about road movement, which made "logistics"
+                  read as a synonym for trucking. */}
+              <KpiCard label="Packed Tonnage"
+                value={`${data.logistics.packed_tonnage.tonnes.toLocaleString()} t`}
+                sub={countLine(data.logistics.packed_tonnage.packages, 'package')}
+                icon={Boxes}
+                help={withBasis(OVERVIEW_HELP.packedTonnage,
+                  `Weighed on ${data.logistics.packed_tonnage.basis.toLocaleString()} of ${data.logistics.packed_tonnage.packages.toLocaleString()} packages; the rest record no weight and add nothing.`)} />
+              <KpiCard label="Freight / kg"
+                value={data.logistics.freight_per_kg.rate != null
+                  ? `PKR ${data.logistics.freight_per_kg.rate.toFixed(2)}` : '—'}
+                sub={`${Math.round(data.logistics.freight_per_kg.kilograms / 1000).toLocaleString()} t moved`}
+                icon={Truck}
+                help={withBasis(OVERVIEW_HELP.freightPerKg,
+                  `Measured on the ${data.logistics.freight_per_kg.basis.toLocaleString()} jobs that record both a freight figure and a vehicle weight.`)} />
+              <KpiCard label="Transit Time"
+                value={data.logistics.transit_time.days != null
+                  ? `${data.logistics.transit_time.days} days` : '—'}
+                sub="sailing to arrival" icon={Timer}
+                help={withBasis(OVERVIEW_HELP.transitTime,
+                  `Measured on the ${data.logistics.transit_time.basis.toLocaleString()} orders recording both an ETD and an arrival date.`)} />
             </div>
           </section>
 

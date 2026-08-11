@@ -169,12 +169,23 @@ def kpis(rows, orders=None):
     # lines' money — but Import (IOL) is left out; see NON_SUPPLIERS.
     supplier_totals = {}
     excluded_value = Decimal("0")
+    unattributed_value = Decimal("0")
+    unattributed_lines = 0
 
     for row in rows:
         if is_real_supplier(row.supplier):
             supplier_totals[row.supplier] = supplier_totals.get(row.supplier, Decimal("0")) + _amount(row)
         elif row.supplier:
             excluded_value += _amount(row)
+        else:
+            # NO SUPPLIER AT ALL. Mostly in-house companies, whose supplier is
+            # nulled at load because the group buying from itself is not a
+            # vendor relationship (see load_02_purchases_data). This money is
+            # real and is inside Total Value, but it belongs to no supplier —
+            # so it is reported rather than left to vanish from every supplier
+            # figure without explanation.
+            unattributed_value += _amount(row)
+            unattributed_lines += 1
 
     top_supplier = None
     top_supplier_amount = Decimal("0")
@@ -208,6 +219,10 @@ def kpis(rows, orders=None):
         # not reconcile, instead of leaving the gap to be discovered.
         "excluded_from_supplier_figures": sorted(NON_SUPPLIERS),
         "excluded_supplier_value": excluded_value,
+        # Money on lines carrying no supplier at all — in-house purchases,
+        # nulled at load. In Total Value, in no supplier bucket.
+        "unattributed_value": unattributed_value,
+        "unattributed_lines": unattributed_lines,
     }
 
 
