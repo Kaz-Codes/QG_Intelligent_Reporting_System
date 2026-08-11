@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_LOGISTICS, CAN_EDIT_LOGISTICS
-from app.logistics.helpers import fetch_consignment, verify_entry_ownership, submission_errors
+from app.logistics.helpers import fetch_consignment, verify_entry_ownership, submission_errors, is_closed
 from app.logistics.serializers import serialize_consignment
 
 
@@ -14,7 +14,13 @@ from app.logistics.serializers import serialize_consignment
 # The strict counterpart to save-draft. Opt-in: the front end may keep saving
 # drafts (the normal create/update) and never call this. Submitting runs the
 # full rule set and only flips record_state to "submitted" if nothing is
-# missing. Submitting does not lock the order — only closing it does.
+# missing.
+#
+# Submitting does not lock the order by itself — a submitted order at any
+# other status stays editable. But an order closes once it is BOTH submitted
+# AND "Delivered" (helpers.is_closed), so if it was already at that status
+# when submitted, this is the moment it actually locks. The update route no
+# longer locks at all. Mirrors imports.
 #-----------------------------------------------------
 
 @router.post("/{consignment_id}/submit")
@@ -59,6 +65,9 @@ def submit_consignment(
             )
 
         consignment.record_state = "submitted"
+
+        if is_closed(consignment):
+            consignment.is_locked = True
 
         db.commit()
         db.refresh(consignment)

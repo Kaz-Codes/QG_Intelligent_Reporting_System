@@ -66,6 +66,14 @@ def build_system_remarks(consignment):
 # THAT CAN BE SENT IN RESPONSE
 #---------------------------------------
 
+def _submission_errors(consignment):
+    # Deferred import: app.imports.helpers imports this module for
+    # serialize_many, so importing it at module level would be a cycle.
+    from app.imports.helpers import submission_errors
+
+    return submission_errors(consignment)
+
+
 def serialize_consignment(consignment, db):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
@@ -86,8 +94,10 @@ def serialize_consignment(consignment, db):
 
         "created_by" : consignment.created_by.username if consignment.created_by else None,
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,
+        "created_at" : consignment.created_at,
 
         "origin" : consignment.origin,
+        "po_date" : consignment.po_date,
         "requisition_date" : consignment.requisition_date,
         "required_date" : consignment.required_date,
         "currency" : consignment.currency,
@@ -116,6 +126,20 @@ def serialize_consignment(consignment, db):
         "gate_out_date" : consignment.gate_out_date,
         "demurrage_or_detention_paid" : consignment.demurrage_or_detention_paid,
         "container_detention" : consignment.container_detention,
+
+        # The named gaps that stop this consignment being submitted — the same
+        # rule set /submit enforces, so the list's "N fields missing" tag and a
+        # failed submit can never disagree. Imported (Excel) rows are all still
+        # 'draft' and legitimately incomplete, so this is usually non-empty for
+        # them. Imported inside the function: helpers imports this module, so a
+        # module-level import would be circular.
+        "missing_fields" : _submission_errors(consignment),
+
+        # Cross-module hand-off. NULL = not sent; the list shows a "Sent"
+        # column from these and disables each Send button once its own
+        # timestamp is set.
+        "sent_to_logistics_at" : consignment.sent_to_logistics_at,
+        "sent_to_trucking_at" : consignment.sent_to_trucking_at,
 
         "record_state" : consignment.record_state,
         "is_locked" : consignment.is_locked,
@@ -174,6 +198,9 @@ def serialize_consignment_history(consignment_history):
         "history":consignment_history.history,
         "changed_by_id":consignment_history.changed_by_id,
         "changed_by":consignment_history.changed_by.username if consignment_history.changed_by else None,
+        # When the change was made (TimestampMixin). The history screen orders
+        # and dates every card by this, so it has to go out with the row.
+        "changed_at":consignment_history.created_at,
 
         "is_reverted":consignment_history.is_reverted,
         "reverted_by_id":consignment_history.reverted_by_id,

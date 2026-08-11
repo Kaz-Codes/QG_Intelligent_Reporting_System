@@ -4,21 +4,23 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import type { PageKey } from '@/theme/tokens'
-import { MODULE_ACCENTS } from '@/theme/tokens'
+import { MODULE_ACCENTS, BRAND, VIOLET, GOLD } from '@/theme/tokens'
 import { useTheme } from '@/theme/ThemeContext'
 import { cn } from '@/lib/utils'
-import dashboardLight from '@/assets/dashboard-hero-light.png'
-import dashboardDark from '@/assets/dashboard-hero-dark.png'
-import logisticsLight from '@/assets/logistics-hero-light.png'
-import logisticsDark from '@/assets/logistics-hero-dark.png'
-import importsLight from '@/assets/imports-hero-light.png'
-import importsDark from '@/assets/imports-hero-dark.png'
-import purchasesLight from '@/assets/purchases-hero-light.png'
-import purchasesDark from '@/assets/purchases-hero-dark.png'
-import inventoryLight from '@/assets/inventory-hero-light.png'
-import inventoryDark from '@/assets/inventory-hero-dark.png'
-import loginLight from '@/assets/login-hero-light.png'
-import loginDark from '@/assets/login-hero-dark.png'
+import dashboardLight from '@/assets/dashboard-hero-light.webp'
+import dashboardDark from '@/assets/dashboard-hero-dark.webp'
+import logisticsLight from '@/assets/logistics-hero-light.webp'
+import logisticsDark from '@/assets/logistics-hero-dark.webp'
+import importsLight from '@/assets/imports-hero-light.webp'
+import importsDark from '@/assets/imports-hero-dark.webp'
+import purchasesLight from '@/assets/purchases-hero-light.webp'
+import purchasesDark from '@/assets/purchases-hero-dark.webp'
+import inventoryLight from '@/assets/inventory-hero-light.webp'
+import inventoryDark from '@/assets/inventory-hero-dark.webp'
+import loginLight from '@/assets/login-hero-light.webp'
+import loginDark from '@/assets/login-hero-dark.webp'
+import assistantLight from '@/assets/assistant-hero-light.webp'
+import assistantDark from '@/assets/assistant-hero-dark.webp'
 
 /**
  * Ambient, subject-related backdrop: a slow, soft "smoke" of blurred,
@@ -73,7 +75,17 @@ interface ModulePhotoSet {
 // behind the content — the numbers are the thing being read, the photo is
 // only setting the mood. Login is deliberately untouched: it has no data on
 // top of it, so its photo can stay at full strength.
-const DENSE_SCRIM = { light: 0.74, dark: 0.68 }
+//
+// This used to be pinned at 0.82 to keep secondary text legible: with the old
+// translucent Card (bg-surface/40) and the old lighter `muted` (#5A6478), a
+// 0.74 wash measured 4.24:1 over the darkest parts of these photos, i.e. below
+// WCAG AA. The enterprise restyle removed that constraint from both ends —
+// Card is now /78 · /82 and `muted` darkened to #475569 — so the photo barely
+// reaches the text at all. Re-measured against the real images, the worst case
+// across all five modules is now 6.23:1 in light and 7.13:1 in dark even at the
+// LIGHTEST scrim in use, so these values are free to be a design choice again.
+// Still worth re-measuring if Card ever goes translucent again.
+const DENSE_SCRIM = { light: 0.80, dark: 0.76 }
 const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
 
 /** Modules with a real photo instead of the icon+aurora treatment.
@@ -81,12 +93,24 @@ const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
  * module the same "photo behind glass cards" look Dashboard and
  * Logistics have. */
 const MODULE_PHOTOS: Partial<Record<PageKey | 'login', ModulePhotoSet>> = {
-  dashboard: { light: dashboardLight, dark: dashboardDark, scrim: { light: 0.46, dark: 0.52 }, dull: true },
+  // Dashboard keeps a lighter wash than the rest so its photo stays visible
+  // behind the overview. That was a contrast problem at the old 0.46 (secondary
+  // text measured 3.04:1); at 0.58, against the restyle's opaque Card and
+  // darker `muted`, it measures 6.35:1 — comfortably legible.
+  dashboard: { light: dashboardLight, dark: dashboardDark, scrim: { light: 0.58, dark: 0.62 }, dull: true },
   logistics: { light: logisticsLight, dark: logisticsDark, scrim: DENSE_SCRIM, dull: true },
   imports: { light: importsLight, dark: importsDark, scrim: DENSE_SCRIM, dull: true },
   purchases: { light: purchasesLight, dark: purchasesDark, scrim: DENSE_SCRIM, dull: true },
   inventory: { light: inventoryLight, dark: inventoryDark, scrim: DENSE_SCRIM, dull: true },
   login: { light: loginLight, dark: loginDark },
+  // Chat history is as text-dense as any of the module dashboards once a
+  // conversation is underway, so this doesn't get login's full-strength
+  // treatment — but the source photos are already heavily pre-faded
+  // (unlike the other modules' saturated originals), so DENSE_SCRIM's 0.80
+  // white wash in light mode compounded into "not visible" (reported by
+  // design review). Scrim is tuned down instead of reusing DENSE_SCRIM, and
+  // `dull` is skipped since the photo has no vibrance left to tone down.
+  assistant: { light: assistantLight, dark: assistantDark, scrim: { light: 0.32, dark: 0.76 } },
 }
 
 function ModulePhoto({ photo, className }: { photo: ModulePhotoSet; className?: string }) {
@@ -128,7 +152,7 @@ export function ThemedBackground({ module = 'dashboard', variant = 'ambient', cl
   if (photo) return <ModulePhoto photo={photo} className={className} />
 
   const Icon = MODULE_ICON[module] ?? Globe
-  const accent = module === 'login' ? '#4F46E5' : MODULE_ACCENTS[module as PageKey] ?? '#4F46E5'
+  const accent = module === 'login' ? BRAND : MODULE_ACCENTS[module as PageKey] ?? BRAND
   const isHero = variant === 'hero'
   const isSplit = variant === 'split'
 
@@ -149,7 +173,7 @@ export function ThemedBackground({ module = 'dashboard', variant = 'ambient', cl
         className="animate-aurora absolute rounded-full blur-3xl"
         style={{
           right: '-12%', bottom: '-18%', width: '50%', height: '50%',
-          background: '#8B5CF6', opacity: isHero ? 0.24 : isSplit ? 0.08 : 0.1,
+          background: VIOLET, opacity: isHero ? 0.24 : isSplit ? 0.08 : 0.1,
           ['--aurora-dur' as string]: '36s', animationDelay: '-10s',
         }}
       />
@@ -158,7 +182,7 @@ export function ThemedBackground({ module = 'dashboard', variant = 'ambient', cl
           className="animate-aurora absolute rounded-full blur-3xl"
           style={{
             left: '35%', top: '45%', width: '40%', height: '40%',
-            background: '#BF9000', opacity: 0.14,
+            background: GOLD, opacity: 0.14,
             ['--aurora-dur' as string]: '34s', animationDelay: '-16s',
           }}
         />

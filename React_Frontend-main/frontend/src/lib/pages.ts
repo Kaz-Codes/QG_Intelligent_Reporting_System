@@ -1,5 +1,5 @@
 import {
-  Gauge, ClipboardList, BarChart3, MessageSquare, Users,
+  Gauge, ClipboardList, BarChart3, MessageSquare, Users, Boxes,
   type LucideIcon,
 } from 'lucide-react'
 import type { PageKey } from '@/theme/tokens'
@@ -22,7 +22,7 @@ export interface PageDef {
 // Purchases/Inventory/Imports/Logistics aren't separate entries — they live
 // as tabs inside Dashboard (see Dashboard.tsx's own tab bar).
 export const PAGE_DEFS: PageDef[] = [
-  { key: 'assistant', label: 'Assistant', path: '/assistant', icon: MessageSquare },
+  { key: 'assistant', label: 'AI-Assistant', path: '/assistant', icon: MessageSquare },
   { key: 'dashboard', label: 'Dashboards', path: '/dashboard', icon: Gauge },
   { key: 'reports', label: 'Customize Reports', path: '/reports', icon: BarChart3 },
   // Kept separate from the reporting pages above (its own section in the
@@ -35,6 +35,7 @@ export const PAGE_DEFS: PageDef[] = [
       { label: 'Trucking Status', path: '/trucking-status' },
     ],
   },
+  { key: 'masters', label: 'Masters', path: '/masters', icon: Boxes },
   { key: 'userManagement', label: 'User Management', path: '/user-management', icon: Users },
 ]
 

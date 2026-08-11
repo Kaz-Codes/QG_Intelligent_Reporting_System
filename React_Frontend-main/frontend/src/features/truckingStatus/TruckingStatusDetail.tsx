@@ -1,8 +1,10 @@
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
 import {
@@ -13,12 +15,16 @@ import {
   outstanding,
   trackingRollup,
 } from './schema'
-import { getTruckingJobs, sourceLabel, type TruckingRow } from '@/lib/truckingStatusData'
+import { ApiError } from '@/lib/api/client'
+import {
+  getTruckingJob, submitTruckingJob, reopenTruckingJob, parseSubmitErrors,
+} from '@/lib/api/trucking'
+import { apiToRow, sourceLabel, type TruckingListRow } from '@/lib/api/truckingMap'
 
 const rs = (v?: number | null) => (v === undefined || v === null ? '—' : `Rs. ${Math.round(v).toLocaleString('en-US')}`)
 
 /** ETA-to-works delay: overdue if today is past etaWorks and the job is moving. */
-function delayDays(r: TruckingRow): number | null {
+function delayDays(r: TruckingListRow): number | null {
   if (!r.etaWorks || !r.dispatchNoteDate) return null
   const eta = new Date(r.etaWorks).getTime()
   const today = new Date(new Date().toISOString().slice(0, 10)).getTime()
@@ -30,21 +36,96 @@ export function TruckingStatusDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
-  const row: TruckingRow | undefined = getTruckingJobs().find((r) => r.systemId === id)
-  const canEdit = can(user, 'editAny') || can(user, 'editOwnDraft')
 
-  if (!row) {
+  const [row, setRow] = useState<TruckingListRow | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [reopening, setReopening] = useState(false)
+  const [confirmReopen, setConfirmReopen] = useState(false)
+  const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
+
+  const load = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
+    setError(null)
+    setNotFound(false)
+    try {
+      setRow(apiToRow(await getTruckingJob(id)))
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) setNotFound(true)
+      else setError(err instanceof Error ? err.message : 'Could not load this job')
+    } finally {
+      setLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => { void load() }, [load])
+
+  async function handleSubmit() {
+    if (!row) return
+    setSubmitting(true)
+    setError(null)
+    setSubmitErrors(null)
+    try {
+      await submitTruckingJob(row.id)
+      await load()
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const parsed = parseSubmitErrors(err.detail)
+        if (parsed) { setSubmitErrors(parsed.errors); return }
+      }
+      setError(err instanceof Error ? err.message : 'Could not submit this job')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleReopen() {
+    if (!row) return
+    setConfirmReopen(false)
+    setReopening(true)
+    setError(null)
+    try {
+      await reopenTruckingJob(row.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen this job')
+    } finally {
+      setReopening(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Loading job…" module="truckingStatus" />
+      </div>
+    )
+  }
+
+  if (notFound || !row) {
     return (
       <div className="flex flex-col gap-6">
         <PageHeader title={`Trucking Job ${id}`} subtitle="Detail view" module="truckingStatus" />
         <Card>
-          <CardContent className="flex h-40 items-center justify-center text-muted">
-            No trucking job found for {id}.
+          <CardContent className="flex h-40 flex-col items-center justify-center gap-2 text-muted">
+            <span>No trucking job found for {id}.</span>
+            {error && <span className="text-risk">{error}</span>}
+            <button onClick={() => navigate('/trucking-status')} className="text-sm text-accent hover:underline">
+              ← Back to trucking
+            </button>
           </CardContent>
         </Card>
       </div>
     )
   }
+
+  // A closed job is locked for everyone; only an admin can reopen it.
+  const canEdit = (can(user, 'editAny') || can(user, 'editOwnDraft')) && !row.isLocked
+  const submittable = canEdit && row.recordState !== 'submitted'
+  const submitBlocked = row.missingFields.length > 0
 
   const gross = totalGrossWeight(row.vehicles)
   const net = totalNetWeight(row.vehicles)
@@ -53,12 +134,10 @@ export function TruckingStatusDetail() {
   const out = outstanding(row.actualFreight, row.paidAmount)
   const rollup = trackingRollup(row.vehicles)
   const delay = delayDays(row)
-  // A still-open, live-derived request has no takenAt yet.
-  const isDerived = row.source !== 'manual' && !row.takenAt
 
-  // Map the derived source back to its home record so the user can jump to it.
+  // Map the source back to its home record so the user can jump to it.
   const sourceHref =
-    row.sourceRef && (row.source === 'from-logistics' || row.source === 'from-export')
+    row.sourceRef && row.source === 'from-logistics'
       ? `/logistics-status/${row.sourceRef}`
       : row.sourceRef && row.source === 'from-import-fob'
         ? `/imports-status/${row.sourceRef}`
@@ -74,29 +153,69 @@ export function TruckingStatusDetail() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader
           title={`Trucking Job ${row.systemId}`}
-          subtitle={`${row.movementType} · ${sourceLabel(row.source)}`}
+          subtitle={`${row.movementType || 'Movement not set'} · ${sourceLabel(row.source)}`}
           module="truckingStatus"
         />
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Job-level tracking is a ROLLUP over the vehicles, never stored. */}
           {row.vehicles.length > 0 && <StatusBadge label={rollup.label} />}
-          {canEdit && !isDerived && (
+          <span className={`rounded border px-1.5 py-0.5 text-[11px] ${row.recordState === 'submitted'
+            ? 'border-line text-muted'
+            : 'border-[var(--color-watch)]/30 bg-[var(--color-watch-bg)] text-[var(--color-watch)]'}`}>
+            {row.recordState === 'submitted' ? 'Submitted' : 'Draft'}
+          </span>
+          {row.isLocked && (
+            <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted"
+              title="All vehicles delivered and submitted — an admin must reopen it before editing">
+              Closed
+            </span>
+          )}
+          {row.isLocked && user?.isAdmin && (
+            <Button variant="outline" onClick={() => setConfirmReopen(true)} disabled={reopening}>
+              {reopening ? 'Reopening…' : 'Reopen'}
+            </Button>
+          )}
+          {submittable && (
+            <Button
+              variant="outline"
+              onClick={() => void handleSubmit()}
+              disabled={submitting || submitBlocked}
+              title={submitBlocked ? `Missing: ${row.missingFields.join(', ')}` : undefined}
+            >
+              {submitting ? 'Submitting…' : 'Submit'}
+            </Button>
+          )}
+          {canEdit && (
             <Button asChild variant="outline">
-              <Link to={`/trucking-status/${row.systemId}/edit/1`}>Edit</Link>
+              <Link to={`/trucking-status/${row.id}/edit/1`}>Edit</Link>
             </Button>
           )}
         </div>
       </div>
 
-      {/* provenance banners */}
-      {isDerived && (
-        <div className="rounded-lg border border-line bg-canvas-alt px-4 py-3 text-sm text-muted">
-          This is a live request reflected from {sourceLabel(row.source)}. It updates automatically with
-          its source — add vehicles and tracking here once the trucking team takes it on.
-          {sourceHref && (
-            <> <Link to={sourceHref} className="text-brand hover:underline">Open source {row.sourceRef}</Link>.</>
-          )}
+      {error && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{error}</span>
+          <button type="button" onClick={() => void load()} className="underline">Retry</button>
         </div>
       )}
+
+      {submitErrors && submitErrors.length > 0 && (
+        <div className="rounded-lg bg-risk-bg px-3 py-2.5 text-sm text-risk">
+          <p className="font-medium">This job can’t be submitted yet:</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {submitErrors.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {row.isLocked && (
+        <div className="rounded-lg border border-line bg-canvas-alt px-3.5 py-2.5 text-sm text-muted">
+          This job is closed. An admin must reopen it before it can be edited.
+        </div>
+      )}
+
+      {/* provenance banner */}
       {row.takenAt && (
         <div className="rounded-lg border border-line bg-canvas-alt px-4 py-3 text-sm text-muted">
           Taken from {sourceLabel(row.source)} order{' '}
@@ -190,6 +309,23 @@ export function TruckingStatusDetail() {
           <p className="text-sm leading-relaxed text-ink/80">{row.remarks}</p>
         </Section>
       )}
+
+      <ConfirmDialog
+        open={confirmReopen}
+        title="Reopen this job?"
+        description={
+          <>
+            <span className="font-medium text-ink">{row.systemId}</span> is closed. Reopening makes it editable
+            again until it is submitted with every vehicle delivered once more.
+          </>
+        }
+        confirmLabel="Yes, reopen it"
+        confirmingLabel="Reopening…"
+        confirming={reopening}
+        danger={false}
+        onConfirm={() => void handleReopen()}
+        onCancel={() => setConfirmReopen(false)}
+      />
     </div>
   )
 }

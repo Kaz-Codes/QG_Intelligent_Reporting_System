@@ -4,12 +4,74 @@ import { ApiError } from '@/lib/api/auth'
 
 /** The loading and error cards every live-data dashboard shows, in one place
  * instead of a copy per page — same markup they each had inline. */
-export function LiveDataState({ isLoading, isError, error }: {
+
+/** One shimmering placeholder block. `motion-reduce:animate-none` because a
+ *  perpetual pulse is exactly the kind of motion someone with
+ *  prefers-reduced-motion set has asked not to see. */
+function Bar({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse rounded bg-line/70 motion-reduce:animate-none ${className}`} />
+}
+
+/**
+ * A skeleton in the shape of the dashboard that is about to arrive — hero
+ * stat, the five-across KPI row, then the 2/3 + 1/3 chart pair.
+ *
+ * The point is to RESERVE THE SPACE, not to look busy: a one-line "Loading…"
+ * card is ~60px tall and the real content is ~900px, so every dashboard used
+ * to jump the moment data landed. Matching the real layout keeps cumulative
+ * layout shift near zero.
+ */
+function DashboardSkeleton() {
+  return (
+    <div className="flex flex-col gap-6" aria-hidden>
+      <Card>
+        <CardContent className="p-6">
+          <Bar className="h-3.5 w-24" />
+          <Bar className="mt-3 h-9 w-56" />
+          <Bar className="mt-5 h-[180px] w-full" />
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Card key={i}>
+            <CardContent className="p-5">
+              <Bar className="h-3 w-20" />
+              <Bar className="mt-3 h-7 w-16" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardContent className="p-5">
+            <Bar className="h-3.5 w-28" />
+            <Bar className="mt-4 h-[300px] w-full" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <Bar className="h-3.5 w-28" />
+            <Bar className="mt-4 h-[300px] w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+export function LiveDataState({ isLoading, isError, error, skeleton = 'panel' }: {
   isLoading: boolean
   isError: boolean
   error: unknown
+  /** 'dashboard' reserves a full dashboard's worth of layout so nothing jumps
+   *  when the data lands; 'panel' is the single small card, for pages whose
+   *  real content isn't dashboard-shaped (e.g. the Reports table). */
+  skeleton?: 'dashboard' | 'panel'
 }) {
   if (isLoading) {
+    if (skeleton === 'dashboard') return <DashboardSkeleton />
     return (
       <Card>
         <CardContent className="p-8 text-center text-sm text-muted">Loading live data…</CardContent>

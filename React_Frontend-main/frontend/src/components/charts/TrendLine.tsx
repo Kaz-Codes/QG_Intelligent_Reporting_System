@@ -50,7 +50,7 @@ export function TrendLine({ data, x, y, height = 300, onDark = false, unit }: Pr
           tickFormatter={compactNumber}
           label={axisLabel(unit, 'y', tickColor)}
         />
-        <Tooltip {...(onDark ? { ...tooltipStyle, contentStyle: { ...tooltipStyle.contentStyle, background: '#1F1B4D' } } : tooltipStyle)} />
+        <Tooltip {...(onDark ? { ...tooltipStyle, contentStyle: { ...tooltipStyle.contentStyle, background: '#241E16' } } : tooltipStyle)} />
         <Area
           type="monotone"
           dataKey={y}

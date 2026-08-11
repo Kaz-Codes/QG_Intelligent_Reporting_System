@@ -1,2 +1,13 @@
 .env
 /venv
+
+# Source workbooks. These are ~169 MB of Excel exports and do not belong in
+# git: pushing them is what made the last push time out, and they change every
+# time a new period is exported. They must be copied onto a machine separately
+# — a fresh clone has none of them, and every loader will find nothing to read.
+app/loading/data/
+
+# Compiled Python. 221 of these are currently tracked, which is why unrelated
+# .pyc churn shows up in every diff.
+__pycache__/
+*.py[cod]

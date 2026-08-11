@@ -86,9 +86,17 @@ class Status(str, Enum):
     UNDER_CUSTOM_CLEARANCE = "Under Custom Clearance"
     UNDER_EXAMINATION = "Under Examination"
     UNDER_ASSESSMENT = "Under Assessment"
+    # Unstuffing the container, after assessment and before the goods move on.
+    # Came from the imported sheets; added here because it is a real stage with
+    # no equivalent among the others, not a spelling of one.
+    UNDER_DE_STUFFING = "Under De-Stuffing"
     ARRIVED_AT_QFL = "Arrived at QFL"
     ON_ROAD = "On Road"
     ARRIVED_AT_WORKS = "Arrived at Works"
+    # A terminal state that is NOT an arrival: the import never completes. Last
+    # in the list because it is an exit, not a later stage. Note this does not
+    # lock a record — only "Arrived at Works" does (see helpers.is_closed).
+    ORDER_CANCELLED = "Order Cancelled"
 
 
 #--------------------------------
@@ -318,3 +326,60 @@ class VehicleTrackingStatus(str, Enum):
     LOADING = "Loading"
     ON_ROAD = "On road"
     DELIVERED = "Delivered"
+
+
+#--------------------------------
+# LOGISTICS: SHIPMENT MODE
+#
+# EFS = Export Facilitation Scheme (duty-suspended inputs for export
+# manufacturing); Regular = standard duty-paid. An attribute the Logistics
+# team sets on the order itself, like department — not something derived
+# from the goods.
+#--------------------------------
+
+class ShipmentMode(str, Enum):
+    EFS = "EFS"
+    REGULAR = "Regular"
+
+
+#--------------------------------
+# LOGISTICS: WHAT KIND OF JOB THE ORDER IS
+#
+# A customer-rework job (a customer sends used goods in to be reworked) needs
+# exactly the same shape as an export/local order — items, packing, shipping,
+# expenditures, status, Send to Trucking — so it lives in the SAME table
+# rather than getting one of its own. This column is the discriminator: the
+# Orders list shows 'standard', the Service Jobs tab shows 'rework'.
+#
+# NOT a user-facing choice. There is no form control for it: it follows from
+# which flow was entered ("New Logistics Order" vs "New Rework Job"), is set
+# once at creation, and is IMMUTABLE afterwards — the update route ignores it,
+# so a PUT can never move a record between the two tabs.
+#
+# Imports is not involved in a rework job. The other half of Service Jobs
+# (import-FOB) is NOT a row here at all — it is derived from the imports
+# consignments bought FOB (see cross_module.py), so it needs no job kind.
+#--------------------------------
+
+class JobKind(str, Enum):
+    STANDARD = "standard"
+    REWORK = "rework"
+
+
+#--------------------------------
+# STOCK: ABC RANK
+#
+# The ABC classification of a stocked item. A and B come from the "AB Items"
+# workbook, which ranks per BRANCH — the same item can be an A line at one
+# branch and a B line at another, because the ranking is driven by that
+# branch's own stock and issuance. That is why the rank lives on `stock`
+# (item + branch) and not on the `items` master, which has no branch.
+#
+# C is the default rather than a value anyone records: the workbook only
+# lists A and B items, so anything it does not mention is a C line.
+#--------------------------------
+
+class ItemRank(str, Enum):
+    A = "A"
+    B = "B"
+    C = "C"

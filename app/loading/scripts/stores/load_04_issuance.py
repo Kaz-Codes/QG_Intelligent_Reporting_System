@@ -5,6 +5,7 @@ pd.set_option("display.max_columns", None)
 from app.loading.scripts.etl_common import (
     read_sheet, list_excel_files, clean_text, clean_int, clean_date, clean_number, bulk_insert
 )
+from app.loading.scripts.stores.item_registry import register_missing_items
 
 from pathlib import Path
 
@@ -32,6 +33,17 @@ def load_issuances(conn):
 
     df = pd.concat(dataframes, ignore_index=True)
     df = df.drop_duplicates(keep="first")
+
+    # item_code is a foreign key onto `items`; the catalogue export lags behind
+    # the transactional sheets. See item_registry.
+    register_missing_items(
+        conn, df,
+        code_column="ItemCode",
+        name_column="Item",
+        spec_column="Specification",
+        category_column="Category",
+        label="Issuance",
+    )
 
     for _, row in df.iterrows():
         row_tuple = ()

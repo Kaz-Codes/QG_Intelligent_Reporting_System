@@ -1,8 +1,11 @@
 import {
   ORDER_TYPES,
   DEPARTMENTS,
+  SHIPMENT_MODES,
   INCOTERMS,
   PACKING_STATUSES,
+  DRAFT_DEFAULT_VALUES,
+  emptyItem,
   statusesFor,
   recordRfdChange,
   nextBatchNo,
@@ -223,6 +226,7 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
   const systemId = moBasedSystemId(plan.moNo, plan.batchNo) ?? `LOG-2026-${orderKey.padStart(4, '0')}`
   const orderType: OrderType = pick(ORDER_TYPES)
   const department: Department = pick(DEPARTMENTS)
+  const shipmentMode = pick([...SHIPMENT_MODES])
   const isExport = orderType === 'Export'
   const statuses = statusesFor(orderType)
   const status = pick(statuses)
@@ -248,6 +252,8 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
     systemId,
     orderType,
     department,
+    shipmentMode,
+    jobKind: 'standard',
     originCountry: isExport ? pick(COUNTRIES) : '',
     originCity: isExport ? '' : CITIES[province],
     originProvince: isExport ? '' : province,
@@ -296,7 +302,56 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
 }
 
 const ORDER_PLANS = buildOrderPlans(24)
-const ALL: LogisticsOrder[] = ORDER_PLANS.map((plan, i) => makeOrder(i, plan))
+
+/**
+ * Seeded customer-rework jobs, migrated from the old standalone REWORK_JOBS
+ * mock array into real LogisticsOrder records (jobKind: 'rework') so the
+ * demo data isn't empty. Deliberately left mostly at DRAFT_DEFAULT_VALUES —
+ * only header + items + a bit of status/remarks are filled in — since a real
+ * rework job won't always have packing/shipping/expenditures done yet
+ * either; this reads as "a fresh order partway through", which is realistic.
+ */
+const REWORK_SEED_ORDERS: LogisticsOrder[] = [
+  {
+    ...DRAFT_DEFAULT_VALUES,
+    systemId: 'SVC-2026-0001',
+    jobKind: 'rework',
+    orderType: 'Local',
+    department: 'General',
+    shipmentMode: 'Regular',
+    originCity: 'Lahore',
+    originProvince: 'Punjab',
+    customerName: 'Packages Ltd',
+    items: [
+      { ...emptyItem('item-svc1-0'), itemDetail: 'Used kraft paper rolls — re-slitting', quantity: 24, unitWeight: 8 },
+      { ...emptyItem('item-svc1-1'), itemDetail: 'Core tubes — re-use inspection', quantity: 40, unitWeight: 1.2 },
+    ],
+    status: 'Under Production',
+    remarksLog: [{
+      id: 'remark-svc1-0', text: 'Customer-owned stock', authoredBy: 'Hina Farooq',
+      authoredAt: '2026-05-02T09:00:00.000Z', system: false,
+    }],
+  },
+  {
+    ...DRAFT_DEFAULT_VALUES,
+    systemId: 'SVC-2026-0002',
+    jobKind: 'rework',
+    orderType: 'Local',
+    department: 'General',
+    shipmentMode: 'Regular',
+    originCity: 'Kasur',
+    originProvince: 'Punjab',
+    customerName: 'Century Paper',
+    items: [
+      { ...emptyItem('item-svc2-0'), itemDetail: 'Old film rolls — re-winding + inspection', quantity: 12, unitWeight: 5 },
+    ],
+    // Still at intake — no status picked yet, same as a brand-new order
+    // that hasn't reached Step 5.
+    status: '',
+  },
+]
+
+const ALL: LogisticsOrder[] = [...ORDER_PLANS.map((plan, i) => makeOrder(i, plan)), ...REWORK_SEED_ORDERS]
 
 /* -- filtering ------------------------------------------------------- */
 export interface LogisticsFilters {
@@ -598,12 +653,25 @@ export function deriveImportFobRequests(): LogisticsFobRequest[] {
  *                   first). These stay derived + read-only via
  *                   deriveImportFobRequests(); the record's home is Imports.
  *   - Customer Rework — a customer sends in old rolls / used goods for rework.
- *                   Imports is NOT involved, so Logistics enters every detail
- *                   itself. These are real, owned, editable records kept in the
- *                   in-memory store below (mirrors the ALL/DRAFTS pattern used
- *                   for orders and MANUAL_JOBS in trucking).
+ *                   Imports is NOT involved, but the job needs the exact same
+ *                   shape as a standard order (items, packing, shipping,
+ *                   expenditures, status, sentToTrucking) — a customer's
+ *                   reworked goods still get packed, shipped and possibly
+ *                   trucked out just like anything else. So a rework job IS a
+ *                   `LogisticsOrder` in the `ALL`/`DRAFTS` store, tagged
+ *                   `jobKind: 'rework'`, created/edited through the SAME
+ *                   5-step wizard as a standard order — see getReworkOrders()
+ *                   below rather than a separate parallel record type.
  *
  * Both are surfaced in the Service Jobs tab of the Logistics list.
+ *
+ * IMPORTANT: `getLogisticsOrders()` (used by the main Orders list AND by
+ * truckingStatusData.ts's deriveFromLogistics/deriveFromExports) deliberately
+ * does NOT filter out `jobKind === 'rework'` — a rework job's "Send to
+ * Trucking" handoff has to keep working through the exact same cross-module
+ * derivation standard orders use. Hiding rework orders from the Orders TAB is
+ * done at the UI layer instead (LogisticsStatusList.tsx filters the rows it
+ * renders), not in this shared data function.
  */
 export type ServiceJobType = 'import-fob' | 'customer-rework'
 
@@ -611,39 +679,31 @@ export interface ServiceJob {
   systemId: string
   jobType: ServiceJobType
   customerName: string
-  itemDetails: string       // logistics-entered for rework; summary for FOB
-  quantity?: number
+  itemDetails: string       // summary string — see getReworkOrders() for the
+  quantity?: number         // real per-item shape rework rows render from
   origin: string
   status: string
-  receivedDate?: string     // when the customer's goods arrived at logistics
-  targetDate?: string       // when the rework/shipping should be done
   clearingAgent?: string
-  remarks?: string
-  /** For import-fob rows only: the source consignment in Imports. */
+  /** For import-fob rows: the source consignment in Imports. For
+   *  customer-rework rows: the order's own systemId (now a real
+   *  LogisticsOrder, so it doubles as the id to navigate to). */
   sourceRef?: string
 }
 
-const REWORK_STATUSES = ['Received', 'Under Rework', 'Ready', 'Dispatched'] as const
-export const reworkStatusList = [...REWORK_STATUSES]
+/** Every customer-rework job — real LogisticsOrder records (jobKind ===
+ *  'rework') kept in the same `ALL` store as standard orders. The Service
+ *  Jobs tab reads this directly (not getServiceJobs) so it can render the
+ *  real items array, packages, and link through to the real detail view,
+ *  rather than a flattened summary string. */
+export function getReworkOrders(): LogisticsOrder[] {
+  return ALL.filter((o) => o.jobKind === 'rework')
+}
 
-// Seeded so the tab isn't empty in the demo.
-const REWORK_JOBS: ServiceJob[] = [
-  {
-    systemId: 'SVC-2026-0001', jobType: 'customer-rework',
-    customerName: 'Packages Ltd', itemDetails: 'Used kraft paper rolls — re-slitting',
-    quantity: 24, origin: 'Lahore', status: 'Under Rework',
-    receivedDate: '2026-05-02', targetDate: '2026-05-20', remarks: 'Customer-owned stock',
-  },
-  {
-    systemId: 'SVC-2026-0002', jobType: 'customer-rework',
-    customerName: 'Century Paper', itemDetails: 'Old film rolls — re-winding + inspection',
-    quantity: 12, origin: 'Kasur', status: 'Received', receivedDate: '2026-05-11',
-  },
-]
-
-let reworkSeq = 3
-
-/** Derived FOB requests + owned rework jobs, unified as ServiceJob rows. */
+/** Derived FOB requests + a flattened summary of rework orders, unified as
+ *  ServiceJob rows — used for the tab's count badges. The Service Jobs
+ *  table itself reads getReworkOrders() directly for the rework rows (see
+ *  the comment above), so this summary shape only needs to be good enough
+ *  for a count and a fallback list. */
 export function getServiceJobs(jobType?: ServiceJobType): ServiceJob[] {
   const fob: ServiceJob[] = deriveImportFobRequests().map((r) => ({
     systemId: r.systemId,
@@ -655,29 +715,22 @@ export function getServiceJobs(jobType?: ServiceJobType): ServiceJob[] {
     clearingAgent: r.needsClearingAgent ? undefined : 'Assigned',
     sourceRef: r.sourceRef,
   }))
-  const all = [...fob, ...REWORK_JOBS]
+  const rework: ServiceJob[] = getReworkOrders().map((o) => {
+    const first = o.items[0]
+    const more = o.items.length - 1
+    return {
+      systemId: o.systemId,
+      jobType: 'customer-rework' as const,
+      customerName: o.customerName,
+      itemDetails: first ? `${first.itemDetail}${more > 0 ? ` +${more} more` : ''}` : 'No items',
+      origin: o.orderType === 'Export' ? (o.originCountry ?? '') : (o.originCity ?? ''),
+      status: o.status || 'Draft',
+      clearingAgent: o.clearingAgent || undefined,
+      sourceRef: o.systemId,
+    }
+  })
+  const all = [...fob, ...rework]
   return jobType ? all.filter((j) => j.jobType === jobType) : all
-}
-
-export function getServiceJob(systemId: string): ServiceJob | undefined {
-  return getServiceJobs().find((j) => j.systemId === systemId)
-}
-
-/** Create a customer-rework job (logistics enters everything itself). */
-export function createReworkJob(input: Omit<ServiceJob, 'systemId' | 'jobType'>): ServiceJob {
-  const job: ServiceJob = {
-    ...input,
-    systemId: `SVC-2026-${String(reworkSeq++).padStart(4, '0')}`,
-    jobType: 'customer-rework',
-  }
-  REWORK_JOBS.unshift(job)
-  return job
-}
-
-/** Update an existing customer-rework job in place. */
-export function updateReworkJob(systemId: string, patch: Partial<ServiceJob>): void {
-  const job = REWORK_JOBS.find((j) => j.systemId === systemId)
-  if (job) Object.assign(job, patch)
 }
 
 export const customerList = [...CUSTOMERS]

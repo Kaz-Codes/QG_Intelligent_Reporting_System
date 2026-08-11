@@ -23,6 +23,7 @@ becomes an order of its own (logistics_common.build_order_index).
 
 from psycopg2.extras import Json
 
+from app.enums import LogisticsStatus, JobKind
 from app.loading.scripts.etl_common import (
     bulk_insert, clean_date, clean_date_any, clean_int, clean_number,
     clean_status, clean_text, parse_qty_uom,
@@ -137,7 +138,30 @@ CONSIGNMENT_COLUMNS = [
     "dhl_charges", "sea_air_freight",
     "current_status", "effective_date", "gate_out_date", "sent_to_trucking",
     "remarks_log", "created_by_id", "is_deleted",
+    # Both have server_defaults, so a raw insert could omit them — but an order
+    # that already reached the terminal status is finished work, not a draft
+    # somebody abandoned mid-entry. See terminal_flags below.
+    "record_state", "is_locked",
+    # Every workbook row is an export/local order; customer-rework jobs only
+    # ever come from the app. Written explicitly rather than leaning on the
+    # server_default, per the raw-insert convention.
+    "job_kind",
 ]
+
+# "Delivered" is the terminal status for both export and local orders, and it
+# is what closes an order (helpers.is_closed = Delivered AND submitted). A
+# workbook row already sitting there describes completed work, so it loads as
+# submitted AND closed — otherwise the list would show delivered orders whose
+# Submitted column reads "Draft" and whose Closed column reads "—", which is a
+# contradiction. Mirrors the imports loader's terminal_flags.
+TERMINAL_FLAGS = {
+    LogisticsStatus.DELIVERED.value: ("submitted", True),
+}
+
+
+def terminal_flags(status):
+    """(record_state, is_locked) for a loaded order at `status`."""
+    return TERMINAL_FLAGS.get(status, ("draft", False))
 
 ITEM_COLUMNS = [
     "consignment_id", "job_no", "item_detail", "quantity", "unit_weight",
@@ -468,6 +492,9 @@ def build_rows(created_by_id):
         key = key_by_id.get(consignment_id)
         exp_no, batch = key if key else (None, "")
 
+        status = header.get("current_status", DEFAULT_STATUS)
+        record_state, is_locked = terminal_flags(status)
+
         consignment_rows.append((
             consignment_id,
             header.get("order_type"),
@@ -502,13 +529,16 @@ def build_rows(created_by_id):
             header.get("port_charges"),
             header.get("dhl_charges"),
             header.get("sea_air_freight"),
-            header.get("current_status", DEFAULT_STATUS),
+            status,
             header.get("effective_date"),
             header.get("gate_out_date"),
             False,                                   # sent_to_trucking
             Json([]),                                # remarks_log
             created_by_id,
             False,                                   # is_deleted
+            record_state,
+            is_locked,
+            JobKind.STANDARD.value,
         ))
 
     return consignment_rows, item_rows, package_rows, container_rows

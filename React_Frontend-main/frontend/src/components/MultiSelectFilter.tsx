@@ -35,12 +35,32 @@ const PREFERRED_MAX_HEIGHT = 320
  * button. It repositions on scroll/resize instead of just closing, and
  * flips to open upward when there isn't room below.
  */
+// Below this many options the list is scannable and a search box is just
+// another thing on screen.
+const SEARCH_THRESHOLD = 8
+
 export function MultiSelectFilter({ label, options, value, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<MenuPosition | null>(null)
+  const [query, setQuery] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const needle = query.trim().toLowerCase()
+  // Selected values always stay visible, however the search is narrowed —
+  // otherwise typing can hide a chip you are about to untick, and the menu
+  // stops reflecting what is actually filtered.
+  const shown = needle
+    ? options.filter((o) => o.toLowerCase().includes(needle) || value.includes(o))
+    : options
+
+  // A fresh search each time it opens: a stale needle silently hides options
+  // the next person did not know were there.
+  useEffect(() => {
+    if (!open) setQuery('')
+  }, [open])
 
   function updatePosition() {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -155,7 +175,40 @@ export function MultiSelectFilter({ label, options, value, onChange }: Props) {
             pos.openUp ? 'origin-bottom' : 'origin-top',
           )}
         >
-          {options.map((option) => (
+          {/* Search. These lists are long on real data — 959 suppliers, 348
+              customers, thousands of items — and scrolling to find one is not
+              a filter, it is a haystack. Sticky so it stays reachable while
+              the list scrolls under it. Shown only when there is enough to
+              search through to be worth the row. */}
+          {options.length > SEARCH_THRESHOLD && (
+            <div className="sticky top-0 z-10 border-b border-line bg-surface px-2 pb-1.5 pt-1">
+              <input
+                ref={searchRef}
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Search ${options.length} options…`}
+                className="h-7 w-full rounded border border-line bg-canvas px-2 text-xs text-ink placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                // The menu closes on Escape; let the field clear first so one
+                // key does not do two things at once.
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && query) {
+                    e.stopPropagation()
+                    setQuery('')
+                  }
+                }}
+              />
+            </div>
+          )}
+
+          {options.length === 0 && (
+            // An empty menu with no explanation reads as a broken dropdown.
+            <p className="px-3 py-2 text-sm text-muted">No values available</p>
+          )}
+          {options.length > 0 && shown.length === 0 && (
+            <p className="px-3 py-2 text-sm text-muted">Nothing matches “{query}”</p>
+          )}
+          {shown.map((option) => (
             <label
               key={option}
               className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-ink transition-colors duration-100 hover:bg-canvas-alt"

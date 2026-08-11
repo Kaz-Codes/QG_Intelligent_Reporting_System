@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import {
   ShieldCheck, Sparkles, Sun, Moon,
-  FileText, Search, Target, TrendingUp, LayoutDashboard, Bot,
+  Bot, FilePlus2, LayoutDashboard, Workflow,
 } from 'lucide-react'
 import { useAuth } from './AuthContext'
 import { useTheme } from '@/theme/ThemeContext'
@@ -11,18 +11,18 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ThemedBackground } from '@/components/ThemedBackground'
-import logo from '@/assets/qadri_logo_transparent.png'
+import logo from '@/assets/qadri_logo_transparent.webp'
 
-// Each capability gets its own accent (drawn from the app's existing
-// module-accent palette) instead of one uniform color — reads as a set of
-// distinct features rather than a repeated template.
+// The four things the system actually does. Each gets its own accent from
+// the brand palette rather than one uniform color, so the set reads as
+// distinct capabilities and not a repeated template. Accents are CSS
+// variables, not literal hex, so they follow the light/dark theme — the
+// previous hardcoded values went muddy against the dark canvas.
 const CAPABILITIES = [
-  { icon: FileText, label: 'Descriptive Reporting', hint: 'What happened', color: '#4F46E5' },
-  { icon: Search, label: 'Diagnostic Reporting', hint: 'Why it happened', color: '#0EA5E9' },
-  { icon: Target, label: 'Prescriptive Reporting', hint: 'What to do next', color: '#8B5CF6' },
-  { icon: TrendingUp, label: 'Forecasting Reporting', hint: "What's coming", color: '#10B981' },
-  { icon: LayoutDashboard, label: 'Dashboards', hint: 'Live, at a glance', color: '#06B6D4' },
-  { icon: Bot, label: 'AI Chatbot', hint: 'Ask in plain language', color: '#F59E0B' },
+  { icon: Bot, label: 'Chatbot', hint: 'Ask in plain language', color: 'var(--brand)' },
+  { icon: FilePlus2, label: 'Make your own Report', hint: 'Build it your way', color: 'var(--watch)' },
+  { icon: LayoutDashboard, label: 'Dashboards', hint: 'Live, at a glance', color: 'var(--info)' },
+  { icon: Workflow, label: 'Process Detailing', hint: 'Every step, traced', color: 'var(--healthy)' },
 ] as const
 
 export function LoginPage() {
@@ -69,7 +69,7 @@ export function LoginPage() {
       <div
         aria-hidden
         className="pointer-events-none fixed inset-0 z-[5]"
-        style={{ background: 'radial-gradient(55% 50% at 50% 40%, rgba(15,23,42,0.28), transparent 72%)' }}
+        style={{ background: 'radial-gradient(55% 50% at 50% 40%, rgba(26,22,20,0.30), transparent 72%)' }}
       />
 
       {/* Top bar */}
@@ -109,23 +109,21 @@ export function LoginPage() {
         <div className="flex items-center px-6 py-12 md:px-10 lg:px-16">
           <div
             className="animate-fade-in-up w-full max-w-xl rounded-[28px] border border-white/40 bg-surface/78 p-8 backdrop-blur-xl dark:border-white/10 dark:bg-surface/72 lg:p-10"
-            style={{ boxShadow: '0 30px 70px -20px rgba(79,70,229,0.35), 0 10px 30px -10px rgba(0,0,0,0.15)' }}
+            style={{ boxShadow: '0 30px 70px -20px rgba(26,22,20,0.35), 0 10px 30px -10px rgba(0,0,0,0.15)' }}
           >
-            <span className="mb-5 inline-flex items-center gap-1.5 rounded-full border border-brand/25 bg-brand-soft px-3 py-1 text-xs font-semibold text-brand">
-              <Sparkles size={12} />
-              Intelligent Reporting System
-            </span>
-            <h1
-              className="font-display bg-gradient-to-r from-brand via-violet-500 to-brand bg-clip-text text-6xl font-extrabold leading-[1.05] tracking-tight text-transparent lg:text-7xl"
-            >
-              QG-IRS
-            </h1>
-            <p className="mt-3 text-lg font-bold leading-snug text-ink">
-              Helps you with reporting — descriptive, diagnostic, prescriptive
-              &amp; forecasting — plus live dashboards and an AI chatbot.
-            </p>
+            <div className="flex flex-col items-center text-center">
+              <span className="mb-5 inline-flex items-center gap-1.5 rounded-full border border-brand/25 bg-brand-soft px-4 py-1.5 text-lg font-extrabold tracking-tight text-brand">
+                <Sparkles size={16} />
+                Intelligent Reporting System
+              </span>
+              <h1
+                className="font-display bg-gradient-to-r from-navy via-brand to-navy bg-clip-text text-5xl font-extrabold leading-[1.05] tracking-tight text-transparent lg:text-6xl"
+              >
+                QG-IRS
+              </h1>
+            </div>
 
-            <div className="mt-7 grid grid-cols-2 gap-3">
+            <div className="mt-8 grid grid-cols-2 gap-3">
               {CAPABILITIES.map((c, i) => (
                 <div
                   key={c.label}
@@ -134,7 +132,7 @@ export function LoginPage() {
                 >
                   <span
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-transform duration-200 group-hover:scale-110"
-                    style={{ backgroundColor: `${c.color}1A`, color: c.color }}
+                    style={{ backgroundColor: `color-mix(in srgb, ${c.color} 14%, transparent)`, color: c.color }}
                   >
                     <c.icon size={19} />
                   </span>
@@ -157,7 +155,7 @@ export function LoginPage() {
             <form
               onSubmit={handleSubmit}
               className="flex flex-col gap-4 rounded-[28px] border border-white/40 bg-surface/78 p-8 backdrop-blur-xl dark:border-white/10 dark:bg-surface/72"
-              style={{ boxShadow: '0 30px 70px -20px rgba(79,70,229,0.3), 0 10px 30px -10px rgba(0,0,0,0.15)' }}
+              style={{ boxShadow: '0 30px 70px -20px rgba(26,22,20,0.3), 0 10px 30px -10px rgba(0,0,0,0.15)' }}
             >
               <div className="mb-1 flex flex-col gap-1">
                 <h2 className="font-display text-xl font-bold text-ink">Welcome back</h2>

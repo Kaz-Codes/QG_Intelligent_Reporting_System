@@ -6,12 +6,12 @@ import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth/AuthContext'
-import { logActivity, getActivityLog } from '@/lib/activityLog'
 import { PERMISSION_GROUPS, permissionLabel, type Permission } from '@/lib/roleAccess'
 import {
   listUsers, createUser, updateUser, setUserActive,
   credentialError, MIN_CREDENTIAL_LENGTH, type UserAccount,
 } from '@/lib/api/users'
+import { listLogs, subscribeToLogs, describeLog, type ActivityLogEntry } from '@/lib/api/logs'
 
 /** The grouped permission checklist, shared by the create form and the
  * per-account edit panel. Disabled (and dimmed) once "Make Admin" is
@@ -106,8 +106,14 @@ export function UserManagement() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  const [log, setLog] = useState(() => getActivityLog())
+  const [log, setLog] = useState<ActivityLogEntry[]>([])
+  const [logError, setLogError] = useState<string | null>(null)
   const [logSearch, setLogSearch] = useState('')
+  const [liveConnected, setLiveConnected] = useState(false)
+
+  // Logs for the one account being edited, loaded on demand.
+  const [userLog, setUserLog] = useState<ActivityLogEntry[]>([])
+  const [userLogLoading, setUserLogLoading] = useState(false)
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -124,6 +130,8 @@ export function UserManagement() {
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
 
+  /** Reload the account list and the server-side activity log together — every
+   *  account change writes a log row on the backend, so the two stay in step. */
   const refresh = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
@@ -133,11 +141,33 @@ export function UserManagement() {
       setLoadError(err instanceof Error ? err.message : 'Could not load accounts')
     } finally {
       setLoading(false)
-      setLog(getActivityLog())
+    }
+
+    setLogError(null)
+    try {
+      setLog(await listLogs({ limit: 100 }))
+    } catch (err) {
+      setLogError(err instanceof Error ? err.message : 'Could not load the activity log')
     }
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
+
+  // Live feed of EVERY user's activity, pushed as it is logged. The initial
+  // history comes from refresh() above; this only prepends what happens after.
+  // De-duplicated by id, because an action this admin performs also arrives via
+  // the refresh() that follows it.
+  useEffect(() => {
+    const unsubscribe = subscribeToLogs(
+      (entry) => {
+        setLog((current) =>
+          current.some((e) => e.id === entry.id) ? current : [entry, ...current].slice(0, 200),
+        )
+      },
+      { onStatus: setLiveConnected },
+    )
+    return unsubscribe
+  }, [])
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -148,11 +178,9 @@ export function UserManagement() {
 
     setSubmitting(true)
     try {
+      // No client-side logging: the backend's request middleware records this
+      // POST against the acting user, so refresh() below picks it up.
       await createUser({ username, password, isAdmin, permissions })
-      logActivity(
-        me?.username ?? 'unknown',
-        `Created account @${username} — ${isAdmin ? 'Admin' : permissions.length ? `${permissions.length} permission(s)` : 'no permissions'}`,
-      )
       setUsername('')
       setPassword('')
       setIsAdmin(false)
@@ -172,6 +200,14 @@ export function UserManagement() {
     setEditIsAdmin(u.isAdmin)
     setEditPermissions(u.permissions)
     setEditError(null)
+
+    // This one account's own history — GET /logs/?user_id=…
+    setUserLog([])
+    setUserLogLoading(true)
+    listLogs({ userId: u.id, limit: 50 })
+      .then(setUserLog)
+      .catch(() => setUserLog([]))
+      .finally(() => setUserLogLoading(false))
   }
 
   async function saveEdit(u: UserAccount) {
@@ -191,10 +227,6 @@ export function UserManagement() {
         permissions: editPermissions,
         isActive: u.isActive,
       })
-      logActivity(
-        me?.username ?? 'unknown',
-        `Updated access for @${editUsername} — ${editIsAdmin ? 'Admin' : editPermissions.length ? `${editPermissions.length} permission(s)` : 'no permissions'}`,
-      )
       setEditingId(null)
       await refresh()
     } catch (err) {
@@ -207,7 +239,6 @@ export function UserManagement() {
   async function toggleActive(u: UserAccount) {
     try {
       await setUserActive(u.id, !u.isActive)
-      logActivity(me?.username ?? 'unknown', `${u.isActive ? 'Deactivated' : 'Activated'} account @${u.username}`)
       await refresh()
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not change the account status')
@@ -215,7 +246,11 @@ export function UserManagement() {
   }
 
   const filteredLog = logSearch.trim()
-    ? log.filter((l) => `${l.actor} ${l.message}`.toLowerCase().includes(logSearch.trim().toLowerCase()))
+    ? log.filter((l) =>
+        `${l.username ?? ''} ${describeLog(l)} ${l.path ?? ''}`
+          .toLowerCase()
+          .includes(logSearch.trim().toLowerCase()),
+      )
     : log
 
   return (
@@ -285,6 +320,34 @@ export function UserManagement() {
                         onChange={setEditPermissions}
                         disabled={editIsAdmin}
                       />
+                      {/* This account's own activity — GET /logs/?user_id= */}
+                      <div className="rounded-lg border border-line bg-surface p-3">
+                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                          Recent activity by @{u.username}
+                        </p>
+                        {userLogLoading && <p className="text-xs text-muted">Loading…</p>}
+                        {!userLogLoading && userLog.length === 0 && (
+                          <p className="text-xs text-muted">No recorded activity for this account.</p>
+                        )}
+                        <div className="flex max-h-48 flex-col gap-2 overflow-y-auto">
+                          {userLog.map((entry) => (
+                            <div key={entry.id} className="border-t border-line pt-2 first:border-t-0 first:pt-0">
+                              <p className="text-xs text-ink">
+                                {describeLog(entry)}
+                                {entry.failed && (
+                                  <span className="ml-1.5 rounded bg-risk-bg px-1 py-0.5 text-[10px] font-medium text-risk">
+                                    failed{entry.statusCode ? ` (${entry.statusCode})` : ''}
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-[11px] text-muted">
+                                {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—'}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
                       {editError && <p className="rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{editError}</p>}
                       <Button type="button" onClick={() => void saveEdit(u)} disabled={savingEdit} className="w-fit">
                         {savingEdit ? 'Saving…' : 'Save'}
@@ -372,7 +435,18 @@ export function UserManagement() {
 
           <Card>
             <CardContent className="p-5">
-              <p className="mb-3 text-sm font-semibold text-ink">Activity Log</p>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-semibold text-ink">Activity Log</p>
+                <span
+                  className="flex items-center gap-1.5 text-[11px] text-muted"
+                  title={liveConnected ? 'Streaming live from the server' : 'Reconnecting — showing loaded history'}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${liveConnected ? 'bg-[var(--color-healthy)]' : 'bg-muted'}`}
+                  />
+                  {liveConnected ? 'Live' : 'Offline'}
+                </span>
+              </div>
               <div className="relative mb-3">
                 <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
                 <Input
@@ -382,14 +456,26 @@ export function UserManagement() {
                   className="pl-8"
                 />
               </div>
+              {logError && (
+                <p className="mb-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{logError}</p>
+              )}
               <div className="flex max-h-80 flex-col gap-2.5 overflow-y-auto">
-                {filteredLog.length === 0 && <p className="py-6 text-center text-sm text-muted">No activity yet.</p>}
+                {!logError && filteredLog.length === 0 && (
+                  <p className="py-6 text-center text-sm text-muted">No activity yet.</p>
+                )}
                 {filteredLog.map((entry) => (
                   <div key={entry.id} className="border-t border-line pt-2.5 first:border-t-0 first:pt-0">
                     <p className="text-xs text-ink">
-                      <span className="font-semibold">@{entry.actor}</span> {entry.message}
+                      <span className="font-semibold">@{entry.username ?? 'unknown'}</span> {describeLog(entry)}
+                      {entry.failed && (
+                        <span className="ml-1.5 rounded bg-risk-bg px-1 py-0.5 text-[10px] font-medium text-risk">
+                          failed{entry.statusCode ? ` (${entry.statusCode})` : ''}
+                        </span>
+                      )}
                     </p>
-                    <p className="text-[11px] text-muted">{new Date(entry.timestamp).toLocaleString()}</p>
+                    <p className="text-[11px] text-muted">
+                      {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—'}
+                    </p>
                   </div>
                 ))}
               </div>

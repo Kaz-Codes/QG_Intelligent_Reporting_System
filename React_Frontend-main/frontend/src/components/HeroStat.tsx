@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { ArrowUpRight, ArrowDownRight, Sparkles, type LucideIcon } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, type LucideIcon } from 'lucide-react'
 import { Card, CardContent } from './ui/card'
 import { TrendLine } from './charts/TrendLine'
+import { ReferenceList, type ReferenceSet, type ReferencePager } from './ReferenceList'
 import { useTheme } from '@/theme/ThemeContext'
 
 interface Props {
@@ -22,6 +23,11 @@ interface Props {
   header?: ReactNode
   /** Unit for the trend chart's value axis — "PKR (millions)", "Orders". */
   trendUnit?: string
+  /** The records this headline totals, listed on demand. The hero is a KPI
+   * like any other, so it drills the same way the tiles under it do. */
+  refs?: ReferenceSet
+  /** Fetches further pages of `refs`. */
+  fetchRefs?: ReferencePager
 }
 
 /** The page's headline KPI merged with its own trend chart into one glass
@@ -29,8 +35,8 @@ interface Props {
  * card (see ui/card.tsx), so it sits quietly over a module's photo
  * backdrop instead of competing with it as its own solid gradient block. */
 export function HeroStat({
-  label, value, delta, direction = 'up', icon: Icon = Sparkles, trendData, trendX, trendY, caption,
-  trendHeight = 200, header, trendUnit,
+  label, value, delta, direction = 'up', trendData, trendX, trendY, caption,
+  trendHeight = 200, header, trendUnit, refs, fetchRefs,
 }: Props) {
   const { colors } = useTheme()
   const DeltaIcon = direction === 'down' ? ArrowDownRight : ArrowUpRight
@@ -48,7 +54,10 @@ export function HeroStat({
         )}
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-sm font-medium text-muted">{label}</p>
+            <div className="flex items-center gap-1">
+              <p className="text-sm font-medium text-muted">{label}</p>
+              <ReferenceList label={label} refs={refs} fetchPage={fetchRefs} />
+            </div>
             <p className="font-display mt-1 text-5xl font-extrabold tracking-tight text-navy">{value}</p>
             {delta && (
               <span
@@ -60,11 +69,10 @@ export function HeroStat({
               </span>
             )}
           </div>
-          {!header && (
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-soft text-brand">
-              <Icon size={20} />
-            </span>
-          )}
+          {/* The decorative glyph that used to sit here is gone. It was pure
+              ornament in the top-right of a chart card — it carried no
+              information, and on a screen whose whole point is that every mark
+              means something, a symbol that means nothing is noise. */}
         </div>
         <div className="mt-2">
           <TrendLine data={trendData} x={trendX} y={trendY} height={trendHeight} unit={trendUnit} />

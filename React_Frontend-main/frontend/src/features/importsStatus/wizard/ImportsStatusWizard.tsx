@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { FormProvider, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -6,12 +6,23 @@ import type { z } from 'zod'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
-import { getConsignmentDraft, updateConsignment } from '@/lib/importsStatusData'
-import { consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, type ConsignmentDraft } from '../schema'
+import { ApiError } from '@/lib/api/client'
+import {
+  getConsignment, createConsignment, updateConsignmentApi, submitConsignmentApi,
+  parseSubmitErrors, type ConsignmentPayload,
+} from '@/lib/api/imports'
+import {
+  draftToPayload, apiToDraft, syncItemBackendIds, syncPaymentBackendIds, type WizardMasters,
+} from '@/lib/api/importsMap'
+import {
+  consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, CLOSED_STATUS,
+  type ConsignmentDraft, type ConsignmentItem, type Payment,
+} from '../schema'
+import { MastersProvider, useMasters } from './MastersContext'
 import { WizardStepper } from './WizardStepper'
-import { UnsavedChangesDialog } from './UnsavedChangesDialog'
 import { Step1Consignment } from './steps/Step1Consignment'
 import { Step2Finance } from './steps/Step2Finance'
 import { Step3Shipping } from './steps/Step3Shipping'
@@ -25,189 +36,370 @@ const STEP_COMPONENTS = [
 ]
 
 /**
- * A field that's never been keyed in starts life as `undefined` (see
- * schema.ts's `optionalNumber`/`emptyItem`). But once the wizard step that
- * registers that field mounts — even without the user typing anything — its
- * native input's naturally-empty DOM value (`''`) gets synced into
- * react-hook-form, silently turning `undefined` into `''`. That's invisible
- * to the user but not to a raw JSON comparison, so both react-hook-form's
- * own `isDirty` and a naive manual diff flag a step as "edited" just for
- * having been visited. Normalizing undefined/null/'' to one canonical value
- * before comparing is what makes the dirty-guard only fire on real edits.
+ * Imports Status wizard — every step-change saves.
+ *
+ * No more "unsaved changes" dialog: there is nothing left to lose. Every
+ * navigation — Next, Back, or clicking a step in the stepper — saves the
+ * current form state first (POST the first time, PUT after) and only moves
+ * once that succeeds; if it fails, the error shows and the page stays put.
+ * "Next" reads "Save and Next" for exactly that reason. Submit (last step
+ * only) saves the same way, then calls the strict /submit endpoint, which
+ * validates server-side and reports back anything still missing.
+ *
+ * react-hook-form holds ONE draft across all six steps (this component is not
+ * remounted between them — only the `:step` route param changes), so every
+ * save sends the FULL current draft, not just the step being left. That's
+ * required for correctness: the update route diffs items/payments against
+ * what it already has, and a line missing from the payload reads as deleted.
  */
-function normalizeForDirtyCheck(value: unknown): unknown {
-  if (value === undefined || value === null || value === '') return null
-  if (Array.isArray(value)) return value.map(normalizeForDirtyCheck)
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = normalizeForDirtyCheck(v)
-    return out
-  }
-  return value
-}
-const snapshot = (v: unknown) => JSON.stringify(normalizeForDirtyCheck(v))
-
 export function ImportsStatusWizard() {
+  return (
+    <MastersProvider>
+      <ImportsStatusWizardInner />
+    </MastersProvider>
+  )
+}
+
+function ImportsStatusWizardInner() {
   const { user } = useAuth()
   const { id, step } = useParams()
   const navigate = useNavigate()
   const isNew = !id
-  const [pendingStep, setPendingStep] = useState<number | null>(null)
+  const masters = useMasters()
 
   const currentStep = isNew ? 1 : Number(step) || 1
   const stepIndex = Math.min(Math.max(currentStep, 1), WIZARD_STEPS.length) - 1
   const stepDef = WIZARD_STEPS[stepIndex]
   const StepComponent = STEP_COMPONENTS[stepIndex]
 
-  // Edit mode loads the existing record synchronously from the mock store —
-  // no loading state needed since it's in-memory. New mode always starts
-  // blank. `useForm` only reads `defaultValues` on the very first render;
-  // that's fine for the very first step landed on, but note that React
-  // Router does NOT remount this component between wizard steps (only the
-  // `:step` route param changes, not the route element) — the same `methods`
-  // instance is reused across the whole edit session for one record, which
-  // is exactly why the dirty-baseline resets in handleSaveAndMove/
-  // handleDiscardAndMove below matter. See lib/importsStatusData.ts's
-  // getConsignmentDraft/updateConsignment.
-  const existingDraft = id ? getConsignmentDraft(id) : undefined
-
   const methods = useForm<z.input<typeof consignmentDraftSchema>, unknown, ConsignmentDraft>({
     resolver: zodResolver(consignmentDraftSchema),
-    defaultValues: existingDraft ?? DRAFT_DEFAULT_VALUES,
+    defaultValues: DRAFT_DEFAULT_VALUES,
     mode: 'onBlur',
   })
-  // react-hook-form's own `formState.isDirty` gets stuck `true` after a
-  // `reset()`, because visiting a step "materializes" that step's
-  // never-been-touched fields from `undefined` to `''` just by mounting —
-  // see normalizeForDirtyCheck above. Tracking dirtiness manually against a
-  // normalized baseline snapshot sidesteps that rather than fighting it.
-  const baselineRef = useRef(snapshot(existingDraft ?? DRAFT_DEFAULT_VALUES))
-  const isFormDirty = () => snapshot(methods.getValues()) !== baselineRef.current
+
+
+  // --- loading the existing record (edit mode only) ---
+  const [consignmentId, setConsignmentId] = useState<number | null>(id ? Number(id) : null)
+  const [loadingRecord, setLoadingRecord] = useState(!!id)
+  const [notFound, setNotFound] = useState(false)
+  const [loadErrorMsg, setLoadErrorMsg] = useState<string | null>(null)
+  const [isLocked, setIsLocked] = useState(false)
+  // The status/record_state this consignment was loaded with. The backend
+  // only actually closes a consignment when BOTH current_status is
+  // "Arrived at Works" AND record_state is "submitted" (helpers.is_closed) —
+  // so the confirmation needs both, not status alone. A new consignment has
+  // neither, so it never matches on its own.
+  const [originalStatus, setOriginalStatus] = useState('')
+  const [recordState, setRecordState] = useState('draft')
+
+  const loadRecord = useCallback(() => {
+    if (!id) return
+    setLoadingRecord(true)
+    setNotFound(false)
+    setLoadErrorMsg(null)
+    getConsignment(id)
+      .then((c) => {
+        setConsignmentId(c.id)
+        setIsLocked(c.is_locked)
+        setOriginalStatus(c.current_status ?? '')
+        setRecordState(c.record_state ?? 'draft')
+        methods.reset(apiToDraft(c))
+      })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) setNotFound(true)
+        else setLoadErrorMsg(err instanceof Error ? err.message : 'Could not load this consignment')
+      })
+      .finally(() => setLoadingRecord(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  useEffect(() => { loadRecord() }, [loadRecord])
+
+  // --- saving ---
+  const [saving, setSaving] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null)
+  const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
+  const [justSaved, setJustSaved] = useState(false)
 
   // Same actions the list/detail views gate on — a viewer or a user without
   // create rights should never land on this route, hyperlink or not.
-  const allowed = isNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
+  const allowed = isNew
+    ? can(user, 'enter', 'imports')
+    : can(user, 'editAny', 'imports') || can(user, 'editOwnDraft', 'imports')
   if (!allowed) return <Navigate to="/imports-status" replace />
 
-  function commitNavigate(clamped: number) {
-    if (isNew) {
-      if (clamped === 1) return
-      // Placeholder: a real step-1 submit would return the new consignment's
-      // id from the API. Steps 2-7 always live under /:id/edit/:step, so we
-      // stand in a client-generated id until that API exists.
-      navigate(`/imports-status/${crypto.randomUUID()}/edit/${clamped}`)
-    } else {
-      navigate(`/imports-status/${id}/edit/${clamped}`)
+  function buildPayload(): ConsignmentPayload {
+    const wizardMasters: WizardMasters = {
+      branches: masters.branches, suppliers: masters.suppliers,
+      ports: masters.ports, agents: masters.agents,
+    }
+    return draftToPayload(methods.getValues() as ConsignmentDraft, wizardMasters)
+  }
+
+  // --- confirm-before-closing (a real dialog, not window.confirm — same
+  // pattern as change history's RevertConfirmDialog) ---
+  // The action Back/Save and Next/Save/Submit were about to run, stashed
+  // while the dialog is open; null/undefined means the dialog is closed.
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+
+  /** "Arrived at Works" locks the consignment for everyone but an admin —
+   *  worth a confirmation, since it's not obviously reversible from the
+   *  wizard itself. A plain draft save never closes it, no matter what
+   *  status is set or whether the record is already submitted — only
+   *  submitting does (the backend's update route no longer locks at all;
+   *  see update_consignment.py). So this only fires for the Submit action. */
+  function willClose(isSubmitAction: boolean): boolean {
+    if (!isSubmitAction) return false
+    const closing = methods.getValues('status') === CLOSED_STATUS
+    const alreadyClosed = originalStatus === CLOSED_STATUS && recordState === 'submitted'
+    return closing && !alreadyClosed
+  }
+
+  /** Every button that can trigger a save routes its action through here, so
+   *  one that would close the consignment pauses for confirmation first. */
+  function runWithCloseConfirm(action: () => void, opts: { isSubmit?: boolean } = {}) {
+    if (willClose(!!opts.isSubmit)) setPendingAction(() => action)
+    else action()
+  }
+
+  function confirmClose() {
+    const action = pendingAction
+    setPendingAction(null)
+    action?.()
+  }
+
+  /** POST the first time, PUT after. Returns the saved record's id + whether
+   *  that save just closed it, or null (with saveErrorMsg set) on failure.
+   *  Confirmation (if needed) has already happened by the time this runs —
+   *  see runWithCloseConfirm. */
+  async function saveDraft(): Promise<{ id: number; isLocked: boolean } | null> {
+    setSaving(true)
+    setSaveErrorMsg(null)
+    setSubmitErrors(null)
+    try {
+      const payload = buildPayload()
+      const response = consignmentId
+        ? await updateConsignmentApi(consignmentId, payload)
+        : await createConsignment(payload)
+
+      if (!consignmentId) setConsignmentId(response.id)
+      setOriginalStatus(response.current_status ?? '')
+      setRecordState(response.record_state ?? 'draft')
+      setIsLocked(response.is_locked)
+
+      // Newly-created lines had no id when the request went out; attach the
+      // ones the backend just assigned so the NEXT save updates them instead
+      // of inserting duplicates. getValues() returns the resolver's INPUT
+      // type (fields with a zod .default() are optional there); safe to cast
+      // to the OUTPUT type — those defaults are always populated once the
+      // form has mounted with defaultValues (same reasoning the original
+      // wizard's handleSaveAndMove documented).
+      const currentItems = (methods.getValues('items') ?? []) as ConsignmentItem[]
+      const currentPayments = (methods.getValues('payments') ?? []) as Payment[]
+      methods.setValue('items', syncItemBackendIds(currentItems, response.items), { shouldDirty: false })
+      methods.setValue('payments', syncPaymentBackendIds(currentPayments, response.payments), { shouldDirty: false })
+
+      return { id: response.id, isLocked: response.is_locked }
+    } catch (err) {
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Could not save')
+      return null
+    } finally {
+      setSaving(false)
     }
   }
 
-  async function goToStep(nextStep: number) {
+  /** The single navigation primitive — Back, "Save and Next", and clicking a
+   *  step in the stepper all go through this, so a save always happens before
+   *  the page moves (there's no other way to lose an edit any more). */
+  function goToStep(nextStep: number) {
     const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
     if (clamped === stepDef.step) return
+    runWithCloseConfirm(() => void doGoToStep(clamped))
+  }
 
-    if (isNew) {
-      // New-record mode is unchanged: gated behind the current step's fields
-      // validating, since there's no existing record to jump around in yet.
-      const valid = await methods.trigger(stepDef.fields)
-      if (!valid) return
-      commitNavigate(clamped)
-      return
+  async function doGoToStep(clamped: number) {
+    const saved = await saveDraft()
+    if (saved === null) return // error is already shown; stay put
+    // A save that just closed the consignment leaves nothing further to
+    // edit — land on the read-only detail view instead of an edit route
+    // that would immediately bounce with "this consignment is closed".
+    navigate(saved.isLocked ? `/imports-status/${saved.id}` : `/imports-status/${saved.id}/edit/${clamped}`)
+  }
+
+  /** The last step's "Save" — same save, but nowhere further to go. */
+  function handleSaveOnly() {
+    runWithCloseConfirm(() => void doHandleSaveOnly())
+  }
+
+  async function doHandleSaveOnly() {
+    const saved = await saveDraft()
+    if (saved === null) return
+    setJustSaved(true)
+    setTimeout(() => setJustSaved(false), 2000)
+    if (isNew) navigate(`/imports-status/${saved.id}/edit/${stepDef.step}`, { replace: true })
+  }
+
+  /** Save, then run the strict server-side rule set. Available on every step
+   *  (not just the last), but disabled until the draft actually satisfies
+   *  those rules — see canSubmit below. A 422 comes back with the full list
+   *  of what's missing (submission_errors, mirrored from the same rules the
+   *  draft schema's superRefine describes) — shown inline rather than
+   *  re-deriving the same list client-side and risking the two drifting
+   *  apart. */
+  function handleSubmit() {
+    runWithCloseConfirm(() => void doHandleSubmit(), { isSubmit: true })
+  }
+
+  async function doHandleSubmit() {
+    const saved = await saveDraft()
+    if (saved === null) return
+
+    setSubmitting(true)
+    setSubmitErrors(null)
+    try {
+      await submitConsignmentApi(saved.id)
+      navigate(`/imports-status/${saved.id}`)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const parsed = parseSubmitErrors(err.detail)
+        if (parsed) {
+          setSubmitErrors(parsed.errors)
+          return
+        }
+      }
+      setSaveErrorMsg(err instanceof Error ? err.message : 'Could not submit')
+    } finally {
+      setSubmitting(false)
     }
-
-    // Edit mode: free navigation, guarded only by unsaved changes.
-    if (isFormDirty()) {
-      setPendingStep(clamped)
-      return
-    }
-    commitNavigate(clamped)
   }
 
-  async function handleSaveAndMove() {
-    if (id && pendingStep !== null) {
-      const values = methods.getValues()
-      // getValues() returns the resolver's INPUT type (fields with a zod
-      // `.default()` are optional there); updateConsignment wants the
-      // OUTPUT type. Safe to cast — those defaulted fields are always
-      // populated once the form has mounted with defaultValues.
-
-      updateConsignment(id, values as ConsignmentDraft)
-      // React Router keeps this component mounted across step navigation
-      // (only the `:step` param changes, not the route element) — so the
-      // dirty baseline has to move forward explicitly, or the guard fires
-      // again for no reason on the very next navigation.
-      baselineRef.current = snapshot(values)
-      commitNavigate(pendingStep)
-    }
-    setPendingStep(null)
+  if (loadingRecord) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Loading consignment…" module="importsStatus" />
+      </div>
+    )
   }
 
-  function handleDiscardAndMove() {
-    // Same reasoning as above in reverse: since the wizard doesn't remount
-    // between steps, discarding has to actually revert the fields this step
-    // owns — otherwise they'd still show the discarded edit if the user
-    // navigates back to this step later in the session. Re-deriving the
-    // baseline from the now-reverted values (rather than assuming it goes
-    // back to matching baselineRef exactly) correctly leaves any other
-    // steps' still-unsaved edits, if any, still flagged dirty.
-    stepDef.fields.forEach((f) => methods.resetField(f))
-    baselineRef.current = snapshot(methods.getValues())
-    if (pendingStep !== null) commitNavigate(pendingStep)
-    setPendingStep(null)
+  if (notFound) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Consignment not found" module="importsStatus" />
+        <button onClick={() => navigate('/imports-status')} className="text-sm text-accent hover:underline">
+          ← Back to consignments
+        </button>
+      </div>
+    )
   }
 
-  function handleCancelNavigate() {
-    setPendingStep(null)
+  if (loadErrorMsg) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Consignment" module="importsStatus" />
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{loadErrorMsg}</span>
+          <button type="button" onClick={loadRecord} className="underline">Retry</button>
+        </div>
+      </div>
+    )
   }
 
-  function onSubmit(data: ConsignmentDraft) {
-    // Placeholder: wire up to the real API once it exists.
-    console.log('submit consignment draft', data)
-    navigate(id ? `/imports-status/${id}` : '/imports-status')
+  if (isLocked) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title={`Consignment ${id}`} subtitle="Closed" module="importsStatus" />
+        <div className="rounded-lg border border-line bg-canvas-alt px-3.5 py-2.5 text-sm text-muted">
+          This consignment is closed. An admin must reopen it before it can be edited.
+        </div>
+        <button onClick={() => navigate(`/imports-status/${id}`)} className="text-sm text-accent hover:underline">
+          ← View consignment
+        </button>
+      </div>
+    )
   }
+
+  const busy = saving || submitting
+  const isLastStep = stepDef.step === WIZARD_STEPS.length
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={isNew ? 'New Consignment' : `Edit Consignment ${id}`}
+        title={isNew ? 'New Consignment' : `Edit Consignment ${consignmentId ?? id}`}
         subtitle={`Step ${stepDef.step} of ${WIZARD_STEPS.length} — ${stepDef.label}`}
         module="importsStatus"
       />
 
-      <WizardStepper steps={WIZARD_STEPS} current={stepDef.step} onStepClick={isNew ? undefined : goToStep} />
+      <WizardStepper
+        steps={WIZARD_STEPS}
+        current={stepDef.step}
+        onStepClick={busy ? undefined : goToStep}
+      />
 
       <Card>
         <CardContent className="p-6">
           <FormProvider {...methods}>
-            <form onSubmit={methods.handleSubmit(onSubmit)}>
+            <form onSubmit={(e) => e.preventDefault()}>
               <StepComponent />
 
-              <div className="mt-6 flex justify-between">
+              {saveErrorMsg && (
+                <p className="mt-4 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{saveErrorMsg}</p>
+              )}
+              {submitErrors && submitErrors.length > 0 && (
+                <div className="mt-4 rounded-lg bg-risk-bg px-3 py-2.5 text-sm text-risk">
+                  <p className="font-medium">This consignment can’t be submitted yet:</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    {submitErrors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-between">
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={stepDef.step === 1}
+                  disabled={stepDef.step === 1 || busy}
                   onClick={() => goToStep(stepDef.step - 1)}
                 >
                   Back
                 </Button>
-                {stepDef.step < WIZARD_STEPS.length ? (
-                  <Button type="button" onClick={() => goToStep(stepDef.step + 1)}>
-                    Next
+
+                <div className="flex items-center gap-3">
+                  {justSaved && <span className="text-xs text-[var(--color-healthy)]">Saved</span>}
+                  {isLastStep ? (
+                    <Button type="button" variant="outline" disabled={busy} onClick={handleSaveOnly}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" disabled={busy} onClick={() => goToStep(stepDef.step + 1)}>
+                      {saving ? 'Saving…' : 'Save and Next'}
+                    </Button>
+                  )}
+                  <Button type="button" disabled={busy} onClick={handleSubmit}>
+                    {submitting ? 'Submitting…' : 'Submit'}
                   </Button>
-                ) : (
-                  <Button type="submit">Submit</Button>
-                )}
+                </div>
               </div>
             </form>
           </FormProvider>
         </CardContent>
       </Card>
 
-      <UnsavedChangesDialog
-        open={pendingStep !== null}
-        onSaveAndMove={handleSaveAndMove}
-        onDiscardAndMove={handleDiscardAndMove}
-        onCancel={handleCancelNavigate}
+      <ConfirmDialog
+        open={!!pendingAction}
+        title="Close this consignment?"
+        description={
+          <>
+            Setting status to <span className="font-medium text-ink">"Arrived at Works"</span> closes this
+            consignment. Once closed, no one but an admin can edit it (an admin can reopen it later).
+          </>
+        }
+        confirmLabel="Yes, save and close it"
+        confirmingLabel="Saving…"
+        confirming={busy}
+        onConfirm={confirmClose}
+        onCancel={() => setPendingAction(null)}
       />
     </div>
   )

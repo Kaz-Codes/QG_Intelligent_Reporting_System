@@ -1,6 +1,6 @@
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useTheme } from '@/theme/ThemeContext'
-import { statusColors, BRAND } from '@/theme/tokens'
+import { statusColors, CHART_SEQUENCE } from '@/theme/tokens'
 import { tooltipStyle } from './utils'
 
 interface Props {
@@ -8,17 +8,31 @@ interface Props {
   values: number[]
   height?: number
   /** For narrow containers (e.g. a spotlight card's side panel) — smaller
-   * ring, no legend, no outside labels (rely on the tooltip instead) so
-   * nothing clips against the container edge. */
+   * ring and no outside labels/legend, which would clip against the container
+   * edge. The percentage still shows, drawn INSIDE each slice. */
   compact?: boolean
 }
 
-/** Donut for composition (status split, stock health) — status-like
- * labels get their semantic risk/watch/healthy color where recognized. */
+/**
+ * Donut for composition (status split, stock health, stock movement).
+ *
+ * Colour: status-like labels ("Delayed", "Out of Stock") keep their semantic
+ * risk/watch/healthy colour so they read the same as everywhere else. Anything
+ * NOT a recognised status falls back to the categorical palette BY INDEX —
+ * previously they all collapsed onto one brand colour, which made a
+ * three-slice donut (fast / slow / dead) a single flat ring you could not read
+ * without the tooltip.
+ *
+ * Percentage: always shown. Outside the ring with the label when there is
+ * room, inside the slice when compact. A composition chart whose whole job is
+ * showing proportion should not make you hover to learn the proportion.
+ */
 export function Donut({ labels, values, height = 300, compact = false }: Props) {
   const { colors } = useTheme()
   const data = labels.map((label, i) => ({ label, value: values[i] }))
   const total = values.reduce((a, b) => a + b, 0)
+
+  const pct = (value: number) => (total ? Math.round((value / total) * 100) : 0)
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -30,16 +44,28 @@ export function Donut({ labels, values, height = 300, compact = false }: Props) 
           innerRadius={compact ? '55%' : '50%'}
           outerRadius={compact ? '90%' : '72%'}
           paddingAngle={2}
-          label={compact ? undefined : ({ name, value }) => `${name} ${total ? Math.round((Number(value) / total) * 100) : 0}%`}
+          // Compact draws the bare percentage inside the slice, so nothing can
+          // clip; the full chart puts the name beside it outside the ring.
+          label={
+            compact
+              ? ({ value }) => (pct(Number(value)) >= 6 ? `${pct(Number(value))}%` : '')
+              : ({ name, value }) => `${name} ${pct(Number(value))}%`
+          }
           labelLine={!compact}
           isAnimationActive={false}
         >
           {data.map((d, i) => {
             const [fg] = statusColors(d.label, colors)
-            return <Cell key={i} fill={fg === colors.info ? BRAND : fg} stroke={colors.surface} strokeWidth={2} />
+            // statusColors returns `info` for anything it does not recognise;
+            // those get a distinct categorical hue instead of all sharing one.
+            const fill = fg === colors.info ? CHART_SEQUENCE[i % CHART_SEQUENCE.length] : fg
+            return <Cell key={i} fill={fill} stroke={colors.surface} strokeWidth={2} />
           })}
         </Pie>
-        <Tooltip {...tooltipStyle} formatter={(value) => Number(value).toLocaleString()} />
+        <Tooltip
+          {...tooltipStyle}
+          formatter={(value) => `${Number(value).toLocaleString()} (${pct(Number(value))}%)`}
+        />
         {!compact && <Legend wrapperStyle={{ fontSize: 12, color: colors.muted }} />}
       </PieChart>
     </ResponsiveContainer>

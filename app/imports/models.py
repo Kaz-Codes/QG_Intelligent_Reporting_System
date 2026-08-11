@@ -257,6 +257,28 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
+    #--- cross-module hand-off ---
+    # When this consignment was handed to Logistics (shipping + clearing) and
+    # to Trucking (inland movement). NULL means "not sent". They are the
+    # record of INTENT: nothing reaches either module until someone sends it,
+    # which is why the trucking inbox keys off sent_to_trucking_at rather than
+    # inferring from the incoterm (FOB only decides whether Send is OFFERED).
+    #
+    # Timestamps rather than booleans because "when was this handed over" is
+    # the question people actually ask, and a bool answers strictly less.
+    # Set only by the dedicated send routes — never by a normal update.
+    sent_to_logistics_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True
+    )
+
+    sent_to_trucking_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True
+    )
+
     # Draft vs submitted. A draft saves with anything (or nothing) filled;
     # submitting runs the full rule set (see helpers.submission_errors) and,
     # only if it passes, flips this to "submitted". Submitting never locks the
@@ -426,6 +448,20 @@ class ConsignmentItem(Base, TimestampMixin):
         String(50),
         nullable=True
     )
+
+    # THE LINE'S OWN ARRIVAL DATE.
+    #
+    # A consignment groups every sheet row sharing a payment reference, and
+    # those rows do NOT all arrive together: 19 of 175 consignments carry lines
+    # with different ETAs, one of them spanning seven distinct dates. The header
+    # keeps a single `eta_works` (the first line's), so dating a whole
+    # consignment by it attributes money to a month it did not land in —
+    # ref 65704 reported Rs 10.64m in August when Rs 1.66m of it arrived on
+    # 27 July.
+    #
+    # Nullable: the sheet does not always give a per-line date, and a line
+    # without one falls back to its consignment's.
+    eta_works: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
 
     batch_no: Mapped[Optional[str]] = mapped_column(
         String(100),

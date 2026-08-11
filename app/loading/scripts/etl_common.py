@@ -165,6 +165,29 @@ def bulk_insert(conn, table, columns, rows, conflict_clause=""):
     print(f"  {table}: inserted {len(rows)} rows")
 
 
+def bump_sequence(conn, table):
+    """Move a table's id sequence past the highest id already in it.
+
+    The loaders insert with EXPLICIT ids through raw psycopg2, which does not
+    advance the sequence. Left alone, the first row the APP inserts reuses id 1
+    and dies on the primary key — surfacing to the user as a bare
+    "Internal server error" with nothing to point at.
+
+    This is exactly what happened to suppliers, branches and clearing_agents:
+    every other loaded table bumped its sequence, those three did not, and so
+    creating a supplier/branch/agent from the Masters screen 500'd while ports
+    and works worked fine.
+
+    Call it after the last insert into `table`. Safe to call on an empty table
+    (COALESCE keeps setval's argument valid) and safe to call twice.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT setval('{table}_id_seq', (SELECT COALESCE(MAX(id), 1) FROM {table}))"
+        )
+    conn.commit()
+
+
 def read_sheet(sheet_name, file_path) -> pd.DataFrame:
     """Read one worksheet with the header on the first row."""
     df = pd.read_excel(file_path, sheet_name=sheet_name)

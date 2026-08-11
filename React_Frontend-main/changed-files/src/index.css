@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+/* Dark mode toggled via a `.dark` class on <html> (see ThemeContext), not
+   only prefers-color-scheme, so the user's toggle wins over OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Enterprise palette — navy ink + steel-blue interactive + brass accent.
+     Replaces the previous indigo/violet SaaS-template scheme, which reads as
+     a product demo rather than a system of record. */
+  --navy: #0F172A;
+  --navy-deep: #020617;
+  --gold-soft: #F0E4BE;
+  --brand-soft: #E0F2FE;
+  --ink: #0F172A;
+  --muted: #475569;
+  --line: #DDE3EC;
+  --surface: #FFFFFF;
+  --canvas: #F8FAFC;
+  --canvas-alt: #EEF2F7;
+  --sidebar-bg: #FFFFFF;
+  --risk: #B42318;
+  --risk-bg: #FEF0EF;
+  --watch: #A15C07;
+  --watch-bg: #FEF6E7;
+  --healthy: #17694A;
+  --healthy-bg: #E7F5EF;
+  --info: #0F5C8F;
+  --info-bg: #EAF3FA;
+
+  --brand: #0369A1;
+  --brand-deep: #075985;
+  --brand-light: #7DC4EA;
+  --violet: #1E3A5F;
+  --gold: #A16207;
+}
+
+.dark {
+  --navy: #E6EDF6;
+  --navy-deep: #020617;
+  --gold-soft: #7A5B14;
+  --brand-soft: #0C2A3D;
+  --ink: #E6EDF6;
+  --muted: #94A3B8;
+  --line: #253044;
+  --surface: #131A26;
+  --canvas: #080B12;
+  --canvas-alt: #1A2130;
+  --sidebar-bg: #0D131E;
+  --risk: #F58F82;
+  --risk-bg: #2A1B1A;
+  --watch: #E3AC55;
+  --watch-bg: #2A2317;
+  --healthy: #4FD394;
+  --healthy-bg: #14281F;
+  --info: #7FC0EA;
+  --info-bg: #10222F;
+
+  --brand: #38BDF8;
+  --brand-deep: #0EA5E9;
+  --brand-light: #7DD3FC;
+  --violet: #94B4D4;
+  --gold: #D3A83A;
+}
+
+@theme inline {
+  --color-navy: var(--navy);
+  --color-navy-deep: var(--navy-deep);
+  --color-gold-soft: var(--gold-soft);
+  --color-brand-soft: var(--brand-soft);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-surface: var(--surface);
+  --color-canvas: var(--canvas);
+  --color-canvas-alt: var(--canvas-alt);
+  --color-sidebar: var(--sidebar-bg);
+  --color-risk: var(--risk);
+  --color-risk-bg: var(--risk-bg);
+  --color-watch: var(--watch);
+  --color-watch-bg: var(--watch-bg);
+  --color-healthy: var(--healthy);
+  --color-healthy-bg: var(--healthy-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-brand: var(--brand);
+  --color-brand-deep: var(--brand-deep);
+  --color-brand-light: var(--brand-light);
+  --color-violet: var(--violet);
+  --color-gold: var(--gold);
+
+  /* One family across display and body so the app renders identically on
+     Windows, macOS and Linux — the old 'Segoe UI' body stack did not. */
+  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-canvas text-ink;
+    font-family: var(--font-sans);
+  }
+}
+
+/* Faint grid texture — the login page's split hero panel. Line color
+   pulls from --line so it's already tuned for both light/dark contrast. */
+.bg-grid-texture {
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}
+
+/* Same grid, fixed white lines — for use on top of a colored/gradient
+   surface (e.g. HeroStat) where the theme-aware --line variable would be
+   invisible or the wrong contrast. */
+.bg-grid-texture-on-brand {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at top right, black, transparent 70%);
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Swapped-content transitions — applied with a `key` prop so React remounts
+   the node and replays the animation (tab switches, filtered chart data,
+   sub-page swaps). Kept short/subtle: this should read as "responsive," not
+   as a slideshow. */
+.animate-fade-in-up { animation: fade-in-up 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+.animate-fade-in { animation: fade-in 180ms ease-out; }
+.animate-scale-in { animation: scale-in 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* ---------------------------------------------------------------------------
+   Thematic background motion (ThemedBackground / login) — soft moving
+   aurora blobs behind a single static per-module watermark icon.
+   Deliberately slow and low-opacity: ambient texture, never something that
+   pulls focus from the content on top. All CSS-only (Recharts JS animation
+   is unreliable here; CSS keyframes are the safe path).
+--------------------------------------------------------------------------- */
+@keyframes aurora {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(6%, -4%) scale(1.12); }
+  66%  { transform: translate(-5%, 5%) scale(0.94); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes route-dash {
+  to { stroke-dashoffset: -32; }
+}
+@keyframes float-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-10px); }
+}
+
+.animate-aurora { animation: aurora var(--aurora-dur, 24s) ease-in-out infinite; }
+.animate-route-dash { animation: route-dash 1.4s linear infinite; }
+.animate-float-bob { animation: float-bob 4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up, .animate-fade-in, .animate-scale-in,
+  .animate-aurora, .animate-route-dash, .animate-float-bob {
+    animation: none;
+  }
+}

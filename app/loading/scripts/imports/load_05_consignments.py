@@ -24,10 +24,14 @@ falls to load time.
 
 from pathlib import Path
 
+from app.enums import Status
 from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_status, clean_int,
     clean_number, clean_date, bulk_insert,
 )
+from app.loading.scripts.imports.item_codes import assign_item_codes
+
+STATUS_VALUES = [s.value for s in Status]
 
 CURRENT_DIR = Path(__file__).resolve().parents[2]
 DIRECTORY = CURRENT_DIR / "data" / "imports"
@@ -39,26 +43,84 @@ FILES = list_excel_files(DIRECTORY)
 
 DEFAULT_STATUS = "TT/LC in Process"
 
+# The sheet's status vocabulary mapped onto the canonical Status enum.
+#
+# Only spellings of a stage that already exists are mapped here; a sheet value
+# that is a REAL stage with no equivalent (Under De-Stuffing, Order Cancelled)
+# was added to the enum instead, so it passes through untouched. Anything still
+# unrecognised falls back to DEFAULT_STATUS rather than being stored verbatim —
+# that is what previously let values the rest of the system cannot handle into
+# the status column.
+STATUS_MAP = {
+    "lc in process": "TT/LC in Process",
+    "t/t in process": "TT/LC in Process",
+    "tt in process": "TT/LC in Process",
+    # Costing precedes the instrument being opened, so it sits at the same
+    # pre-shipment stage rather than getting one of its own.
+    "costing in process": "TT/LC in Process",
+}
+
 CURRENCY_MAP = {"$": "USD", "US$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY", "RMB": "CNY"}
+
+
+def map_status(value):
+    """Sheet status -> a canonical Status value, never anything else."""
+    s = clean_status(value)
+    if not s:
+        return DEFAULT_STATUS
+
+    key = s.strip().lower()
+    if key in STATUS_MAP:
+        return STATUS_MAP[key]
+
+    # Already canonical (case-insensitively)? Keep the canonical spelling.
+    for canonical in STATUS_VALUES:
+        if key == canonical.lower():
+            return canonical
+
+    return DEFAULT_STATUS
 
 CONSIGNMENT_COLUMNS = [
     "id", "branch_id", "supplier_id", "clearing_agent_id",
     "loading_port_id", "delivery_port_id",
     "origin", "currency", "consignment_type", "mode_of_shipment",
     "cargo_readiness_date", "etd", "eta", "eta_works",
-    "payment_instrument", "instrument_number", "opening_or_retirement_date",
+    "payment_instrument", "instrument_number", "opening_or_retirement_date", "required_date",
     "exchange_rate", "current_status", "remarks",
     "gd_number", "gd_filing_date", "free_days_allowed", "gate_out_date",
     "created_by_id",
     # is_deleted is NOT NULL with only a Python-side default, so a raw insert
     # has to set it — the ORM default never runs here.
     "is_deleted",
+    # Both have server_defaults, so a raw insert *could* omit them — but a
+    # historical row that already reached a terminal status is finished work,
+    # not a draft someone abandoned mid-entry. See terminal_flags below.
+    "record_state", "is_locked",
 ]
+
+# The two terminal statuses. A sheet row that already carries one of these
+# describes a consignment that is over, so it loads as submitted rather than
+# as a draft — otherwise the Closed stage fills up with rows the Submitted
+# column calls drafts, which is a contradiction.
+#
+# Only ARRIVED_AT_WORKS also locks (helpers.is_closed = that status AND
+# submitted). ORDER_CANCELLED is terminal but was never "closed" in the lock
+# sense — there is nothing for an admin to reopen — so it loads unlocked, the
+# same as a cancelled order entered through the app.
+TERMINAL_STATUSES = {
+    Status.ARRIVED_AT_WORKS.value: ("submitted", True),
+    Status.ORDER_CANCELLED.value: ("submitted", False),
+}
+
+
+def terminal_flags(status):
+    """(record_state, is_locked) for a loaded consignment at `status`."""
+    return TERMINAL_STATUSES.get(status, ("draft", False))
 
 ITEM_COLUMNS = [
     "consignment_id", "item_id", "item_code", "item_name", "specification",
-    "hs_code", "quantity", "unit_price", "unit_of_measurement", "batch_no",
-    "job_number", "mo_number",
+    "hs_code", "quantity", "unit_price", "unit_of_measurement", "eta_works",
+    "batch_no", "job_number", "mo_number",
     "is_deleted",
 ]
 
@@ -80,13 +142,24 @@ def map_currency(value):
 
 
 def map_consignment_type(value):
+    """The sheet's EFS column -> EFS / Regular import / unknown.
+
+    Matched on the first letter rather than an exact list, because the column is
+    hand-typed and carries things like "NO HS Code Issue" — plainly not EFS, but
+    an exact match drops it into the unknown bucket alongside the genuinely
+    blank rows. None still means "the sheet does not say", which is a real and
+    large bucket here (well over half the lines) and is reported as its own
+    category rather than being folded into Regular.
+    """
     s = clean_text(value)
     if not s:
         return None
-    s = s.lower()
-    if s in ("yes", "y", "efs"):
+
+    s = s.strip().lower()
+
+    if s.startswith("y") or s == "efs":
         return "EFS"
-    if s in ("no", "n", "regular", "regular import"):
+    if s.startswith("n"):
         return "Regular import"
     return None
 
@@ -149,10 +222,11 @@ def _group(df):
 # building the rows for all three tables
 #--------------------------------------
 
-def build_rows(df, port_map, item_map, created_by_id):
+def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
     consignment_rows = []
     item_rows = []
     eta_rows = []
+    dropped_branches = 0
 
     for index, rows in enumerate(_group(df)):
         consignment_id = index + 1
@@ -163,9 +237,17 @@ def build_rows(df, port_map, item_map, created_by_id):
         chain = _eta_chain(rows)
         eta = chain[-1] if chain else None
 
+        status = map_status(_first(rows, "Current Status", clean_status))
+        record_state, is_locked = terminal_flags(status)
+
+        branch_id = _first(rows, "works_id", clean_int)
+        if branch_ids is not None and branch_id is not None and branch_id not in branch_ids:
+            branch_id = None
+            dropped_branches += 1
+
         consignment_rows.append((
             consignment_id,
-            _first(rows, "works_id", clean_int),          # branch_id
+            branch_id,
             _first(rows, "supplier_id", clean_int),
             _first(rows, "clearing_agent_id", clean_int),
             port_map.get(pol) if pol else None,            # loading_port_id
@@ -181,8 +263,9 @@ def build_rows(df, port_map, item_map, created_by_id):
             _first(rows, "Payment Mode", clean_text),      # payment_instrument
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Ret Dt.", clean_date),
+            _first(rows, "Req. Dt.", clean_date),
             _first(rows, "Exchange Rate", clean_number),
-            _first(rows, "Current Status", clean_status) or DEFAULT_STATUS,
+            status,
             _first(rows, "Remarks", clean_text),
             _first(rows, "GD No", clean_text),
             _first(rows, "GD File", clean_date),
@@ -190,6 +273,8 @@ def build_rows(df, port_map, item_map, created_by_id):
             _first(rows, "Gate-out", clean_date),
             created_by_id,
             False,                                         # is_deleted
+            record_state,
+            is_locked,
         ))
 
         # one item line per row in the group
@@ -207,6 +292,10 @@ def build_rows(df, port_map, item_map, created_by_id):
                 clean_number(r.get("Qty.")),
                 clean_number(r.get("Unit Price")),
                 clean_text(r.get("UOM")),
+                # The LINE's own ETA, not the header's. The rows grouped under
+                # one payment reference do not all arrive together — see the
+                # column's comment on ConsignmentItem for what that cost.
+                clean_date(r.get("ETA Works")),
                 clean_text(r.get("Batch No")),
                 clean_text(r.get("Job No")),
                 clean_text(r.get("MO No")),
@@ -223,6 +312,10 @@ def build_rows(df, port_map, item_map, created_by_id):
                 None,
                 None,
             ))
+
+    if dropped_branches:
+        print(f"  {dropped_branches} consignment(s) referenced a works that is not a "
+              f"branch (QH) — kept, with no branch")
 
     return consignment_rows, item_rows, eta_rows
 
@@ -246,6 +339,21 @@ def _port_map(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT name, id FROM ports")
         return {name: pid for name, pid in cur.fetchall()}
+
+
+def _branch_ids(conn):
+    """The branch ids that actually exist, so a consignment cannot point at one
+    that does not.
+
+    The sheet's works_id 5 is "QH", which is not a branch of the business and is
+    no longer loaded (see load_02_branches). Writing branch_id = 5 anyway would
+    fail the foreign key and take the whole insert down with it, so those
+    consignments are kept with NO branch instead — the import is real, its
+    branch attribution is not.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM branches")
+        return {row[0] for row in cur.fetchall()}
 
 
 def _item_map(conn):
@@ -275,12 +383,30 @@ def _bump_sequence(conn, table):
 def load_consignments(conn):
     df = read_and_concat("Sheet1", FILES)
 
+    # _group() keeps only rows that carry an Item Code, so the gaps have to be
+    # filled BEFORE grouping — otherwise every uncoded row is dropped and the
+    # sheet loses most of its lines (294 of 451 in the current workbook).
+    code_report = assign_item_codes(df, conn)
+    print(
+        "  item codes: "
+        f"{code_report['already_coded']} already coded, "
+        f"{code_report['from_sheet_sibling']} from a sibling row, "
+        f"{code_report['from_master']} from the items master, "
+        f"{code_report['generated']} generated "
+        f"({code_report['generated_items']} distinct items)"
+    )
+    if code_report["no_item_name"]:
+        print(f"  ! {code_report['no_item_name']} row(s) have no item name and are skipped")
+    if code_report["conflicting_pairs"]:
+        print(f"  ! {code_report['conflicting_pairs']} item(s) carry more than one code in the sheet")
+
     port_map = _port_map(conn)
     item_map = _item_map(conn)
+    branch_ids = _branch_ids(conn)
     created_by_id = _admin_id(conn)
 
     consignment_rows, item_rows, eta_rows = build_rows(
-        df, port_map, item_map, created_by_id
+        df, port_map, item_map, created_by_id, branch_ids
     )
 
     bulk_insert(conn, "consignments", CONSIGNMENT_COLUMNS, consignment_rows)
@@ -292,7 +418,11 @@ def load_consignments(conn):
     _bump_sequence(conn, "eta_revision_history")
 
     linked = sum(1 for r in item_rows if r[1] is not None)
-    print(f"Consignments : inserted {len(consignment_rows)} rows")
+    # record_state / is_locked are the last two columns of CONSIGNMENT_COLUMNS.
+    submitted = sum(1 for r in consignment_rows if r[-2] == "submitted")
+    locked = sum(1 for r in consignment_rows if r[-1])
+    print(f"Consignments : inserted {len(consignment_rows)} rows "
+          f"({submitted} at a terminal status loaded as submitted, {locked} of them closed)")
     print(f"Consignment items : inserted {len(item_rows)} rows "
           f"({linked} linked to an item, {len(item_rows) - linked} without a master match)")
     print(f"ETA revisions : inserted {len(eta_rows)} rows")

@@ -1,11 +1,15 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, case, desc
 from sqlalchemy.orm import joinedload
 
-from app.loading.schemas.stores_schemas import Stock, Issuance, StoreRequisition
+from app.loading.schemas.stores_schemas import (
+    Stock, Issuance, StoreRequisition, PurchasesData,
+)
 from app.masters.models import Item
+from app.dashboard.period import coverage
+from app.dashboard.references import clamp, paginate
 
 # How far back the consumption rate for the runway is measured.
 CONSUMPTION_WINDOW_DAYS = 90
@@ -90,6 +94,189 @@ def fetch_filtered_stock(db, branch, item, item_category, search):
         )
 
     return db.execute(query).scalars().all()
+
+
+#-------------------------------------
+# PURCHASE vs ISSUANCE BY CATEGORY  (KPI document)
+#
+# What each item category cost to buy against what it cost to consume, over the
+# same period. The two sides come from different tables (`purchases_data` and
+# `issuance`), so they are summed separately in SQL and joined on the category
+# afterwards — issuance alone is ~49k rows and must never be materialized here.
+#
+# Only the branch and category filters are applied: `item` and `search` filter
+# the STOCK screen, and carrying them across would silently narrow one side of
+# the comparison without narrowing the other.
+#
+# A category present on one side and absent on the other still appears, with
+# zero on the missing side — that gap is exactly what the chart is for.
+#-------------------------------------
+
+UNCATEGORISED = "Uncategorised"
+
+
+def _category_totals(db, model, amount_column, date_column, item_category,
+                     date_from, date_to):
+    label = func.coalesce(Item.category, UNCATEGORISED)
+
+    query = (
+        select(label, func.coalesce(func.sum(amount_column), 0))
+        .select_from(model)
+        .outerjoin(Item, Item.item_code == model.item_code)
+        .group_by(label)
+    )
+
+    if item_category:
+        query = query.where(Item.category.in_(item_category))
+
+    if date_from is not None and date_to is not None:
+        query = query.where(date_column.between(date_from, date_to))
+
+    return dict(db.execute(query).all())
+
+
+def _comparable_window(db):
+    # The two tables do not cover the same period: purchases_data currently
+    # holds ONE MONTH (2026-06-09 to 2026-07-09) while issuance holds a full
+    # YEAR. Summing each in full would compare a month of buying against a year
+    # of consuming and report every category as consuming ~10x what it buys —
+    # a conclusion about the data's coverage, dressed up as one about the
+    # business.
+    #
+    # So both sides are clipped to the window they SHARE. The window is derived
+    # rather than hard-coded, so it stays correct when more purchase history is
+    # loaded (at which point it simply widens).
+    p_min, p_max = db.execute(
+        select(func.min(PurchasesData.purchase), func.max(PurchasesData.purchase))
+    ).one()
+    i_min, i_max = db.execute(
+        select(func.min(Issuance.from_date), func.max(Issuance.from_date))
+    ).one()
+
+    if None in (p_min, p_max, i_min, i_max):
+        return None, None
+
+    start, end = max(p_min, i_min), min(p_max, i_max)
+    if start > end:
+        # No overlap at all — better to compare nothing than to compare
+        # disjoint periods.
+        return None, None
+
+    return start, end
+
+
+def purchase_vs_issuance_by_category(db, item_category=None, limit=10):
+    # NOTE: deliberately NOT filtered by branch. `purchases_data.branch` holds
+    # short codes ('QEN', 'QCL', 'QB2', …) while `issuance.branch` and
+    # `stock.branch` hold full company names ('Qadri Engineering (Pvt) Ltd.').
+    # The two vocabularies share no values, so a branch filter would match the
+    # issuance side and silently match NOTHING on the purchases side — giving a
+    # chart that reports a category as pure consumption with zero spend, which
+    # is false. Company-wide and honest beats filtered and wrong.
+    #
+    # Mapping the codes to names is not something to guess at (QE / QEN / QE-II
+    # are not self-evident); it belongs in the loader, agreed with the business.
+    date_from, date_to = _comparable_window(db)
+
+    purchased = _category_totals(
+        db, PurchasesData, PurchasesData.amount, PurchasesData.purchase,
+        item_category, date_from, date_to,
+    )
+    issued = _category_totals(
+        db, Issuance, Issuance.total_price, Issuance.from_date,
+        item_category, date_from, date_to,
+    )
+
+    rows = []
+    for category in set(purchased) | set(issued):
+        rows.append({
+            "category": category,
+            "purchased": purchased.get(category, Decimal("0")),
+            "issued": issued.get(category, Decimal("0")),
+        })
+
+    # Ranked by the larger of the two sides, so a category that is huge on
+    # consumption but barely purchased (or the reverse) still makes the chart —
+    # ranking on purchases alone would hide exactly the imbalances worth seeing.
+    rows.sort(key=lambda r: max(r["purchased"], r["issued"]), reverse=True)
+
+    for row in rows:
+        row["net"] = row["purchased"] - row["issued"]
+
+    return {
+        "categories_total": len(rows),
+        "rows": rows[:limit],
+        # The shared window both sides were clipped to. Returned so the chart
+        # can be labelled with the period it actually describes — without it a
+        # reader assumes the figures cover everything loaded, which they do not.
+        "period": {"from": date_from, "to": date_to},
+        # Tells the front end to label this chart "all branches" even when a
+        # branch filter is active on the rest of the screen, so the mismatch is
+        # visible rather than mistaken for filtered data.
+        "branch_filtered": False,
+    }
+
+
+#-------------------------------------
+# ISSUANCE PER (ITEM, BRANCH) OVER THE TWO REPORTING WINDOWS
+#
+# One query returns both the 12-month and the 3-month issued VALUE per stock
+# line. Everything on the screen that talks about movement is derived from these
+# two numbers — the issuance KPIs, the fast/slow/dead split, dead stock and the
+# stock-days runway — so those figures are guaranteed to agree with each other.
+#
+# The windows END AT THE LATEST ISSUANCE IN THE DATA, not at today. The data is
+# historical; anchoring to today would measure a window that is partly empty and
+# report healthy items as dead. The resolved window is returned so the screen
+# can state the dates it actually used.
+#-------------------------------------
+
+MONTHS_12_DAYS = 365
+MONTHS_3_DAYS = 92
+
+
+def issuance_windows(db):
+    """({(item_code, branch): {"v12", "v3"}}, window_info)"""
+    latest = db.execute(select(func.max(Issuance.from_date))).scalar()
+
+    if latest is None:
+        return {}, {"latest": None, "from_12m": None, "from_3m": None,
+                    "days_12m": MONTHS_12_DAYS, "days_3m": MONTHS_3_DAYS}
+
+    from_12m = latest - timedelta(days=MONTHS_12_DAYS)
+    from_3m = latest - timedelta(days=MONTHS_3_DAYS)
+
+    rows = db.execute(
+        select(
+            Issuance.item_code,
+            Issuance.branch,
+            func.coalesce(
+                func.sum(func.coalesce(Issuance.total_price, 0)), 0
+            ).label("v12"),
+            func.coalesce(
+                func.sum(
+                    case((Issuance.from_date >= from_3m,
+                          func.coalesce(Issuance.total_price, 0)), else_=0)
+                ), 0
+            ).label("v3"),
+        )
+        .where(Issuance.item_code.isnot(None))
+        .where(Issuance.from_date.between(from_12m, latest))
+        .group_by(Issuance.item_code, Issuance.branch)
+    ).all()
+
+    by_key = {
+        (item_code, branch): {"v12": v12 or Decimal("0"), "v3": v3 or Decimal("0")}
+        for item_code, branch, v12, v3 in rows
+    }
+
+    return by_key, {
+        "latest": latest,
+        "from_12m": from_12m,
+        "from_3m": from_3m,
+        "days_12m": MONTHS_12_DAYS,
+        "days_3m": MONTHS_3_DAYS,
+    }
 
 
 #-------------------------------------
@@ -191,3 +378,115 @@ def reorder_level_map(db):
         result[key] = (avg_daily * lead * buffer_multiplier).quantize(Decimal("0.001"))
 
     return result
+
+
+#-----------------------------------------------------
+# ISSUANCE IN A PERIOD
+#
+# Replaces the fixed 12-month and 3-month issuance tiles. Those two answered one
+# question at two arbitrary window lengths, neither of which anybody chose, and
+# a reader could not ask "what went out THIS month" — the thing a storekeeper
+# actually wants — without doing arithmetic in their head.
+#
+# One tile with its own date filter, defaulting to the current month like every
+# other window on the system. Items are counted BY ITEM CODE, folded across the
+# branches that issued them, exactly as the rest of this screen counts items and
+# exactly as the Overview's Stores section does — so "633 items" is one number
+# wherever it appears.
+#
+# The 12-month figures have NOT gone away: the movement classification (fast /
+# slow / dead) and the days-of-stock runway are still built on them. They are
+# just no longer shown as tiles of their own, because the movement split says
+# the same thing with a reason attached.
+#-----------------------------------------------------
+
+def issuance_in_period(db, date_from, date_to, branch=None, category=None):
+    """{value, items, lines, quantity} for what was issued in the window."""
+    conditions = [Issuance.from_date.between(date_from, date_to)]
+    if branch:
+        conditions.append(Issuance.branch.in_(branch))
+
+    value, items, lines, quantity = db.execute(
+        select(
+            func.coalesce(func.sum(Issuance.total_price), 0),
+            func.count(func.distinct(Issuance.item_code)),
+            func.count(Issuance.id),
+            func.coalesce(func.sum(Issuance.quantity), 0),
+        ).where(*conditions)
+    ).one()
+
+    return {"value": value, "items": items, "lines": lines, "quantity": quantity}
+
+
+def issuance_item_references(db, date_from, date_to, branch=None,
+                             page=None, page_size=None):
+    """The items issued in the window, biggest value first, with quantities.
+
+    Grouped onto the item code rather than listed line by line: the tile counts
+    items, so its drill-down has to as well or the two disagree. Quantity
+    travels with the value because an issuance is a physical movement — how much
+    left the store is half of what was asked.
+    """
+    conditions = [Issuance.from_date.between(date_from, date_to),
+                  Issuance.item_code.isnot(None)]
+    if branch:
+        conditions.append(Issuance.branch.in_(branch))
+
+    total = db.execute(
+        select(func.count(func.distinct(Issuance.item_code))).where(*conditions)
+    ).scalar()
+
+    page, size = clamp(page, page_size)
+    rows = db.execute(
+        select(
+            Issuance.item_code,
+            func.min(Issuance.item_name),
+            func.coalesce(func.sum(Issuance.quantity), 0),
+            func.count(Issuance.id),
+            func.coalesce(func.sum(Issuance.total_price), 0).label("value"),
+        )
+        .where(*conditions)
+        .group_by(Issuance.item_code)
+        .order_by(desc("value"), Issuance.item_code)
+        .offset((page - 1) * size).limit(size)
+    ).all()
+
+    def money(amount):
+        v = float(amount or 0)
+        if abs(v) >= 1_000_000_000:
+            return f"Rs {v / 1_000_000_000:.2f}B"
+        if abs(v) >= 1_000_000:
+            return f"Rs {v / 1_000_000:.1f}M"
+        if abs(v) >= 1_000:
+            return f"Rs {v / 1_000:.0f}K"
+        return f"Rs {v:,.0f}"
+
+    def qty(value):
+        number = float(value or 0)
+        return f"{number:,.0f}" if number.is_integer() else f"{number:,.3f}".rstrip("0").rstrip(".")
+
+    items = [
+        {
+            "id": code,
+            "reference": code,
+            "detail": name,
+            "meta": f"{qty(quantity)} issued over {lines} line{'' if lines == 1 else 's'}",
+            "badge": money(value),
+        }
+        for code, name, quantity, lines, value in rows
+    ]
+
+    return paginate(items, page, size, total=total or 0)
+
+
+def issuance_coverage(db, date_from, date_to):
+    earliest, latest, total = db.execute(
+        select(func.min(Issuance.from_date), func.max(Issuance.from_date),
+               func.count(Issuance.id))
+    ).one()
+    in_period = db.execute(
+        select(func.count(Issuance.id))
+        .where(Issuance.from_date.between(date_from, date_to))
+    ).scalar_one()
+
+    return coverage(earliest, latest, in_period, total, "issuance date")

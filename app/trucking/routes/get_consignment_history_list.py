@@ -12,7 +12,9 @@ from typing import Optional
 def get_consignment_history_list(
     request : Request,
     consignment_id : int,
-    include_reverted : Optional[bool] = False
+    include_reverted : Optional[bool] = False,
+    page : int = 1,
+    page_size : int = 20
     ):
 
     db = SessionLocal()
@@ -34,9 +36,18 @@ def get_consignment_history_list(
                 detail="Trucking job not found"
             )
 
-        consignment_history = fetch_all_consignment_history(db, include_reverted, consignment.id)
+        # Keep the page and size sane, same bounds as the jobs list.
+        if page < 1:
+            page = 1
 
-        # Serializeing all change histories
+        if page_size < 1 or page_size > 100:
+            page_size = 20
+
+        consignment_history, total = fetch_all_consignment_history(
+            db, include_reverted, consignment.id, page, page_size
+        )
+
+        # Serializeing this page of change histories
         serialized_consignment_history = [
             serialize_consignment_history(history) for history in consignment_history
         ]
@@ -44,7 +55,13 @@ def get_consignment_history_list(
         return {
             "status_code":200,
             "detail":"Trucking job history fetched",
-            "data":serialized_consignment_history
+            "data":serialized_consignment_history,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size if total else 0
+            }
         }
 
     except HTTPException:

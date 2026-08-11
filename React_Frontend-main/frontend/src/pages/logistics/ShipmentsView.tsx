@@ -51,7 +51,7 @@ export function ShipmentsView() {
         <MultiSelectFilter label="Country" options={data?.countries ?? []} value={country} onChange={setCountry} />
       </FilterBar>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} />
+      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
       {data && kpis && (
         <>

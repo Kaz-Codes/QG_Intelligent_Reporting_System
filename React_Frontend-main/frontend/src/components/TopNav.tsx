@@ -6,7 +6,7 @@ import { useTheme } from '@/theme/ThemeContext'
 import { pagesForUser } from '@/lib/roleAccess'
 import { PAGE_DEFS, type PageDef } from '@/lib/pages'
 import { cn } from '@/lib/utils'
-import logo from '@/assets/qadri_logo_transparent.png'
+import logo from '@/assets/qadri_logo_transparent.webp'
 
 /** Top-bar analogue of the old sidebar's collapsible group — Operations'
  * two independent route trees don't fit as a single link, so they show as

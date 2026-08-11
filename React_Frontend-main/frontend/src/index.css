@@ -5,53 +5,67 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --navy: #1F2D4E;
-  --navy-deep: #16223C;
-  --gold-soft: #E7D9A8;
-  --brand-soft: #EEECFC;
-  --ink: #1F2D4E;
-  --muted: #5A6478;
-  --line: #E6E8EF;
+  /* Qadri Group brand palette — logo gold + warm graphite ink.
+     Derived from qadri_logo.png (gold #F8D807 -> red #DC2827 ring on black).
+     Logo gold measures 1.42:1 on white, so it can never carry text or act as
+     a filled button: --gold holds the literal logo hue for accent bars and
+     focus rings, while --brand is the accessible end of the same ramp
+     (4.92:1 on white). Replaces the previous steel-blue enterprise scheme. */
+  --navy: #1A1614;
+  --navy-deep: #0A0806;
+  --gold-soft: #FDF4D3;
+  --brand-soft: #FBF0D9;
+  --ink: #1A1614;
+  --muted: #6B6156;
+  --line: #E6DFD2;
   --surface: #FFFFFF;
-  --canvas: #F7F8FB;
-  --canvas-alt: #F0F1F5;
+  --canvas: #FAF8F5;
+  --canvas-alt: #F3EFE8;
   --sidebar-bg: #FFFFFF;
-  --risk: #C0392B;
-  --risk-bg: #FDECEC;
-  --watch: #B9770E;
-  --watch-bg: #FEF6E7;
-  --healthy: #1E8449;
-  --healthy-bg: #E9F7EF;
-  --info: #2E5AAC;
-  --info-bg: #EAF2FB;
+  --risk: #B42318;
+  --risk-bg: #FBEBE9;
+  --watch: #C2410C;
+  --watch-bg: #FDF2E3;
+  --healthy: #17694A;
+  --healthy-bg: #E7F5EF;
+  --info: #1F5F8B;
+  --info-bg: #E9F1F7;
 
-  --brand: #4F46E5;
-  --brand-deep: #3730A3;
-  --brand-light: #818CF8;
-  --violet: #8B5CF6;
-  --gold: #BF9000;
+  --brand: #A16207;
+  --brand-deep: #7C4A05;
+  --brand-light: #E0A50B;
+  --violet: #3B4654;
+  --gold: #F8D807;
 }
 
 .dark {
-  --navy: #F1F3F9;
-  --navy-deep: #0B0E14;
-  --gold-soft: #8A6D2A;
-  --brand-soft: #241F3D;
-  --ink: #F1F3F9;
-  --muted: #9AA3B8;
-  --line: #2A2E3D;
-  --surface: #171A24;
-  --canvas: #0E1017;
-  --canvas-alt: #1D202C;
-  --sidebar-bg: #12141C;
-  --risk: #F27E71;
-  --risk-bg: #2A1D1D;
-  --watch: #E8AE4D;
-  --watch-bg: #2A2418;
-  --healthy: #4ADE80;
-  --healthy-bg: #1A2A21;
-  --info: #7CA6F0;
-  --info-bg: #1B2436;
+  --navy: #F2EDE4;
+  --navy-deep: #0A0806;
+  --gold-soft: #4A3708;
+  --brand-soft: #2E2208;
+  --ink: #F2EDE4;
+  --muted: #A79A88;
+  --line: #332C21;
+  --surface: #17140F;
+  --canvas: #0A0908;
+  --canvas-alt: #211C15;
+  --sidebar-bg: #100E0A;
+  --risk: #F58F82;
+  --risk-bg: #2A1A18;
+  --watch: #F0A868;
+  --watch-bg: #2A2015;
+  --healthy: #4FD394;
+  --healthy-bg: #14281F;
+  --info: #7FC0EA;
+  --info-bg: #10222F;
+
+  /* On dark surfaces the literal logo gold finally clears contrast
+     (12.2:1 on --canvas), so --brand can be the real brand hue here. */
+  --brand: #F5C518;
+  --brand-deep: #E0A50B;
+  --brand-light: #FBD75B;
+  --violet: #8FA0B4;
+  --gold: #F8D807;
 }
 
 @theme inline {
@@ -80,8 +94,10 @@
   --color-violet: var(--violet);
   --color-gold: var(--gold);
 
-  --font-display: 'Manrope', 'Segoe UI', system-ui, sans-serif;
-  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  /* One family across display and body so the app renders identically on
+     Windows, macOS and Linux — the old 'Segoe UI' body stack did not. */
+  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
 }
 
 @layer base {

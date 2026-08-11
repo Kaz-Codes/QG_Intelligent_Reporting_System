@@ -74,6 +74,8 @@ def export_consignments(
     gate_out_from : Optional[date] = None,
     gate_out_to : Optional[date] = None,
     q : Optional[str] = None,
+    # Same contract as the list, so the export is exactly the filtered set.
+    job_kind : Optional[str] = "standard",
     ):
 
     db = SessionLocal()
@@ -85,6 +87,7 @@ def export_consignments(
         consignments, _ = fetch_consignments_page(
             db, include_deleted, status, order_type, customer,
             gate_out_from, gate_out_to, q, page=1, page_size=1_000_000,
+            job_kind=None if job_kind == "all" else job_kind,
         )
 
         rows = [_row(c) for c in consignments]

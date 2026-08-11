@@ -80,7 +80,7 @@ export function TransportView() {
         </div>
       </Disclosure>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} />
+      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
       {data && kpis && (
         <>

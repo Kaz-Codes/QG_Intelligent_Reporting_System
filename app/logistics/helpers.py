@@ -10,7 +10,8 @@ from app.logistics.models import (
     LogisticsChangeHistory, LogisticsStatusHistory,
 )
 from app.logistics.serializers import serialize_many
-from app.enums import LogisticsStatus
+from app.masters.models import Customer
+from app.enums import LogisticsStatus, JobKind
 
 
 #----------------------------------
@@ -73,6 +74,36 @@ def create_consignment_object(consignment_data, user):
     return consignment
 
 
+#-------------------------------------
+# KEEP customer_id IN STEP WITH customer_name
+#
+# The wizard sends a customer NAME (it always has). The master link is derived
+# from it here, on create and on update, so the two can never disagree — there
+# is no second place a customer can be set.
+#
+# An unmatched name leaves customer_id NULL rather than creating a master row:
+# silently minting a customer from a typo is how a master list becomes the very
+# free-text mess it exists to prevent. The Masters screen (or inline create) is
+# where a genuinely new customer is added, and the next save picks it up.
+#
+# Matching is case-insensitive and trims, because "Cherat Cement " and
+# "CHERAT CEMENT" are one customer to everybody except a string comparison.
+#-------------------------------------
+
+def resolve_customer_id(consignment, db):
+    name = (consignment.customer_name or "").strip()
+
+    if not name:
+        consignment.customer_id = None
+        return
+
+    match = db.execute(
+        select(Customer).where(func.lower(Customer.name) == name.lower())
+    ).scalars().first()
+
+    consignment.customer_id = match.id if match else None
+
+
 def create_child_objects(child_schemas, model):
     # child_schemas is a list of pydantic line schemas; each becomes one row.
     objects = []
@@ -111,13 +142,20 @@ def fetch_consignment(db, consignment_id):
 
 def fetch_consignments_page(db, include_deleted, status, order_type,
                             customer, gate_out_from, gate_out_to, q,
-                            page, page_size):
+                            page, page_size, job_kind=JobKind.STANDARD.value):
     # status, order_type and customer are lists (the list screen filters are
     # multi-select), so each is an IN filter, not an equals.
     conditions = []
 
     if not include_deleted:
         conditions.append(LogisticsConsignment.is_deleted == False)
+
+    # Defaults to 'standard' rather than "everything": this list backs the
+    # ORDERS screen, and a rework service job showing up among the export/local
+    # orders is exactly the mix-up job_kind exists to prevent. The Service Jobs
+    # tab asks for 'rework' explicitly; pass None to get both.
+    if job_kind:
+        conditions.append(LogisticsConsignment.job_kind == job_kind)
 
     if status:
         conditions.append(LogisticsConsignment.current_status.in_(status))
@@ -174,23 +212,36 @@ def fetch_consignments_page(db, include_deleted, status, order_type,
 # FETCH ALL CHANGE HISTORY OF AN ORDER
 #----------------------------------------
 
-def fetch_all_consignment_history(db, include_reverted, consignment_id):
-    query = select(LogisticsChangeHistory)
+#----------------------------------------
+# ONE PAGE OF CHANGE HISTORY, NEWEST FIRST
+#
+# Mirrors fetch_consignments_page's shape: filter conditions built once and
+# reused for both the count and the page itself, so they can never disagree.
+# id.desc() is a secondary key after created_at so paging stays deterministic
+# even when two rows share a timestamp.
+#----------------------------------------
+
+def fetch_all_consignment_history(db, include_reverted, consignment_id, page=1, page_size=20):
+    conditions = [LogisticsChangeHistory.consignment_id == consignment_id]
 
     if not include_reverted:
-        query = query.where(
-            LogisticsChangeHistory.is_reverted == False
-        )
+        conditions.append(LogisticsChangeHistory.is_reverted == False)
 
-    query = query.where(
-        LogisticsChangeHistory.consignment_id == consignment_id
-    ).options(
+    total = db.execute(
+        select(func.count(LogisticsChangeHistory.id)).where(*conditions)
+    ).scalar()
+
+    query = select(LogisticsChangeHistory).where(*conditions).options(
         joinedload(LogisticsChangeHistory.consignment),
         joinedload(LogisticsChangeHistory.changed_by),
         joinedload(LogisticsChangeHistory.reverted_by)
-    ).order_by(LogisticsChangeHistory.created_at.desc())
+    ).order_by(
+        LogisticsChangeHistory.created_at.desc(), LogisticsChangeHistory.id.desc()
+    ).limit(page_size).offset((page - 1) * page_size)
 
-    return db.execute(query).scalars().all()
+    rows = db.execute(query).scalars().all()
+
+    return rows, total
 
 
 #----------------------------------------
@@ -235,10 +286,14 @@ def fetch_consignment_history(db, consignment_id, history_id):
 def updated_fields(consignment, update_consignment_data, db):
     updation_dict = {}  #--> which field to update and its old and new value
 
-    # exclude_none because a field left out means the user did not touch it
+    # exclude_none because a field left out means the user did not touch it.
+    # job_kind is excluded as well — it is set once at creation and immutable:
+    # letting a PUT change it would silently move a record between the Orders
+    # and Service Jobs tabs. The wizard sends the whole draft on every save,
+    # so it WILL be in the payload; ignoring it here is what makes it stick.
     fields_to_update = update_consignment_data.model_dump(
         exclude_none=True,
-        exclude={"consignment_id", "items", "packages", "containers"}
+        exclude={"consignment_id", "items", "packages", "containers", "job_kind"}
     )
 
     columns = {c.key for c in LogisticsConsignment.__mapper__.column_attrs}
@@ -495,12 +550,21 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 # THE CLOSED LOCK
 #
 # An order closes when its status reaches "Delivered" — the terminal stage for
-# both export and local orders. While closed it cannot be edited by anyone
-# until an admin reopens it.
+# both export and local orders — AND it has been submitted. A draft sitting at
+# "Delivered" is not closed yet: it has not passed the full rule set in
+# submission_errors, so there is nothing to protect.
+#
+# Matches imports (see app/imports/helpers.is_closed). As there, only the
+# /submit route acts on this — a plain draft save never closes an order, no
+# matter what status it sets. While closed it cannot be edited by anyone until
+# an admin reopens it.
 #---------------------------------------
 
 def is_closed(consignment):
-    return consignment.current_status == LogisticsStatus.DELIVERED.value
+    return (
+        consignment.current_status == LogisticsStatus.DELIVERED.value
+        and consignment.record_state == "submitted"
+    )
 
 
 #---------------------------------------

@@ -1,7 +1,30 @@
 export function money(value: number): string {
+  if (value >= 1_000_000_000) return `PKR ${(value / 1_000_000_000).toFixed(2)}B`
   if (value >= 1_000_000) return `PKR ${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `PKR ${Math.round(value / 1_000)}K`
   return `PKR ${Math.round(value).toLocaleString()}`
+}
+
+/** A rupee figure abbreviated to whichever unit fits — B, M, K or plain.
+ *
+ *  Bar charts plot COUNTS, so money only ever appears in a tooltip, where the
+ *  full 4,660,038,184 is unreadable and the exact rupee is not the point.
+ *  Negative values keep their sign (net figures can go either way).
+ */
+export function compactMoney(value: number): string {
+  const sign = value < 0 ? '-' : ''
+  const v = Math.abs(value)
+  if (v >= 1_000_000_000) return `${sign}PKR ${(v / 1_000_000_000).toFixed(2)}B`
+  if (v >= 1_000_000) return `${sign}PKR ${(v / 1_000_000).toFixed(1)}M`
+  if (v >= 1_000) return `${sign}PKR ${(v / 1_000).toFixed(0)}K`
+  return `${sign}PKR ${Math.round(v).toLocaleString()}`
+}
+
+/** A plain count with thousands separators — what a bar's axis shows. */
+export function count(value: number, noun?: string): string {
+  const n = value.toLocaleString()
+  if (!noun) return n
+  return `${n} ${noun}${value === 1 ? '' : 's'}`
 }
 
 export function shortDate(input: string | Date): string {

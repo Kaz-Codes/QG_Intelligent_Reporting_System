@@ -1,4 +1,6 @@
 import { Check, TriangleAlert, Circle, type LucideIcon } from 'lucide-react'
+import { MetricInfo, type MetricHelp } from './MetricInfo'
+import { ReferenceList, type ReferenceSet, type ReferencePager } from './ReferenceList'
 import { Card, CardContent } from './ui/card'
 import { useTheme } from '@/theme/ThemeContext'
 import { BRAND } from '@/theme/tokens'
@@ -16,6 +18,18 @@ export interface KpiData {
   /** What this metric IS (a clock for cycle time, a ship for imports, ...).
    * Falls back to a generic status glyph (check/alert) when omitted. */
   icon?: LucideIcon
+  /** What the figure means, how it is worked out, and how it differs from the
+   * similar one beside it. Shown on hover/focus of the info icon. Every KPI on
+   * a dashboard should carry one — an unexplained number is a number nobody can
+   * act on. */
+  help?: MetricHelp
+  /** The records behind the number. Renders a small list button that opens a
+   *  scrollable panel of their reference numbers — a count nobody can trace
+   *  back to actual records cannot be acted on. */
+  refs?: ReferenceSet
+  /** Fetches further pages of `refs`. Without it the panel shows page one
+   *  and says so, rather than looking like the whole list. */
+  fetchRefs?: ReferencePager
 }
 
 function Sparkline({ values, color, gradientId }: { values: number[]; color: string; gradientId: string }) {
@@ -48,7 +62,7 @@ function Sparkline({ values, color, gradientId }: { values: number[]; color: str
   )
 }
 
-export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon }: KpiData) {
+export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub, spark, icon, help, refs, fetchRefs }: KpiData) {
   const { colors } = useTheme()
   const hasDirection = direction === 'up' || direction === 'down'
   const isGood = hasDirection && direction === goodWhen
@@ -57,16 +71,9 @@ export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub
   const gradientId = `spark-${label.replace(/\s+/g, '-').toLowerCase()}`
 
   return (
+    // Ornament trimmed: the 96px ghost glyph was removed. Identity now comes
+    // from the status border + icon chip alone, which is enough at this size.
     <Card className="relative overflow-hidden border-l-4" style={{ borderLeftColor: ink }}>
-      {/* Large faint glyph — gives each card a distinct identity at a glance,
-          purely decorative (aria-hidden), clipped so it never crowds text. */}
-      <Icon
-        aria-hidden
-        size={96}
-        strokeWidth={1.25}
-        className="pointer-events-none absolute -bottom-4 -right-4 opacity-[0.06]"
-        style={{ color: ink }}
-      />
       <CardContent className="relative p-5">
         <div className="flex items-center justify-between">
           <div
@@ -75,14 +82,18 @@ export function KpiCard({ label, value, delta, direction, goodWhen = 'down', sub
           >
             <Icon size={16} fill={Icon === Circle ? ink : 'none'} />
           </div>
-          {hasDirection && delta && (
-            <span
-              className="rounded-full px-2 py-0.5 text-xs font-semibold"
-              style={{ backgroundColor: colors.canvasAlt, color: ink }}
-            >
-              {direction === 'up' ? '▲' : '▼'} {delta}
-            </span>
-          )}
+          <span className="flex items-center gap-1.5">
+            {hasDirection && delta && (
+              <span
+                className="rounded-full px-2 py-0.5 text-xs font-semibold"
+                style={{ backgroundColor: colors.canvasAlt, color: ink }}
+              >
+                {direction === 'up' ? '▲' : '▼'} {delta}
+              </span>
+            )}
+            {refs && <ReferenceList label={label} refs={refs} fetchPage={fetchRefs} />}
+            {help && <MetricInfo help={help} label={label} />}
+          </span>
         </div>
         <p className="font-display mt-3 text-3xl font-extrabold text-navy">{value}</p>
         <p className="text-sm font-medium text-muted">{label}</p>

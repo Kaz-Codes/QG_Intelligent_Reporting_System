@@ -14,6 +14,7 @@ from app.trucking.routes import create_consignment
 # not captured by the GET /{consignment_id} route.
 from app.trucking.routes import export_consignments
 from app.trucking.routes import open_requests
+from app.trucking.routes import filter_options
 from app.trucking.routes import get_consignment
 from app.trucking.routes import get_consignments_list
 from app.trucking.routes import update_consignment

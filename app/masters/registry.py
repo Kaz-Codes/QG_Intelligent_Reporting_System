@@ -1,27 +1,34 @@
 from app.masters.models import (
-    Branch, ClearingAgent, Item, Port, Supplier, Works,
+    Branch, ClearingAgent, Customer, Item, Port, Supplier,
 )
 from app.masters.schemas import (
     BranchCreateSchema, BranchUpdateSchema, ClearingAgentCreateSchema,
-    ClearingAgentUpdateSchema, ItemCreateSchema, ItemUpdateSchema,
-    PortCreateSchema, PortUpdateSchema, SupplierCreateSchema,
-    SupplierUpdateSchema, WorksCreateSchema, WorksUpdateSchema,
+    ClearingAgentUpdateSchema, CustomerCreateSchema, CustomerUpdateSchema,
+    ItemCreateSchema, ItemUpdateSchema, PortCreateSchema, PortUpdateSchema,
+    SupplierCreateSchema, SupplierUpdateSchema,
 )
 
 #-----------------------------------------------------
-# THE SIX MASTER LISTS, DESCRIBED ONCE
+# THE MASTER LISTS, DESCRIBED ONCE
 #
 # Every master has the same shape of screen and the same
-# handful of operations, so instead of six near identical
-# route files there is one description of each master here
-# and one set of routes that read from it. The url key is
-# the same word the masters screen uses for its tabs, so
-# /masters/supplier lines up with the Suppliers tab.
+# handful of operations, so instead of one near identical
+# route file per list there is one description of each
+# master here and one set of routes that read from it. The
+# url key is the same word the masters screen uses for its
+# tabs, so /masters/supplier lines up with the Suppliers tab.
 #
 # inline    can this master be created in the middle of
-#           data entry. Branch and Works cannot.
+#           data entry. Branch cannot.
 # has_hs    does this master carry a list of H.S. codes.
 #           Only Item does.
+#
+# WORKS IS NOT HERE, deliberately. Works and Branch are the
+# same thing to the business — the imports sheet's "Works"
+# column is what fills consignments.branch_id — so a separate
+# Works master was a duplicate list that held zero rows and
+# that nothing referenced. The model and table remain (no DDL
+# is run against them); they are simply no longer exposed.
 #-----------------------------------------------------
 
 MASTERS = {
@@ -33,19 +40,23 @@ MASTERS = {
         "inline": True,
         "has_hs": False,
     },
+    "customer": {
+        "model": Customer,
+        "create_schema": CustomerCreateSchema,
+        "update_schema": CustomerUpdateSchema,
+        "noun": "customer",
+        # Inline-creatable, for the same reason Supplier is: the logistics
+        # wizard resolves a typed customer name to this master, and a name
+        # nobody has entered yet would otherwise block the order from being
+        # saved at all.
+        "inline": True,
+        "has_hs": False,
+    },
     "branch": {
         "model": Branch,
         "create_schema": BranchCreateSchema,
         "update_schema": BranchUpdateSchema,
         "noun": "branch",
-        "inline": False,
-        "has_hs": False,
-    },
-    "works": {
-        "model": Works,
-        "create_schema": WorksCreateSchema,
-        "update_schema": WorksUpdateSchema,
-        "noun": "works",
         "inline": False,
         "has_hs": False,
     },
@@ -76,7 +87,7 @@ MASTERS = {
 }
 
 # The order the tabs appear in on the masters screen.
-MASTER_ORDER = ["supplier", "branch", "works", "port", "agent", "item"]
+MASTER_ORDER = ["customer", "supplier", "port", "agent", "branch", "item"]
 
 
 #--------------------------------

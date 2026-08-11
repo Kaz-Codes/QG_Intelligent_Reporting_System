@@ -1,0 +1,387 @@
+diff -ruN a/frontend/index.html b/frontend/index.html
+--- a/frontend/index.html	2026-08-07 17:24:18.711045599 +0000
++++ b/frontend/index.html	2026-08-07 17:24:28.076427835 +0000
+@@ -6,7 +6,7 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+     <link rel="preconnect" href="https://fonts.googleapis.com" />
+     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
++    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+     <title>QG-IRS</title>
+   </head>
+   <body>
+Binary files a/frontend/src/assets/dashboard-hero-dark.png and b/frontend/src/assets/dashboard-hero-dark.png differ
+Binary files a/frontend/src/assets/dashboard-hero-dark.webp and b/frontend/src/assets/dashboard-hero-dark.webp differ
+Binary files a/frontend/src/assets/dashboard-hero-light.png and b/frontend/src/assets/dashboard-hero-light.png differ
+Binary files a/frontend/src/assets/dashboard-hero-light.webp and b/frontend/src/assets/dashboard-hero-light.webp differ
+Binary files a/frontend/src/assets/imports-hero-dark.png and b/frontend/src/assets/imports-hero-dark.png differ
+Binary files a/frontend/src/assets/imports-hero-dark.webp and b/frontend/src/assets/imports-hero-dark.webp differ
+Binary files a/frontend/src/assets/imports-hero-light.png and b/frontend/src/assets/imports-hero-light.png differ
+Binary files a/frontend/src/assets/imports-hero-light.webp and b/frontend/src/assets/imports-hero-light.webp differ
+Binary files a/frontend/src/assets/inventory-hero-dark.png and b/frontend/src/assets/inventory-hero-dark.png differ
+Binary files a/frontend/src/assets/inventory-hero-dark.webp and b/frontend/src/assets/inventory-hero-dark.webp differ
+Binary files a/frontend/src/assets/inventory-hero-light.png and b/frontend/src/assets/inventory-hero-light.png differ
+Binary files a/frontend/src/assets/inventory-hero-light.webp and b/frontend/src/assets/inventory-hero-light.webp differ
+Binary files a/frontend/src/assets/login-hero-dark.png and b/frontend/src/assets/login-hero-dark.png differ
+Binary files a/frontend/src/assets/login-hero-dark.webp and b/frontend/src/assets/login-hero-dark.webp differ
+Binary files a/frontend/src/assets/login-hero-light.png and b/frontend/src/assets/login-hero-light.png differ
+Binary files a/frontend/src/assets/login-hero-light.webp and b/frontend/src/assets/login-hero-light.webp differ
+Binary files a/frontend/src/assets/logistics-hero-dark.png and b/frontend/src/assets/logistics-hero-dark.png differ
+Binary files a/frontend/src/assets/logistics-hero-dark.webp and b/frontend/src/assets/logistics-hero-dark.webp differ
+Binary files a/frontend/src/assets/logistics-hero-light.png and b/frontend/src/assets/logistics-hero-light.png differ
+Binary files a/frontend/src/assets/logistics-hero-light.webp and b/frontend/src/assets/logistics-hero-light.webp differ
+Binary files a/frontend/src/assets/purchases-hero-dark.png and b/frontend/src/assets/purchases-hero-dark.png differ
+Binary files a/frontend/src/assets/purchases-hero-dark.webp and b/frontend/src/assets/purchases-hero-dark.webp differ
+Binary files a/frontend/src/assets/purchases-hero-light.png and b/frontend/src/assets/purchases-hero-light.png differ
+Binary files a/frontend/src/assets/purchases-hero-light.webp and b/frontend/src/assets/purchases-hero-light.webp differ
+diff -ruN a/frontend/src/components/KpiCard.tsx b/frontend/src/components/KpiCard.tsx
+--- a/frontend/src/components/KpiCard.tsx	2026-08-07 17:24:18.777541804 +0000
++++ b/frontend/src/components/KpiCard.tsx	2026-08-07 17:24:28.087338103 +0000
+@@ -57,16 +57,9 @@
+   const gradientId = `spark-${label.replace(/\s+/g, '-').toLowerCase()}`
+ 
+   return (
++    // Ornament trimmed: the 96px ghost glyph was removed. Identity now comes
++    // from the status border + icon chip alone, which is enough at this size.
+     <Card className="relative overflow-hidden border-l-4" style={{ borderLeftColor: ink }}>
+-      {/* Large faint glyph — gives each card a distinct identity at a glance,
+-          purely decorative (aria-hidden), clipped so it never crowds text. */}
+-      <Icon
+-        aria-hidden
+-        size={96}
+-        strokeWidth={1.25}
+-        className="pointer-events-none absolute -bottom-4 -right-4 opacity-[0.06]"
+-        style={{ color: ink }}
+-      />
+       <CardContent className="relative p-5">
+         <div className="flex items-center justify-between">
+           <div
+diff -ruN a/frontend/src/components/ThemedBackground.tsx b/frontend/src/components/ThemedBackground.tsx
+--- a/frontend/src/components/ThemedBackground.tsx	2026-08-07 17:24:18.778221855 +0000
++++ b/frontend/src/components/ThemedBackground.tsx	2026-08-07 17:24:28.088509754 +0000
+@@ -4,21 +4,21 @@
+   type LucideIcon,
+ } from 'lucide-react'
+ import type { PageKey } from '@/theme/tokens'
+-import { MODULE_ACCENTS } from '@/theme/tokens'
++import { MODULE_ACCENTS, BRAND, VIOLET, GOLD } from '@/theme/tokens'
+ import { useTheme } from '@/theme/ThemeContext'
+ import { cn } from '@/lib/utils'
+-import dashboardLight from '@/assets/dashboard-hero-light.png'
+-import dashboardDark from '@/assets/dashboard-hero-dark.png'
+-import logisticsLight from '@/assets/logistics-hero-light.png'
+-import logisticsDark from '@/assets/logistics-hero-dark.png'
+-import importsLight from '@/assets/imports-hero-light.png'
+-import importsDark from '@/assets/imports-hero-dark.png'
+-import purchasesLight from '@/assets/purchases-hero-light.png'
+-import purchasesDark from '@/assets/purchases-hero-dark.png'
+-import inventoryLight from '@/assets/inventory-hero-light.png'
+-import inventoryDark from '@/assets/inventory-hero-dark.png'
+-import loginLight from '@/assets/login-hero-light.png'
+-import loginDark from '@/assets/login-hero-dark.png'
++import dashboardLight from '@/assets/dashboard-hero-light.webp'
++import dashboardDark from '@/assets/dashboard-hero-dark.webp'
++import logisticsLight from '@/assets/logistics-hero-light.webp'
++import logisticsDark from '@/assets/logistics-hero-dark.webp'
++import importsLight from '@/assets/imports-hero-light.webp'
++import importsDark from '@/assets/imports-hero-dark.webp'
++import purchasesLight from '@/assets/purchases-hero-light.webp'
++import purchasesDark from '@/assets/purchases-hero-dark.webp'
++import inventoryLight from '@/assets/inventory-hero-light.webp'
++import inventoryDark from '@/assets/inventory-hero-dark.webp'
++import loginLight from '@/assets/login-hero-light.webp'
++import loginDark from '@/assets/login-hero-dark.webp'
+ 
+ /**
+  * Ambient, subject-related backdrop: a slow, soft "smoke" of blurred,
+@@ -73,7 +73,7 @@
+ // behind the content — the numbers are the thing being read, the photo is
+ // only setting the mood. Login is deliberately untouched: it has no data on
+ // top of it, so its photo can stay at full strength.
+-const DENSE_SCRIM = { light: 0.74, dark: 0.68 }
++const DENSE_SCRIM = { light: 0.80, dark: 0.76 }
+ const DULL_FILTER = 'saturate(0.65) brightness(0.94) contrast(0.97)'
+ 
+ /** Modules with a real photo instead of the icon+aurora treatment.
+@@ -81,7 +81,7 @@
+  * module the same "photo behind glass cards" look Dashboard and
+  * Logistics have. */
+ const MODULE_PHOTOS: Partial<Record<PageKey | 'login', ModulePhotoSet>> = {
+-  dashboard: { light: dashboardLight, dark: dashboardDark, scrim: { light: 0.46, dark: 0.52 }, dull: true },
++  dashboard: { light: dashboardLight, dark: dashboardDark, scrim: { light: 0.58, dark: 0.62 }, dull: true },
+   logistics: { light: logisticsLight, dark: logisticsDark, scrim: DENSE_SCRIM, dull: true },
+   imports: { light: importsLight, dark: importsDark, scrim: DENSE_SCRIM, dull: true },
+   purchases: { light: purchasesLight, dark: purchasesDark, scrim: DENSE_SCRIM, dull: true },
+@@ -128,7 +128,7 @@
+   if (photo) return <ModulePhoto photo={photo} className={className} />
+ 
+   const Icon = MODULE_ICON[module] ?? Globe
+-  const accent = module === 'login' ? '#4F46E5' : MODULE_ACCENTS[module as PageKey] ?? '#4F46E5'
++  const accent = module === 'login' ? BRAND : MODULE_ACCENTS[module as PageKey] ?? BRAND
+   const isHero = variant === 'hero'
+   const isSplit = variant === 'split'
+ 
+@@ -149,7 +149,7 @@
+         className="animate-aurora absolute rounded-full blur-3xl"
+         style={{
+           right: '-12%', bottom: '-18%', width: '50%', height: '50%',
+-          background: '#8B5CF6', opacity: isHero ? 0.24 : isSplit ? 0.08 : 0.1,
++          background: VIOLET, opacity: isHero ? 0.24 : isSplit ? 0.08 : 0.1,
+           ['--aurora-dur' as string]: '36s', animationDelay: '-10s',
+         }}
+       />
+@@ -158,7 +158,7 @@
+           className="animate-aurora absolute rounded-full blur-3xl"
+           style={{
+             left: '35%', top: '45%', width: '40%', height: '40%',
+-            background: '#BF9000', opacity: 0.14,
++            background: GOLD, opacity: 0.14,
+             ['--aurora-dur' as string]: '34s', animationDelay: '-16s',
+           }}
+         />
+diff -ruN a/frontend/src/components/ui/card.tsx b/frontend/src/components/ui/card.tsx
+--- a/frontend/src/components/ui/card.tsx	2026-08-07 17:24:18.779697712 +0000
++++ b/frontend/src/components/ui/card.tsx	2026-08-07 17:24:28.088396866 +0000
+@@ -14,7 +14,7 @@
+         // variant just for those pages. Nudged up from /28 · /42 so
+         // content stays clearly readable — still genuinely translucent,
+         // the photo shows through, just not fighting the text on top of it.
+-        'rounded-2xl border-2 border-line/80 bg-surface/40 shadow-sm dark:border-line/45 dark:bg-surface/54',
++        'rounded-2xl border border-line/90 bg-surface/78 shadow-sm backdrop-blur-[2px] dark:border-line/60 dark:bg-surface/82',
+         'shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_1px_2px_rgba(16,24,40,0.04)]',
+         'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_1px_2px_rgba(0,0,0,0.25)]',
+         'transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md',
+diff -ruN a/frontend/src/features/auth/LoginPage.tsx b/frontend/src/features/auth/LoginPage.tsx
+--- a/frontend/src/features/auth/LoginPage.tsx	2026-08-07 17:24:18.780193251 +0000
++++ b/frontend/src/features/auth/LoginPage.tsx	2026-08-07 17:24:28.088738263 +0000
+@@ -17,9 +17,9 @@
+ // module-accent palette) instead of one uniform color — reads as a set of
+ // distinct features rather than a repeated template.
+ const CAPABILITIES = [
+-  { icon: FileText, label: 'Descriptive Reporting', hint: 'What happened', color: '#4F46E5' },
++  { icon: FileText, label: 'Descriptive Reporting', hint: 'What happened', color: '#0369A1' },
+   { icon: Search, label: 'Diagnostic Reporting', hint: 'Why it happened', color: '#0EA5E9' },
+-  { icon: Target, label: 'Prescriptive Reporting', hint: 'What to do next', color: '#8B5CF6' },
++  { icon: Target, label: 'Prescriptive Reporting', hint: 'What to do next', color: '#1E3A5F' },
+   { icon: TrendingUp, label: 'Forecasting Reporting', hint: "What's coming", color: '#10B981' },
+   { icon: LayoutDashboard, label: 'Dashboards', hint: 'Live, at a glance', color: '#06B6D4' },
+   { icon: Bot, label: 'AI Chatbot', hint: 'Ask in plain language', color: '#F59E0B' },
+@@ -116,7 +116,7 @@
+               Intelligent Reporting System
+             </span>
+             <h1
+-              className="font-display bg-gradient-to-r from-brand via-violet-500 to-brand bg-clip-text text-6xl font-extrabold leading-[1.05] tracking-tight text-transparent lg:text-7xl"
++              className="font-display bg-gradient-to-r from-navy via-brand to-navy bg-clip-text text-6xl font-extrabold leading-[1.05] tracking-tight text-transparent lg:text-7xl"
+             >
+               QG-IRS
+             </h1>
+diff -ruN a/frontend/src/index.css b/frontend/src/index.css
+--- a/frontend/src/index.css	2026-08-07 17:24:18.785906674 +0000
++++ b/frontend/src/index.css	2026-08-07 17:24:28.094300658 +0000
+@@ -5,53 +5,62 @@
+ @custom-variant dark (&:where(.dark, .dark *));
+ 
+ :root {
+-  --navy: #1F2D4E;
+-  --navy-deep: #16223C;
+-  --gold-soft: #E7D9A8;
+-  --brand-soft: #EEECFC;
+-  --ink: #1F2D4E;
+-  --muted: #5A6478;
+-  --line: #E6E8EF;
++  /* Enterprise palette — navy ink + steel-blue interactive + brass accent.
++     Replaces the previous indigo/violet SaaS-template scheme, which reads as
++     a product demo rather than a system of record. */
++  --navy: #0F172A;
++  --navy-deep: #020617;
++  --gold-soft: #F0E4BE;
++  --brand-soft: #E0F2FE;
++  --ink: #0F172A;
++  --muted: #475569;
++  --line: #DDE3EC;
+   --surface: #FFFFFF;
+-  --canvas: #F7F8FB;
+-  --canvas-alt: #F0F1F5;
++  --canvas: #F8FAFC;
++  --canvas-alt: #EEF2F7;
+   --sidebar-bg: #FFFFFF;
+-  --risk: #C0392B;
+-  --risk-bg: #FDECEC;
+-  --watch: #B9770E;
++  --risk: #B42318;
++  --risk-bg: #FEF0EF;
++  --watch: #A15C07;
+   --watch-bg: #FEF6E7;
+-  --healthy: #1E8449;
+-  --healthy-bg: #E9F7EF;
+-  --info: #2E5AAC;
+-  --info-bg: #EAF2FB;
+-
+-  --brand: #4F46E5;
+-  --brand-deep: #3730A3;
+-  --brand-light: #818CF8;
+-  --violet: #8B5CF6;
+-  --gold: #BF9000;
++  --healthy: #17694A;
++  --healthy-bg: #E7F5EF;
++  --info: #0F5C8F;
++  --info-bg: #EAF3FA;
++
++  --brand: #0369A1;
++  --brand-deep: #075985;
++  --brand-light: #7DC4EA;
++  --violet: #1E3A5F;
++  --gold: #A16207;
+ }
+ 
+ .dark {
+-  --navy: #F1F3F9;
+-  --navy-deep: #0B0E14;
+-  --gold-soft: #8A6D2A;
+-  --brand-soft: #241F3D;
+-  --ink: #F1F3F9;
+-  --muted: #9AA3B8;
+-  --line: #2A2E3D;
+-  --surface: #171A24;
+-  --canvas: #0E1017;
+-  --canvas-alt: #1D202C;
+-  --sidebar-bg: #12141C;
+-  --risk: #F27E71;
+-  --risk-bg: #2A1D1D;
+-  --watch: #E8AE4D;
+-  --watch-bg: #2A2418;
+-  --healthy: #4ADE80;
+-  --healthy-bg: #1A2A21;
+-  --info: #7CA6F0;
+-  --info-bg: #1B2436;
++  --navy: #E6EDF6;
++  --navy-deep: #020617;
++  --gold-soft: #7A5B14;
++  --brand-soft: #0C2A3D;
++  --ink: #E6EDF6;
++  --muted: #94A3B8;
++  --line: #253044;
++  --surface: #131A26;
++  --canvas: #080B12;
++  --canvas-alt: #1A2130;
++  --sidebar-bg: #0D131E;
++  --risk: #F58F82;
++  --risk-bg: #2A1B1A;
++  --watch: #E3AC55;
++  --watch-bg: #2A2317;
++  --healthy: #4FD394;
++  --healthy-bg: #14281F;
++  --info: #7FC0EA;
++  --info-bg: #10222F;
++
++  --brand: #38BDF8;
++  --brand-deep: #0EA5E9;
++  --brand-light: #7DD3FC;
++  --violet: #94B4D4;
++  --gold: #D3A83A;
+ }
+ 
+ @theme inline {
+@@ -80,8 +89,10 @@
+   --color-violet: var(--violet);
+   --color-gold: var(--gold);
+ 
+-  --font-display: 'Manrope', 'Segoe UI', system-ui, sans-serif;
+-  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
++  /* One family across display and body so the app renders identically on
++     Windows, macOS and Linux — the old 'Segoe UI' body stack did not. */
++  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
++  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+ }
+ 
+ @layer base {
+diff -ruN a/frontend/src/theme/tokens.ts b/frontend/src/theme/tokens.ts
+--- a/frontend/src/theme/tokens.ts	2026-08-07 17:24:18.793039385 +0000
++++ b/frontend/src/theme/tokens.ts	2026-08-07 17:24:28.098753423 +0000
+@@ -4,13 +4,17 @@
+  * (JS values are needed for Recharts, which can't read Tailwind classes).
+  */
+ 
+-export const BRAND = '#4F46E5'
+-export const BRAND_DEEP = '#3730A3'
+-export const BRAND_LIGHT = '#818CF8'
+-export const VIOLET = '#8B5CF6'
+-export const GOLD = '#BF9000'
+-
+-export const CHART_SEQUENCE = [BRAND, GOLD, VIOLET, '#4A6FA5', '#8C6D1F', '#7089B0']
++export const BRAND = '#0369A1'
++export const BRAND_DEEP = '#075985'
++export const BRAND_LIGHT = '#7DC4EA'
++/** Retained name for call-site compatibility; now a deep navy rather than a
++ * violet — used as the third chart hue and the trend-line dot. */
++export const VIOLET = '#1E3A5F'
++export const GOLD = '#A16207'
++
++/** Steel blue -> brass -> navy -> supporting tints. Six hues that stay
++ * distinguishable in a stacked bar without turning a report into a rainbow. */
++export const CHART_SEQUENCE = [BRAND, GOLD, VIOLET, '#0E7490', '#8C6D1F', '#7C93AD']
+ 
+ export type PageKey =
+   | 'dashboard'
+@@ -26,18 +30,21 @@
+   | 'assistant'
+   | 'userManagement'
+ 
++/** Restrained industrial set — steel blue, petrol, brass, navy, slate.
++ * Every module still reads as distinct, but the palette holds together as
++ * one system instead of twelve unrelated hues. */
+ export const MODULE_ACCENTS: Record<PageKey, string> = {
+   dashboard: BRAND,
+-  purchases: '#F59E0B',
+-  inventory: '#10B981',
+-  imports: '#0EA5E9',
+-  importsStatus: '#0891B2',
+-  logisticsStatus: '#E11D48',
+-  truckingStatus: '#EA580C',
+-  dataEntry: '#0891B2',
+-  logistics: '#FB7185',
+-  reports: '#06B6D4',
+-  assistant: '#8B5CF6',
++  purchases: '#A16207',
++  inventory: '#0F766E',
++  imports: '#0E7490',
++  importsStatus: '#1E3A5F',
++  logisticsStatus: '#475569',
++  truckingStatus: '#7C4A11',
++  dataEntry: '#0E7490',
++  logistics: '#1E3A5F',
++  reports: '#475569',
++  assistant: '#0369A1',
+   userManagement: '#64748B',
+ }
+ 
+@@ -64,19 +71,19 @@
+ }
+ 
+ export const LIGHT: Palette = {
+-  navy: '#1F2D4E', navyDeep: '#16223C', goldSoft: '#E7D9A8', brandSoft: '#EEECFC',
+-  ink: '#1F2D4E', muted: '#5A6478', line: '#E6E8EF',
+-  surface: '#FFFFFF', canvas: '#F7F8FB', canvasAlt: '#F0F1F5', sidebarBg: '#FFFFFF',
+-  risk: '#C0392B', riskBg: '#FDECEC', watch: '#B9770E', watchBg: '#FEF6E7',
+-  healthy: '#1E8449', healthyBg: '#E9F7EF', info: '#2E5AAC', infoBg: '#EAF2FB',
++  navy: '#0F172A', navyDeep: '#020617', goldSoft: '#F0E4BE', brandSoft: '#E0F2FE',
++  ink: '#0F172A', muted: '#475569', line: '#DDE3EC',
++  surface: '#FFFFFF', canvas: '#F8FAFC', canvasAlt: '#EEF2F7', sidebarBg: '#FFFFFF',
++  risk: '#B42318', riskBg: '#FEF0EF', watch: '#A15C07', watchBg: '#FEF6E7',
++  healthy: '#17694A', healthyBg: '#E7F5EF', info: '#0F5C8F', infoBg: '#EAF3FA',
+ }
+ 
+ export const DARK: Palette = {
+-  navy: '#F1F3F9', navyDeep: '#0B0E14', goldSoft: '#8A6D2A', brandSoft: '#241F3D',
+-  ink: '#F1F3F9', muted: '#9AA3B8', line: '#2A2E3D',
+-  surface: '#171A24', canvas: '#0E1017', canvasAlt: '#1D202C', sidebarBg: '#12141C',
+-  risk: '#F27E71', riskBg: '#2A1D1D', watch: '#E8AE4D', watchBg: '#2A2418',
+-  healthy: '#4ADE80', healthyBg: '#1A2A21', info: '#7CA6F0', infoBg: '#1B2436',
++  navy: '#E6EDF6', navyDeep: '#020617', goldSoft: '#7A5B14', brandSoft: '#0C2A3D',
++  ink: '#E6EDF6', muted: '#94A3B8', line: '#253044',
++  surface: '#131A26', canvas: '#080B12', canvasAlt: '#1A2130', sidebarBg: '#0D131E',
++  risk: '#F58F82', riskBg: '#2A1B1A', watch: '#E3AC55', watchBg: '#2A2317',
++  healthy: '#4FD394', healthyBg: '#14281F', info: '#7FC0EA', infoBg: '#10222F',
+ }
+ 
+ type StatusRole = 'risk' | 'watch' | 'healthy'

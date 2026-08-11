@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Optional, TYPE_CHECKING
 
 from app.database import Base
+from app.enums import JobKind
 from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 # imports module references accounts.
 if TYPE_CHECKING:
     from app.accounts.models import User
+    from app.masters.models import Customer
 
 #-----------------------------------------------------
 # THE LOGISTICS TABLES
@@ -76,6 +78,29 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # 'standard' (an export/local order) or 'rework' (a customer-rework
+    # service job). Not a user-facing field — it follows from which flow was
+    # entered, is set once at creation and never changes. server_default too:
+    # the loaders insert with raw psycopg2, where a Python-side default never
+    # runs, and every loaded row is a standard order.
+    job_kind: Mapped[str] = mapped_column(
+        String(20),
+        default=JobKind.STANDARD.value,
+        server_default=JobKind.STANDARD.value,
+        nullable=False,
+        index=True
+    )
+
+    # EFS or Regular (ShipmentMode). Set by the Logistics team on the order,
+    # like department. Nullable rather than defaulted: the loaded workbooks
+    # have no such column, and defaulting every historical order to "Regular"
+    # would make an unrecorded value look recorded.
+    shipment_mode: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        index=True
+    )
+
     # Origin is a country for exports, and city + province for local orders.
     # All three are kept; the front end fills the pair that matches.
     origin_country: Mapped[Optional[str]] = mapped_column(
@@ -93,9 +118,29 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
+    # Customer is stored BOTH ways, on purpose.
+    #
+    # customer_name came first: orders carried the customer as free text long
+    # before a Customer master existed, and 1,424 loaded orders still hold only
+    # a name. customer_id is the master link, backfilled by exact name match.
+    #
+    # The name is kept rather than dropped because it is what the wizard sends
+    # and what every loaded row has; helpers.resolve_customer_id keeps the id in
+    # step with it on every save, so the pair cannot drift. A name that matches
+    # no customer leaves customer_id NULL rather than inventing a master row.
     customer_name: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True
+    )
+
+    customer_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+
+    customer: Mapped[Optional["Customer"]] = relationship(
+        back_populates="consignments"
     )
 
     # MO number is a grouping key, not a unique id. Several orders (batches)

@@ -1,11 +1,12 @@
 from fastapi import HTTPException
 from app.imports.models import Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_, not_
 from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
 
 from app.enums import Status
+from app.masters.models import Branch, Supplier
 from sqlalchemy import select
 from datetime import datetime, timezone, date
 from sqlalchemy.inspection import inspect
@@ -28,9 +29,12 @@ STAGE_GROUPS = {
         Status.UNDER_CUSTOM_CLEARANCE.value,
         Status.UNDER_EXAMINATION.value,
         Status.UNDER_ASSESSMENT.value,
+        Status.UNDER_DE_STUFFING.value,
     ],
     "Inbound": [Status.ARRIVED_AT_QFL.value, Status.ON_ROAD.value],
-    "Closed": [Status.ARRIVED_AT_WORKS.value],
+    # Both terminal states live here so the strip can reach a cancelled order.
+    # Only ARRIVED_AT_WORKS locks a record, though — see is_closed below.
+    "Closed": [Status.ARRIVED_AT_WORKS.value, Status.ORDER_CANCELLED.value],
 }
 
 CLOSED_STATUS_VALUE = Status.ARRIVED_AT_WORKS.value
@@ -160,9 +164,13 @@ def fetch_consignment(db, consignment_id):
 # item line, so it is filtered through a sub query on the items.
 #-------------------------------------
 
+ORDER_CANCELLED_VALUE = Status.ORDER_CANCELLED.value
+
+
 def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
                             branch_id, supplier_id, requisition_type,
-                            missing_only, etd_from, etd_to, q, page, page_size):
+                            missing_only, etd_from, etd_to, q, page, page_size,
+                            sent_only=False):
     # status, branch_id, supplier_id and requisition_type are lists (the list
     # screen filters are multi-select), so each is an IN filter, not an equals.
     conditions = []
@@ -170,21 +178,38 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     if not include_deleted:
         conditions.append(Consignment.is_deleted == False)
 
+    # "Closed" here means actually closed — "Arrived at works" AND submitted
+    # (is_locked; see helpers.is_closed), not merely sitting at that status.
+    # An unsubmitted "Arrived at works" record hasn't closed yet and stays
+    # out of this bucket. "Order Cancelled" has no lock concept but is the
+    # other terminal state, so it's always treated as closed here.
+    is_truly_closed = or_(
+        and_(Consignment.current_status == CLOSED_STATUS_VALUE, Consignment.is_locked == True),
+        Consignment.current_status == ORDER_CANCELLED_VALUE,
+    )
+
     # A stage is a group of statuses (the six-stage pipeline strip); it narrows
-    # to that group's statuses.
+    # to that group's statuses. The Closed stage specifically means truly
+    # closed records, not just any record sitting at a terminal status.
     if stage and stage != "all":
-        stage_statuses = STAGE_GROUPS.get(stage)
-        if stage_statuses:
-            conditions.append(Consignment.current_status.in_(stage_statuses))
+        if stage == "Closed":
+            conditions.append(is_truly_closed)
+        else:
+            stage_statuses = STAGE_GROUPS.get(stage)
+            if stage_statuses:
+                conditions.append(Consignment.current_status.in_(stage_statuses))
 
     if status:
         conditions.append(Consignment.current_status.in_(status))
 
-    # "Arrived at works" is closed and hidden by default, unless the caller
-    # asks to include it, is looking at the Closed stage, or explicitly filters
-    # to that status. Mirrors the list view's own rule.
-    if not include_closed and stage != "Closed" and not (status and CLOSED_STATUS_VALUE in status):
-        conditions.append(Consignment.current_status != CLOSED_STATUS_VALUE)
+    # Closed records are hidden by default, unless the caller asks to include
+    # them, is looking at the Closed stage, or explicitly filters to that
+    # status. Mirrors the list view's own rule.
+    if (
+        not include_closed and stage != "Closed"
+        and not (status and (CLOSED_STATUS_VALUE in status or ORDER_CANCELLED_VALUE in status))
+    ):
+        conditions.append(not_(is_truly_closed))
 
     if branch_id:
         conditions.append(Consignment.branch_id.in_(branch_id))
@@ -206,21 +231,53 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     if missing_only:
         conditions.append(Consignment.record_state == "draft")
 
+    # The "Forwarded" view: consignments handed to logistics and/or trucking.
+    # Either timestamp counts — the two hand-offs are independent.
+    if sent_only:
+        conditions.append(
+            or_(
+                Consignment.sent_to_logistics_at.is_not(None),
+                Consignment.sent_to_trucking_at.is_not(None),
+            )
+        )
+
     if etd_from:
         conditions.append(Consignment.etd >= etd_from)
 
     if etd_to:
         conditions.append(Consignment.etd <= etd_to)
 
+    # Free-text search across everything the list screen shows as identifying:
+    # the id, the instrument/GD numbers, origin, the two master names, and the
+    # item lines (name / code / reference). Matching only the header fields
+    # made searching for a supplier or an item — the two most obvious things to
+    # type — silently return nothing.
     if q:
-        pattern = "%" + q.strip() + "%"
-        conditions.append(
-            or_(
-                Consignment.origin.ilike(pattern),
-                Consignment.gd_number.ilike(pattern),
-                Consignment.instrument_number.ilike(pattern)
-            )
-        )
+        needle = q.strip()
+        pattern = "%" + needle + "%"
+
+        searches = [
+            Consignment.origin.ilike(pattern),
+            Consignment.gd_number.ilike(pattern),
+            Consignment.instrument_number.ilike(pattern),
+            Consignment.works.ilike(pattern),
+            Consignment.supplier.has(Supplier.name.ilike(pattern)),
+            Consignment.branch.has(Branch.name.ilike(pattern)),
+            Consignment.items.any(
+                (ConsignmentItem.is_deleted == False) &  # noqa: E712
+                or_(
+                    ConsignmentItem.item_name.ilike(pattern),
+                    ConsignmentItem.item_code.ilike(pattern),
+                    ConsignmentItem.reference_number.ilike(pattern),
+                )
+            ),
+        ]
+
+        # Typing a bare number is looking for that consignment id.
+        if needle.isdigit():
+            searches.append(Consignment.id == int(needle))
+
+        conditions.append(or_(*searches))
 
     # how many match, for the page count
     total = db.execute(
@@ -251,29 +308,36 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     return rows, total
 
 
-#----------------------------------------------
-# FETCH ALL CONSIGNMENTS HISTORY OF A SPECIFIC
-# CONSIGNMENT FROM DB
-#----------------------------------------------
+#----------------------------------------
+# ONE PAGE OF CHANGE HISTORY, NEWEST FIRST
+#
+# Mirrors fetch_consignments_page's shape: filter conditions built once and
+# reused for both the count and the page itself, so they can never disagree.
+# Ordered by id (not just created_at) so paging is deterministic even when two
+# rows share a timestamp — created_at alone was not a stable sort key.
+#----------------------------------------
 
-def fetch_all_consignment_history(db, include_reverted, consignment_id):
-    query = select(ConsignmentChangeHistory)
+def fetch_all_consignment_history(db, include_reverted, consignment_id, page=1, page_size=20):
+    conditions = [ConsignmentChangeHistory.consignment_id == consignment_id]
 
     if not include_reverted:
-        query = query.where(
-            ConsignmentChangeHistory.is_reverted == False
-        )
-        
-    query = query.where(
-        ConsignmentChangeHistory.consignment_id == consignment_id
-    ).options(
+        conditions.append(ConsignmentChangeHistory.is_reverted == False)
+
+    total = db.execute(
+        select(func.count(ConsignmentChangeHistory.id)).where(*conditions)
+    ).scalar()
+
+    query = select(ConsignmentChangeHistory).where(*conditions).options(
         joinedload(ConsignmentChangeHistory.consignment),
         joinedload(ConsignmentChangeHistory.changed_by),
         joinedload(ConsignmentChangeHistory.reverted_by)
-    )
-    
+    ).order_by(
+        ConsignmentChangeHistory.id.desc()
+    ).limit(page_size).offset((page - 1) * page_size)
 
-    return db.execute(query).scalars().all()
+    rows = db.execute(query).scalars().all()
+
+    return rows, total
 
 def fetch_latest_consignment_history(db, consignment_id):
     query = select(ConsignmentChangeHistory).where(
@@ -571,18 +635,19 @@ def add_in_eta_revision_history(updation_dict, consignment, user, db):
 def add_in_status_change_history(updation_dict, consignment, user, db):
     if updation_dict.get("current_status"):
 
-        if updation_dict.get("effective_date") is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Effective date is required"
-            )
-        
+        # effective_date is only in updation_dict when it differs from what's
+        # already stored — on same-day status changes the frontend's "today"
+        # matches the existing value and gets dropped from the diff, so this
+        # falls back to today rather than refusing the update (mirrors
+        # logistics' add_in_status_change_history).
+        effective_date = updation_dict.get("effective_date", {}).get("new_value") or date.today()
+
         status_change = StatusUpdateHistory(
             consignment_id = consignment.id,
             previous_status = updation_dict.get("current_status", {}).get("old_value"),
             new_status = updation_dict.get("current_status", {}).get("new_value"),
             remarks = updation_dict.get("remarks", {}).get("new_value"),
-            effective_date = updation_dict.get("effective_date", {}).get("new_value"),
+            effective_date = effective_date,
             user_id = user.id
         )
 
@@ -678,13 +743,18 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 #---------------------------------------
 # THE CLOSED LOCK
 #
-# A consignment closes when its status reaches "Arrived at works". While
-# closed it cannot be edited by anyone until an admin reopens it. The check
-# lives here so the one status value that means "closed" is written once.
+# A consignment closes when its status reaches "Arrived at works" AND it has
+# been submitted — a draft sitting at "Arrived at works" is not yet closed,
+# since it hasn't passed the full rule set in submission_errors. While closed
+# it cannot be edited by anyone until an admin reopens it. The check lives
+# here so the one condition that means "closed" is written once.
 #---------------------------------------
 
 def is_closed(consignment):
-    return consignment.current_status == Status.ARRIVED_AT_WORKS.value
+    return (
+        consignment.current_status == Status.ARRIVED_AT_WORKS.value
+        and consignment.record_state == "submitted"
+    )
 
 
 #---------------------------------------

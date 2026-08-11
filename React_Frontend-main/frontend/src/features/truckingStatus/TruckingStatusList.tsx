@@ -1,141 +1,203 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Download, Printer } from 'lucide-react'
+import { Download } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { FilterBar } from '@/components/FilterBar'
 import { MultiSelectFilter } from '@/components/MultiSelectFilter'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { StatusBadge } from '@/components/StatusBadge'
 import { useAuth } from '@/features/auth/AuthContext'
 import { can } from '@/lib/roleAccess'
-import { MOVEMENT_TYPES, TRUCKING_SOURCES, vehicleCount } from './schema'
-import { exportListExcel, exportListPdf, type ListColumn } from '@/lib/listExport'
-import { usePagination, Pagination, useSort, SortHeader } from '@/components/Pagination'
+import { trackingRollup } from './schema'
+import { Pagination, useSort, SortHeader } from '@/components/Pagination'
+import { SegmentedControl } from '@/components/SegmentedControl'
+import { ApiError } from '@/lib/api/client'
 import {
-  getTruckingJobs,
-  rollupLabel,
-  rowGrossWeight,
-  sourceLabel,
-  takeAction,
-  type TruckingRow,
-} from '@/lib/truckingStatusData'
+  listTruckingJobs, getOpenRequests, fetchTruckingFilterOptions,
+  exportTruckingExcel, downloadBlob, reopenTruckingJob,
+  type TruckingQuery, type ApiOpenRequest,
+} from '@/lib/api/trucking'
+import { apiToRow, sourceLabel, type TruckingListRow } from '@/lib/api/truckingMap'
+
+const PAGE_SIZE = 50
 
 /**
- * Two clearly-separated tables:
- *   1. Open Requests — live, not-yet-taken work handed over from Logistics,
- *      Import-FOB and Export. These aren't owned trucking jobs yet; each has a
- *      Take Action button that converts it into an owned job.
- *   2. Trucking Jobs — the module's own manual + taken jobs, with Open/Edit.
+ * Trucking Status — wired to the live backend.
  *
- * Splitting them (rather than one table with a "pending only" toggle) makes the
- * requests genuinely manageable: a dispatcher sees what's waiting to be picked
- * up at a glance, separate from what's already in motion. Both tables share the
- * same filter bar and scroll horizontally on narrow desktops.
+ * Two clearly-separated tables, which map onto two DIFFERENT endpoints rather
+ * than one list split by a flag:
+ *
+ *   1. Open Requests — GET /trucking/open-requests. Work handed over from the
+ *      other two modules and not yet turned into a job. These are NOT trucking
+ *      records: they are derived from the source order/consignment, so they
+ *      have no id here and cannot be opened or edited. Taking one starts an
+ *      owned job. A request drops off this list the moment a job takes it.
+ *   2. Trucking Jobs — GET /trucking/. The module's own records, server
+ *      filtered and server paged.
+ *
+ * NO JOB-LEVEL STATUS COLUMN. Trucking stores tracking per VEHICLE; the
+ * job-level reading is a rollup (schema.trackingRollup) computed from the
+ * vehicles, never stored. "Closed" is the related-but-separate lock: every
+ * vehicle Delivered AND the job submitted.
  */
-const sourceOptions = TRUCKING_SOURCES.map((s) => sourceLabel(s))
-const sourceLabelToValue = new Map(TRUCKING_SOURCES.map((s) => [sourceLabel(s), s]))
-
 export function TruckingStatusList() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const canEdit = can(user, 'editAny')
+
+  // --- filters (drive the jobs query) ---
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [movementFilter, setMovementFilter] = useState<string[]>([])
   const [sourceFilter, setSourceFilter] = useState<string[]>([])
-  const [search, setSearch] = useState('')
-  const [takingId, setTakingId] = useState<string | null>(null)
-  const [executionFrom, setExecutionFrom] = useState('')
-  const [executionTo, setExecutionTo] = useState('')
+  const [page, setPage] = useState(1)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [requestTab, setRequestTab] = useState<'all' | 'from-logistics' | 'from-import-fob'>('all')
 
-  const all = useMemo(
-    () =>
-      getTruckingJobs({
-        movementType: movementFilter.length ? movementFilter : undefined,
-        source: sourceFilter.length ? sourceFilter.map((label) => sourceLabelToValue.get(label)!) : undefined,
-        search,
-      }),
-    [movementFilter, sourceFilter, search],
-  )
+  // --- data ---
+  const [jobsRaw, setJobsRaw] = useState<TruckingListRow[]>([])
+  const [requests, setRequests] = useState<ApiOpenRequest[]>([])
+  const [total, setTotal] = useState(0)
+  const [pageCount, setPageCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [reopeningId, setReopeningId] = useState<number | null>(null)
+  const [confirmReopen, setConfirmReopen] = useState<TruckingListRow | null>(null)
 
-  const inDateRange = (r: TruckingRow) => {
-    if (executionFrom && (!r.executionDate || r.executionDate < executionFrom)) return false
-    if (executionTo && (!r.executionDate || r.executionDate > executionTo)) return false
-    return true
-  }
+  // --- dropdown options, from the data itself ---
+  const [movementOptions, setMovementOptions] = useState<string[]>([])
+  const [sourceOptions, setSourceOptions] = useState<string[]>([])
+  const [optionsError, setOptionsError] = useState<string | null>(null)
 
-  // A request = a live, not-yet-taken derived row (from another module). Once
-  // taken it becomes an owned job and drops out of this list.
-  const requests = useMemo(
-    () =>
-      all
-        .filter((r) => r.open && r.source !== 'manual' && inDateRange(r))
-        .sort((a, b) => a.systemId.localeCompare(b.systemId)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [all, executionFrom, executionTo],
-  )
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(timer)
+  }, [search])
 
-  const jobsRaw = useMemo(
-    () =>
-      all.filter((r) => !(r.open && r.source !== 'manual') && inDateRange(r)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [all, executionFrom, executionTo],
-  )
+  const loadOptions = useCallback(() => {
+    setOptionsError(null)
+    fetchTruckingFilterOptions()
+      .then((options) => {
+        setMovementOptions((options.movement_types ?? []).map((m) => m.value))
+        setSourceOptions(options.sources ?? [])
+      })
+      .catch((err) => {
+        setOptionsError(err instanceof Error ? err.message : 'Could not load filter options')
+      })
+  }, [])
+
+  useEffect(() => { loadOptions() }, [loadOptions])
+
+  const query: TruckingQuery = useMemo(() => ({
+    page,
+    pageSize: PAGE_SIZE,
+    movementType: movementFilter,
+    source: sourceFilter,
+    search: debouncedSearch,
+  }), [page, movementFilter, sourceFilter, debouncedSearch])
+
+  // Any filter change goes back to page 1 — staying on page 7 of a set that
+  // now has 2 pages would show an empty table.
+  const firstRender = useRef(true)
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return }
+    setPage(1)
+  }, [movementFilter, sourceFilter, debouncedSearch])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      // The two tables are independent sources, fetched together so the page
+      // lands in one paint. Open requests are not filtered or paged: the
+      // endpoint returns the whole (small) queue.
+      const [listed, open] = await Promise.all([
+        listTruckingJobs(query),
+        getOpenRequests(),
+      ])
+      setJobsRaw(listed.rows.map(apiToRow))
+      setTotal(listed.pagination?.total ?? listed.rows.length)
+      setPageCount(listed.pagination?.total_pages ?? 1)
+      setRequests(open)
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 403
+        ? "Signed in, but this account doesn't have permission to view trucking."
+        : err instanceof Error ? err.message : 'Could not load trucking jobs')
+      setJobsRaw([])
+      setRequests([])
+      setTotal(0)
+      setPageCount(0)
+    } finally {
+      setLoading(false)
+    }
+  }, [query])
+
+  useEffect(() => { void load() }, [load])
+
   const { sorted: jobs, sort, toggle } = useSort(jobsRaw, {
     systemId: (r) => r.systemId,
     source: (r) => sourceLabel(r.source),
     movement: (r) => r.movementType,
     transporter: (r) => r.transporterName ?? '',
-    vehicles: (r) => vehicleCount(r.vehicles),
+    vehicles: (r) => r.vehicles.length,
     payment: (r) => r.paymentStatus ?? '',
     execution: (r) => r.executionDate ?? '',
+    submitted: (r) => (r.recordState === 'submitted' ? 1 : 0),
+    closed: (r) => (r.isLocked ? 1 : 0),
   })
-  const { page, pageCount, pageRows: jobPage, setPage, total, pageSize } = usePagination(jobs, 10)
 
-  // Export requests are always-live with no accept step (takeAction only
-  // converts Logistics / Import-FOB sources), so this both narrows the type
-  // for takeAction and matches that behaviour — the button is hidden for
-  // export rows below rather than no-oping here.
-  function canTakeAction(r: TruckingRow): r is TruckingRow & { source: 'from-logistics' | 'from-import-fob' } {
-    return (r.source === 'from-logistics' || r.source === 'from-import-fob') && !!r.sourceRef
+  const visibleRequests = requestTab === 'all'
+    ? requests
+    : requests.filter((r) => r.source === requestTab)
+
+  async function handleReopen(job: TruckingListRow) {
+    setReopeningId(job.id)
+    setError(null)
+    try {
+      await reopenTruckingJob(job.id)
+      setConfirmReopen(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen this job')
+    } finally {
+      setReopeningId(null)
+    }
   }
 
-  function handleTakeAction(r: TruckingRow) {
-    if (!canTakeAction(r) || !r.sourceRef) return
-    setTakingId(r.systemId)
-    const newId = takeAction(r.source, r.sourceRef)
-    navigate(`/trucking-status/${newId}/edit/1`)
+  /**
+   * Taking a request means CREATING an owned job from it, which needs the full
+   * form — so this opens the new-job wizard carrying the source, rather than
+   * minting a record behind the user's back. The request stays in the queue
+   * until that job is actually saved.
+   */
+  function handleTakeAction(r: ApiOpenRequest) {
+    const params = new URLSearchParams({ source: r.source, source_ref: r.source_ref })
+    navigate(`/trucking-status/new?${params}`)
   }
 
-  const exportColumns: ListColumn<TruckingRow>[] = [
-    { header: 'ID', value: (r) => r.systemId },
-    { header: 'Source', value: (r) => sourceLabel(r.source) },
-    { header: 'Movement', value: (r) => r.movementType },
-    { header: 'Transporter', value: (r) => r.transporterName ?? '' },
-    { header: 'Pickup', value: (r) => r.pickup ?? '' },
-    { header: 'Destination', value: (r) => r.destination ?? '' },
-    { header: 'Reference', value: (r) => r.referenceNo ?? '' },
-    { header: 'Vehicles', value: (r) => vehicleCount(r.vehicles) },
-    { header: 'Gross (kg)', value: (r) => Number(rowGrossWeight(r).toFixed(2)) },
-    { header: 'Tracking', value: (r) => rollupLabel(r) },
-    { header: 'Quoted', value: (r) => r.quotedFreight ?? '' },
-    { header: 'Actual', value: (r) => r.actualFreight ?? '' },
-    { header: 'Payment', value: (r) => r.paymentStatus ?? '' },
-    { header: 'Execution date', value: (r) => r.executionDate ?? '' },
-  ]
-  const exportRows = () => [...requests, ...jobs]
-  const stamp = () => new Date().toISOString().slice(0, 10)
-  const doExcel = () => exportListExcel(exportRows(), exportColumns, `trucking-status-${stamp()}.xlsx`, 'Trucking')
-  const doPdf = () => exportListPdf(exportRows(), exportColumns, `trucking-status-${stamp()}.pdf`, 'Trucking Status')
+  async function doExcel() {
+    setExporting(true)
+    try {
+      const blob = await exportTruckingExcel(query)
+      downloadBlob(blob, `trucking-status-${new Date().toISOString().slice(0, 10)}.xlsx`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not export')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const shown = loading ? 'Loading…' : `${total} job${total === 1 ? '' : 's'}${pageCount > 1 ? ` · page ${page} of ${pageCount}` : ''}`
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeader title="Trucking Status" subtitle="Vehicle movements & open requests" module="truckingStatus" />
+        <PageHeader title="Trucking Status" subtitle={shown} module="truckingStatus" />
         <div className="flex gap-2">
-          <Button variant="outline" onClick={doExcel}>
-            <Download size={16} /> Excel
-          </Button>
-          <Button variant="outline" onClick={doPdf}>
-            <Printer size={16} /> PDF
+          <Button variant="outline" onClick={() => void doExcel()} disabled={exporting || total === 0}>
+            <Download size={16} /> {exporting ? 'Exporting…' : 'Excel'}
           </Button>
           {can(user, 'enter') && (
             <Button asChild>
@@ -146,84 +208,82 @@ export function TruckingStatusList() {
       </div>
 
       <FilterBar
-        search={{
-          value: search,
-          onChange: setSearch,
-          placeholder: 'ID, transporter, item…',
-        }}
+        search={{ value: search, onChange: setSearch, placeholder: 'Reference, transporter, item…' }}
       >
-        <MultiSelectFilter label="Movement" options={[...MOVEMENT_TYPES]} value={movementFilter} onChange={setMovementFilter} />
+        <MultiSelectFilter label="Movement" options={movementOptions} value={movementFilter} onChange={setMovementFilter} />
         <MultiSelectFilter label="Source" options={sourceOptions} value={sourceFilter} onChange={setSourceFilter} />
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs text-muted">Execution from</label>
-          <input type="date" value={executionFrom} onChange={(e) => setExecutionFrom(e.target.value)}
-            className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink" />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs text-muted">Execution to</label>
-          <input type="date" value={executionTo} onChange={(e) => setExecutionTo(e.target.value)}
-            className="h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink" />
-        </div>
       </FilterBar>
 
-      {/* ---- Open Requests (handed over from other modules) ---- */}
+      {optionsError && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>Filter options couldn’t be loaded — {optionsError}</span>
+          <button type="button" onClick={loadOptions} className="underline">Retry</button>
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
+          <span>{error}</span>
+          <button type="button" onClick={() => void load()} className="underline">Retry</button>
+        </div>
+      )}
+
+      {/* ---- Open Requests (handed over from the other two modules) ---- */}
       <section className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold">Open Requests</h3>
           <span className="rounded-full bg-[var(--color-watch-bg)] px-2 py-0.5 text-[11px] text-[var(--color-watch)]">{requests.length}</span>
-          <span className="text-xs text-muted">Handed over from Logistics, Import-FOB and Export — take one to start an owned job</span>
+          <span className="text-xs text-muted">
+            Explicitly handed over from Logistics and Imports — take one to start an owned job
+          </span>
         </div>
-        {requests.length === 0 ? (
+        <SegmentedControl
+          options={[
+            { value: 'all' as const, label: `All (${requests.length})` },
+            { value: 'from-logistics' as const, label: `Logistics (${requests.filter((r) => r.source === 'from-logistics').length})` },
+            { value: 'from-import-fob' as const, label: `Import FOB (${requests.filter((r) => r.source === 'from-import-fob').length})` },
+          ]}
+          value={requestTab}
+          onChange={setRequestTab}
+        />
+        {visibleRequests.length === 0 ? (
           <div className="rounded-xl border border-dashed border-line px-3 py-6 text-center text-sm text-muted">
-            No open requests right now. New ones appear here automatically when Logistics sends an order to trucking or a FOB/export shipment is ready.
+            {loading
+              ? 'Loading open requests…'
+              : 'No open requests right now. One appears here when Logistics sends an order to trucking, or Imports sends a FOB consignment.'}
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-line [scrollbar-width:auto]">
+          <div className="max-h-[55vh] overflow-auto rounded-xl border border-line [scrollbar-width:auto]">
             <table className="w-full min-w-[900px] text-left text-sm">
-              <thead className="bg-canvas-alt text-xs uppercase text-muted">
+              <thead className="sticky top-0 z-10 bg-canvas-alt text-xs uppercase text-muted shadow-[0_1px_0_var(--color-line)]">
                 <tr>
-                  <th className="px-3 py-2">Request ID</th>
+                  <th className="px-3 py-2">Request</th>
                   <th className="px-3 py-2">Source</th>
                   <th className="px-3 py-2">Movement</th>
-                  <th className="px-3 py-2">Transporter</th>
-                  <th className="px-3 py-2">Route</th>
+                  <th className="px-3 py-2">Counterparty</th>
                   <th className="px-3 py-2">Reference</th>
-                  <th className="px-3 py-2">Execution</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {requests.map((r) => (
-                  <tr
-                    key={r.systemId}
-                    className="cursor-pointer border-t border-line hover:bg-canvas-alt"
-                    onClick={() => navigate(`/trucking-status/${r.systemId}`)}
-                  >
-                    <td className="px-3 py-2 font-medium text-ink">{r.systemId}</td>
-                    <td className="px-3 py-2"><SourceTag row={r} /></td>
-                    <td className="px-3 py-2">{r.movementType}</td>
-                    <td className="px-3 py-2">{r.transporterName ?? '—'}</td>
-                    <td className="px-3 py-2 text-muted">{(r.pickup ?? '—')} → {(r.destination ?? '—')}</td>
-                    <td className="px-3 py-2 tabular-nums">{r.referenceNo ?? '—'}</td>
-                    <td className="px-3 py-2 tabular-nums">{r.executionDate ?? '—'}</td>
+                {visibleRequests.map((r) => (
+                  <tr key={`${r.source}:${r.source_ref}`} className="border-t border-line hover:bg-canvas-alt">
+                    <td className="px-3 py-2 font-medium text-ink">{r.label}</td>
+                    <td className="px-3 py-2"><SourceTag source={r.source} /></td>
+                    <td className="px-3 py-2">{r.movement_type ?? '—'}</td>
+                    <td className="px-3 py-2 text-muted">{r.customer ?? r.supplier ?? '—'}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.mo_no ?? r.instrument_number ?? '—'}</td>
                     <td className="px-3 py-2">
-                      <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      {/* A request is derived from its source record — there is
+                          nothing in trucking to open until it is taken. */}
+                      {can(user, 'enter') && (
                         <button
-                          onClick={() => navigate(`/trucking-status/${r.systemId}`)}
-                          className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+                          onClick={() => handleTakeAction(r)}
+                          className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-brand hover:text-brand"
                         >
-                          Open
+                          Take Action
                         </button>
-                        {canTakeAction(r) && (
-                          <button
-                            onClick={() => handleTakeAction(r)}
-                            disabled={takingId === r.systemId}
-                            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-brand hover:text-brand disabled:opacity-50"
-                          >
-                            Take Action
-                          </button>
-                        )}
-                      </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -237,13 +297,13 @@ export function TruckingStatusList() {
       <section className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">Trucking Jobs</h3>
-          <span className="rounded-full bg-canvas-alt px-2 py-0.5 text-[11px] text-muted">{jobs.length}</span>
+          <span className="rounded-full bg-canvas-alt px-2 py-0.5 text-[11px] text-muted">{total}</span>
         </div>
-        <div className="overflow-x-auto rounded-xl border border-line [scrollbar-width:auto]">
-          <table className="w-full min-w-[1000px] text-left text-sm">
-            <thead className="bg-canvas-alt text-xs uppercase text-muted">
+        <div className="max-h-[60vh] overflow-auto rounded-xl border border-line [scrollbar-width:auto]">
+          <table className="w-full min-w-[1200px] text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-canvas-alt text-xs uppercase text-muted shadow-[0_1px_0_var(--color-line)]">
               <tr>
-                <SortHeader label="ID" sortKey="systemId" sort={sort} onToggle={toggle} />
+                <SortHeader label="Reference" sortKey="systemId" sort={sort} onToggle={toggle} />
                 <SortHeader label="Source" sortKey="source" sort={sort} onToggle={toggle} />
                 <SortHeader label="Movement" sortKey="movement" sort={sort} onToggle={toggle} />
                 <SortHeader label="Transporter" sortKey="transporter" sort={sort} onToggle={toggle} />
@@ -252,76 +312,153 @@ export function TruckingStatusList() {
                 <th className="px-3 py-2">Tracking</th>
                 <SortHeader label="Payment" sortKey="payment" sort={sort} onToggle={toggle} />
                 <SortHeader label="Execution" sortKey="execution" sort={sort} onToggle={toggle} />
+                <SortHeader label="Submitted" sortKey="submitted" sort={sort} onToggle={toggle} />
+                <SortHeader label="Closed" sortKey="closed" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2 text-right">Delay</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
-              {jobPage.map((r) => (
-                <tr
-                  key={r.systemId}
-                  className="cursor-pointer border-t border-line hover:bg-canvas-alt"
-                  onClick={() => navigate(`/trucking-status/${r.systemId}`)}
-                >
-                  <td className="px-3 py-2 font-medium text-ink">{r.systemId}</td>
-                  <td className="px-3 py-2"><SourceTag row={r} /></td>
-                  <td className="px-3 py-2">{r.movementType}</td>
-                  <td className="px-3 py-2">{r.transporterName ?? '—'}</td>
-                  <td className="px-3 py-2 text-muted">{(r.pickup ?? '—')} → {(r.destination ?? '—')}</td>
-                  <td className="px-3 py-2 tabular-nums">{vehicleCount(r.vehicles) || '—'}</td>
-                  <td className="px-3 py-2">
-                    {vehicleCount(r.vehicles) ? <StatusBadge label={rollupLabel(r)} /> : <span className="text-muted">awaiting vehicles</span>}
-                  </td>
-                  <td className="px-3 py-2">{r.paymentStatus ?? '—'}</td>
-                  <td className="px-3 py-2 tabular-nums">{r.executionDate ?? '—'}</td>
-                  <td className="px-3 py-2 text-right"><DelayCell days={truckingDelayDays(r)} /></td>
-                  <td className="px-3 py-2">
-                    <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => navigate(`/trucking-status/${r.systemId}`)}
-                        className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
-                      >
-                        Open
-                      </button>
-                      {canEdit && (
+              {jobs.map((r) => {
+                // Job-level tracking is DERIVED from the vehicles, never stored.
+                const rollup = trackingRollup(r.vehicles)
+                const isOpen = expandedId === r.id
+                return (
+                  <Fragment key={r.id}>
+                  <tr
+                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${isOpen ? 'bg-canvas-alt' : ''}`}
+                    onClick={() => setExpandedId(isOpen ? null : r.id)}
+                    aria-expanded={isOpen}
+                    style={r.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
+                  >
+                    <td className="px-3 py-2 font-medium text-ink">
+                      <span className={`mr-1.5 inline-block text-[10px] text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
+                      {r.systemId}
+                      {r.missingFields.length > 0 && (
+                        <span
+                          className="ml-1.5 inline-block rounded bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[10.5px] text-[var(--color-watch)]"
+                          title={`Missing: ${r.missingFields.join(', ')}`}
+                        >
+                          {r.missingFields.length} missing
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2"><SourceTag source={r.source} /></td>
+                    <td className="px-3 py-2">{r.movementType || '—'}</td>
+                    <td className="px-3 py-2">{r.transporterName ?? '—'}</td>
+                    <td className="px-3 py-2 text-muted">{(r.pickup ?? '—')} → {(r.destination ?? '—')}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.vehicles.length || '—'}</td>
+                    <td className="px-3 py-2">
+                      {r.vehicles.length
+                        ? <StatusBadge label={rollup.label} />
+                        : <span className="text-muted">awaiting vehicles</span>}
+                    </td>
+                    <td className="px-3 py-2">{r.paymentStatus ?? '—'}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.executionDate ?? '—'}</td>
+                    <td className="px-3 py-2">
+                      {r.recordState === 'submitted'
+                        ? <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted">Submitted</span>
+                        : <span className="rounded border border-[var(--color-watch)]/30 bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-watch)]">Draft</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      {r.isLocked
+                        ? <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted"
+                            title="All vehicles delivered and submitted — an admin must reopen it before editing">Closed</span>
+                        : <span className="text-muted">—</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right"><DelayCell days={truckingDelayDays(r)} /></td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={() => navigate(`/trucking-status/${r.systemId}/edit/1`)}
+                          onClick={() => navigate(`/trucking-status/${r.id}`)}
                           className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
                         >
-                          Edit
+                          Open
                         </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        {canEdit && (
+                          <button
+                            onClick={() => navigate(`/trucking-status/${r.id}/edit/1`)}
+                            disabled={r.isLocked}
+                            title={r.isLocked ? 'Closed — an admin must reopen it before editing' : undefined}
+                            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {user?.isAdmin && r.isLocked && (
+                          <button
+                            onClick={() => setConfirmReopen(r)}
+                            disabled={reopeningId === r.id}
+                            className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted disabled:opacity-40"
+                          >
+                            {reopeningId === r.id ? 'Reopening…' : 'Reopen'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => navigate(`/trucking-status/${r.id}/history`)}
+                          title="View change history"
+                          className="rounded border border-line px-2.5 py-1 text-[11px] hover:border-muted"
+                        >
+                          History
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="border-t border-line bg-canvas-alt/60">
+                      <td colSpan={13} className="px-3 py-3">
+                        <TruckingRowDetails row={r} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                )
+              })}
               {jobs.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-3 py-8 text-center text-muted">
-                    No trucking jobs match these filters.
+                  <td colSpan={13} className="px-3 py-8 text-center text-muted">
+                    {loading ? 'Loading trucking jobs…' : 'No trucking jobs match these filters.'}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-        <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} onPage={setPage} />
+        {/* Server-paged: this drives the fetch, it does not slice a loaded array. */}
+        <Pagination page={page} pageCount={pageCount} total={total} pageSize={PAGE_SIZE} onPage={setPage} />
       </section>
+
+      <ConfirmDialog
+        open={!!confirmReopen}
+        title="Reopen this job?"
+        description={
+          <>
+            <span className="font-medium text-ink">{confirmReopen?.systemId || `Job #${confirmReopen?.id}`}</span> is
+            closed. Reopening makes it editable again until it is submitted with every vehicle delivered once more.
+          </>
+        }
+        confirmLabel="Yes, reopen it"
+        confirmingLabel="Reopening…"
+        confirming={!!confirmReopen && reopeningId === confirmReopen.id}
+        danger={false}
+        onConfirm={() => confirmReopen && void handleReopen(confirmReopen)}
+        onCancel={() => setConfirmReopen(null)}
+      />
     </div>
   )
 }
 
 
-/** Delay against ETA-to-works: dispatch → etaWorks vs today/actual. Positive =
+/** Delay against ETA-to-works: dispatch → etaWorks vs today. Positive =
  *  overdue. Null when we can't compute it. */
-function truckingDelayDays(r: TruckingRow): number | null {
+function truckingDelayDays(r: TruckingListRow): number | null {
   if (!r.etaWorks) return null
+  // Only meaningful once the job is moving (has a dispatch note).
+  if (!r.dispatchNoteDate) return null
   const today = new Date().toISOString().slice(0, 10)
   const a = new Date(r.etaWorks).getTime()
   const b = new Date(today).getTime()
   if (Number.isNaN(a) || Number.isNaN(b)) return null
-  // Only meaningful once the job is moving (has a dispatch note).
-  if (!r.dispatchNoteDate) return null
   return Math.round((b - a) / 86_400_000)
 }
 
@@ -335,22 +472,87 @@ function DelayCell({ days }: { days: number | null }) {
   )
 }
 
-function SourceTag({ row }: { row: TruckingRow }) {
-  const label = sourceLabel(row.source)
-  const style =
-    row.source === 'from-logistics'
-      ? { backgroundColor: 'var(--color-info-bg)', color: 'var(--color-info)' }
-      : row.source === 'from-import-fob'
-        ? { backgroundColor: 'var(--color-watch-bg)', color: 'var(--color-watch)' }
-      : row.source === 'from-export'
-        ? { backgroundColor: 'var(--color-healthy-bg)', color: 'var(--color-healthy)' }
-        : undefined
+function SourceTag({ source }: { source: string }) {
+  const isManual = source === 'manual'
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-xs ${style ? '' : 'bg-canvas-alt text-muted'}`}
-      style={style}
+      className="rounded-full px-2 py-0.5 text-[11px]"
+      style={isManual
+        ? { backgroundColor: 'var(--color-canvas-alt)', color: 'var(--color-muted)' }
+        : { backgroundColor: 'var(--color-info-bg)', color: 'var(--color-info)' }}
     >
-      {label}
+      {sourceLabel(source)}
     </span>
+  )
+}
+
+
+/** Single-click expansion for a trucking job row: its item details and each
+ *  assigned vehicle. */
+function TruckingRowDetails({ row }: { row: TruckingListRow }) {
+  return (
+    <div className="flex flex-col gap-3">
+      {row.items.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-xs">
+            <thead className="text-muted">
+              <tr>
+                <th className="py-1 pr-3 text-left">#</th>
+                <th className="py-1 pr-3 text-left">Item details</th>
+                <th className="py-1 pr-3 text-right">Weight (kg)</th>
+                <th className="py-1 pr-3 text-left">Pickup</th>
+                <th className="py-1 pr-3 text-left">Destination</th>
+                <th className="py-1 pr-3 text-left">IDM/Ref</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink">
+              {row.items.map((it, i) => (
+                <tr key={i} className="border-t border-line/60">
+                  <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
+                  <td className="py-1 pr-3 font-medium">{it.itemDetails || '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{it.weight ?? '—'}</td>
+                  <td className="py-1 pr-3">{it.pickup || '—'}</td>
+                  <td className="py-1 pr-3">{it.destination || '—'}</td>
+                  <td className="py-1 pr-3">{it.referenceNo || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-xs">
+          <span className="font-semibold text-muted">Item details: </span>
+          <span>{row.itemDetails || <span className="text-muted">none entered</span>}</span>
+        </div>
+      )}
+      {row.vehicles.length === 0 ? (
+        <div className="text-xs text-muted">No vehicles assigned yet.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-xs">
+            <thead className="text-muted">
+              <tr>
+                <th className="py-1 pr-3 text-left">#</th>
+                <th className="py-1 pr-3 text-left">Vehicle</th>
+                <th className="py-1 pr-3 text-left">Type</th>
+                <th className="py-1 pr-3 text-right">Packages</th>
+                <th className="py-1 pr-3 text-right">Gross (kg)</th>
+              </tr>
+            </thead>
+            <tbody className="text-ink">
+              {row.vehicles.map((v, i) => (
+                <tr key={i} className="border-t border-line/60">
+                  <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
+                  <td className="py-1 pr-3 font-medium">{v.vehicleNumber || '—'}</td>
+                  <td className="py-1 pr-3">{v.vehicleType || '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{v.noOfPackages ?? '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{v.grossWeight ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }

@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS
-from app.imports.helpers import fetch_consignment, verify_entry_ownership, submission_errors
+from app.imports.helpers import fetch_consignment, verify_entry_ownership, submission_errors, is_closed
 from app.imports.serializers import serialize_consignment
 
 
@@ -17,8 +17,11 @@ from app.imports.serializers import serialize_consignment
 # helpers.submission_errors, mirroring the front end, and are enforced here
 # server-side because template/client validation is never the boundary.
 #
-# Submitting does NOT lock the record — a submitted consignment is still
-# editable. Only closing it (status "Arrived at works") locks it.
+# Submitting does not lock the record by itself — a submitted consignment
+# sitting at any other status is still editable. But a consignment closes
+# once it is BOTH submitted AND at "Arrived at works" (see helpers.is_closed),
+# so if it was already at that status when submitted, this is the moment it
+# actually locks.
 #-----------------------------------------------------
 
 @router.post("/{consignment_id}/submit")
@@ -68,6 +71,9 @@ def submit_consignment(
             )
 
         consignment.record_state = "submitted"
+
+        if is_closed(consignment):
+            consignment.is_locked = True
 
         db.commit()
         db.refresh(consignment)

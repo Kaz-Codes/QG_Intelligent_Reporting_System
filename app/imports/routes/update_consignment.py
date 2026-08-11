@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, is_closed, stamp_landed_cost_audit, recompute_derived
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived
 
 from app.imports.helpers import fetch_consignment
 from app.imports.models import ConsignmentItem, Payment
@@ -99,12 +99,11 @@ def update_consignment(
         # Applying updates
         apply_updates(updation_dict, consignment)
 
-        # If this update pushed the status to "Arrived at works" the
-        # consignment is now closed, so lock it. The closing update itself
-        # goes through (it started from an unlocked state); only later edits
-        # are refused, until an admin reopens.
-        if is_closed(consignment):
-            consignment.is_locked = True
+        # A plain draft save never closes the consignment, even if this
+        # update sets status to "Arrived at works" on an already-submitted
+        # record — submission is what closes it (see submit_consignment.py),
+        # not merely saving while both conditions happen to be true. Only the
+        # /submit endpoint locks.
 
         consignment_items_map = {item.id : item for item in consignment.items}
 

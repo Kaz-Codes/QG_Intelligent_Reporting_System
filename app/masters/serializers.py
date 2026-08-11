@@ -52,6 +52,18 @@ def serialize_works(row, used=0):
     }
 
 
+def serialize_customer(row, used=0):
+    # Name only — see the model. `used` is how many logistics orders point at
+    # this customer, so nobody deactivates one still being shipped to.
+    return {
+        "id": row.id,
+        "name": row.name,
+        "is_active": row.is_active,
+        "is_verified": row.is_verified,
+        "used": used,
+    }
+
+
 def serialize_port(row, used=0):
     return {
         "id": row.id,
@@ -127,11 +139,15 @@ def serialize_item_for_entry(item):
 
 SERIALIZERS = {
     "supplier": serialize_supplier,
+    "customer": serialize_customer,
     "branch": serialize_branch,
-    "works": serialize_works,
     "port": serialize_port,
     "agent": serialize_agent,
     "item": serialize_item,
+    # "works" is gone: Works and Branch are the same thing to the business (the
+    # imports sheet's "Works" column fills branch_id), the table holds no rows
+    # and nothing references it. serialize_works is kept just below in case a
+    # database somewhere still has the table.
 }
 
 

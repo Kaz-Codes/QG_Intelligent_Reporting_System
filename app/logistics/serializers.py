@@ -27,6 +27,17 @@ def serialize_consignment(consignment):
     data["created_by"] = consignment.created_by.username if consignment.created_by else None
     data["deleted_by"] = consignment.deleted_by.username if consignment.deleted_by else None
 
+    # The named gaps that stop this order being submitted — the same rule set
+    # /submit enforces, so the list's "Draft" badge, a disabled Submit button
+    # and a failed submit can never disagree. Loaded (Excel) rows are all still
+    # drafts and legitimately incomplete, so this is usually non-empty for them.
+    #
+    # Imported inside the function on purpose: helpers imports this module for
+    # serialize_many, so a module-level import would be circular — the exact
+    # cycle this file's header comment says it avoids.
+    from app.logistics.helpers import submission_errors
+    data["missing_fields"] = submission_errors(consignment)
+
     return data
 
 
@@ -60,6 +71,9 @@ def serialize_consignment_history(consignment_history):
         "history": consignment_history.history,
         "changed_by_id": consignment_history.changed_by_id,
         "changed_by": consignment_history.changed_by.username if consignment_history.changed_by else None,
+        # When the change was made (TimestampMixin). The history screen orders
+        # and dates every card by this, so it has to go out with the row.
+        "changed_at": consignment_history.created_at,
 
         "is_reverted": consignment_history.is_reverted,
         "reverted_by_id": consignment_history.reverted_by_id,

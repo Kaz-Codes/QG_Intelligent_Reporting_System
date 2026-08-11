@@ -21,7 +21,10 @@ def get_consignments_list(
     customer : Optional[list[str]] = Query(None),
     gate_out_from : Optional[date] = None,
     gate_out_to : Optional[date] = None,
-    q : Optional[str] = None
+    q : Optional[str] = None,
+    # 'standard' (the Orders tab, the default), 'rework' (Service Jobs), or
+    # 'all' for both. Not multi-select: a record is one kind or the other.
+    job_kind : Optional[str] = "standard"
     ):
 
     db = SessionLocal()
@@ -44,7 +47,8 @@ def get_consignments_list(
 
         consignments, total = fetch_consignments_page(
             db, include_deleted, status, order_type, customer,
-            gate_out_from, gate_out_to, q, page, page_size
+            gate_out_from, gate_out_to, q, page, page_size,
+            None if job_kind == "all" else job_kind
         )
 
         # Serializeing this page of orders

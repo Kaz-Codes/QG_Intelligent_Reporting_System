@@ -7,11 +7,13 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Numeric,
+    String,
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.enums import ItemRank
 
 if TYPE_CHECKING:
     from app.masters.models import Item
@@ -66,6 +68,21 @@ class Stock(Base):
         Numeric(18, 2)
     )
 
+    # ABC rank for this item AT THIS BRANCH. A/B come from the "AB Items"
+    # workbook, which ranks per branch — one item can be an A line at one
+    # branch and a B line at another, so this cannot live on the `items`
+    # master (no branch there). Anything the workbook does not list is a C
+    # line, which is why the loader defaults it rather than leaving it null.
+    # server_default too: the loaders insert with raw psycopg2, where a
+    # Python-side default never runs.
+    rank: Mapped[str] = mapped_column(
+        String(1),
+        default=ItemRank.C.value,
+        server_default=ItemRank.C.value,
+        nullable=False,
+        index=True
+    )
+
     item: Mapped[Optional["Item"]] = relationship(
         back_populates="stock"
     )
@@ -88,9 +105,13 @@ class Issuance(Base):
         Text
     )
 
+    # Indexed because every movement figure on the inventory and overview
+    # dashboards asks "what was issued against this item, and when" — this is
+    # the largest table either screen touches (~49k rows).
     item_code: Mapped[Optional[str]] = mapped_column(
         ForeignKey("items.item_code"),
-        nullable=True
+        nullable=True,
+        index=True
     )
 
     item_name: Mapped[Optional[str]] = mapped_column(Text)
@@ -121,7 +142,7 @@ class Issuance(Base):
 
     status: Mapped[Optional[str]] = mapped_column(Text)
 
-    from_date: Mapped[Optional[date]] = mapped_column(Date)
+    from_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
 
     unit_price: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 3)
