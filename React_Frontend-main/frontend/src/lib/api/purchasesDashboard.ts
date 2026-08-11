@@ -57,6 +57,11 @@ export interface PurchaseKpis {
    *  supplier chart does not add up to the total. */
   excluded_from_supplier_figures: string[]
   excluded_supplier_value: number
+  /** Money on lines with NO supplier — in-house companies, nulled at load.
+   *  Counted in Total Value but in no supplier bucket, so the supplier chart
+   *  and the total legitimately differ and the screen says by how much. */
+  unattributed_value: number
+  unattributed_lines: number
 }
 
 /** Total value + how late purchasing runs. Quantity, the second delay average

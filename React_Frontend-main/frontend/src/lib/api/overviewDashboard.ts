@@ -128,6 +128,14 @@ export interface OverviewLogistics extends SectionMeta {
       import_total: number
     }
   }
+  /** One figure from each of the section's three areas, so "logistics" stops
+   *  meaning "trucking". Each carries its own basis, because they rest on
+   *  different — and in one case small — slices of the book. */
+  packed_tonnage: { kilograms: number; tonnes: number; packages: number; basis: number }
+  /** A RATE, not a second cost total. null when nothing weighed was moved. */
+  freight_per_kg: { rate: number | null; freight: number; kilograms: number; basis: number }
+  /** Sailing to arrival. Only 23% of orders record both dates. */
+  transit_time: { days: number | null; basis: number }
   /** `by_movement` is keyed by movement type, with the NULL group under
    *  "Unclassified" — the same name its tile shows. */
   references: {

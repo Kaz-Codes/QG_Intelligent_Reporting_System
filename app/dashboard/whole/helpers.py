@@ -5,8 +5,8 @@ from sqlalchemy import select, func, and_, or_, case
 
 from app.imports.models import Consignment, ConsignmentItem
 from app.imports.helpers import STAGE_GROUPS
-from app.logistics.models import LogisticsConsignment
-from app.trucking.models import TruckingConsignment
+from app.logistics.models import LogisticsConsignment, LogisticsPackage
+from app.trucking.models import TruckingConsignment, TruckingVehicle
 from app.loading.schemas.stores_schemas import (
     Stock, Issuance, PurchasesData,
 )
@@ -819,3 +819,123 @@ def issuance_coverage(db, date_from, date_to):
     ).scalar_one()
 
     return coverage(earliest, latest, in_period, total, "issuance date")
+
+
+#-----------------------------------------------------
+# LOGISTICS, BEYOND TRUCKING COST
+#
+# The section had two figures, both about road movement, which made "logistics"
+# look like a synonym for trucking. These add one from each of the other two
+# areas — packing and sea/air shipping — chosen for what the data can actually
+# support rather than for what would look impressive:
+#
+#   packed tonnage    618 of 678 packages carry a weight (91%)
+#   freight per kg    1,130 of 1,369 jobs have both freight and a vehicle weight
+#   transit time      174 of 745 orders carry BOTH an ETD and an arrival (23%)
+#
+# Deliberately NOT added: packing cost or savings (0 of 678 packages record an
+# actual cost, so both are null), and anything built on gate-out (13%) or sea
+# freight (12%). A tile that is null or rests on an eighth of the book is worse
+# than no tile — see the KPIs already held back for want of data.
+#
+# Each returns its own basis, so the screen states the denominator rather than
+# implying the figure covers everything.
+#-----------------------------------------------------
+
+def logistics_packed_tonnage(db, date_from=None, date_to=None):
+    """Weight packed in the window, and over how many packages."""
+    conditions = [LogisticsPackage.is_deleted.is_(False)]
+    if date_from is not None and date_to is not None:
+        conditions.append(
+            func.coalesce(LogisticsPackage.packing_date,
+                          LogisticsPackage.packing_ready_date)
+            .between(date_from, date_to)
+        )
+
+    weight, weighed, packages = db.execute(
+        select(
+            func.coalesce(func.sum(LogisticsPackage.gross_weight), 0),
+            func.count(LogisticsPackage.gross_weight),
+            func.count(LogisticsPackage.id),
+        ).where(*conditions)
+    ).one()
+
+    return {
+        "kilograms": weight,
+        "tonnes": round(float(weight) / 1000, 1) if weight else 0.0,
+        "packages": packages,
+        # How many of them actually carry a weight — the rest add nothing.
+        "basis": weighed,
+    }
+
+
+def logistics_freight_per_kg(db, date_from=None, date_to=None, date_field=None):
+    """Rupees of road freight per kilogram moved.
+
+    A RATE, not another total: the section already reports what trucking cost,
+    and a second money figure differing only by basis is the duplication this
+    whole screen has been cleaned of. Weight comes from the vehicles, which is
+    where it is recorded.
+    """
+    column = TRUCKING_DATE_FIELDS.get(date_field or LOGISTICS_DATE_DEFAULT,
+                                      TRUCKING_DATE_FIELDS[LOGISTICS_DATE_DEFAULT])
+
+    conditions = [
+        TruckingConsignment.is_deleted.is_(False),
+        TruckingVehicle.is_deleted.is_(False),
+        TruckingConsignment.actual_freight.isnot(None),
+        TruckingVehicle.gross_weight.isnot(None),
+    ]
+    if date_from is not None and date_to is not None:
+        conditions.append(column.between(date_from, date_to))
+
+    freight, weight, jobs = db.execute(
+        select(
+            func.coalesce(func.sum(TruckingConsignment.actual_freight), 0),
+            func.coalesce(func.sum(TruckingVehicle.gross_weight), 0),
+            func.count(func.distinct(TruckingConsignment.id)),
+        )
+        .select_from(TruckingConsignment)
+        .join(TruckingVehicle, TruckingVehicle.consignment_id == TruckingConsignment.id)
+        .where(*conditions)
+    ).one()
+
+    return {
+        "rate": round(float(freight) / float(weight), 2) if weight else None,
+        "freight": freight,
+        "kilograms": weight,
+        "basis": jobs,
+    }
+
+
+def logistics_transit_time(db, date_from=None, date_to=None, date_field=None):
+    """Average days from sailing to arrival, on the orders that record both."""
+    column = LOGISTICS_ORDER_DATE_FIELDS.get(
+        date_field or LOGISTICS_DATE_DEFAULT,
+        LOGISTICS_ORDER_DATE_FIELDS[LOGISTICS_DATE_DEFAULT],
+    )
+
+    measurable = and_(
+        LogisticsConsignment.etd_sailing_date.isnot(None),
+        LogisticsConsignment.actual_arrival_date.isnot(None),
+        # An arrival before its own sailing is a data error, not a negative
+        # transit; excluded rather than dragging the average below reality.
+        LogisticsConsignment.actual_arrival_date >= LogisticsConsignment.etd_sailing_date,
+    )
+
+    conditions = [LogisticsConsignment.is_deleted.is_(False), measurable]
+    if date_from is not None and date_to is not None:
+        conditions.append(column.between(date_from, date_to))
+
+    days, orders = db.execute(
+        select(
+            func.avg(LogisticsConsignment.actual_arrival_date
+                     - LogisticsConsignment.etd_sailing_date),
+            func.count(LogisticsConsignment.id),
+        ).where(*conditions)
+    ).one()
+
+    return {
+        "days": round(float(days), 1) if days is not None else None,
+        "basis": orders,
+    }

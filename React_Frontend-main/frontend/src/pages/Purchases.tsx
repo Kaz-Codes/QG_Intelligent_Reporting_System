@@ -178,8 +178,15 @@ export function Purchases() {
               refs={data.references.top_supplier}
               fetchRefs={refs('top_supplier')}
               help={withBasis(PURCHASES_HELP.topSupplier,
-                kpis.excluded_supplier_value
-                  ? `Import (IOL) is excluded from supplier figures; its ${money(kpis.excluded_supplier_value)} is still inside Total Value.`
+                kpis.excluded_supplier_value || kpis.unattributed_value
+                  ? [
+                      kpis.excluded_supplier_value
+                        ? `Import (IOL) is excluded from supplier figures; its ${money(kpis.excluded_supplier_value)} is still inside Total Value.`
+                        : '',
+                      kpis.unattributed_lines
+                        ? `${money(kpis.unattributed_value)} carries no supplier at all (in-house purchases) and is in Total Value but in no supplier figure.`
+                        : '',
+                    ].filter(Boolean).join(' ')
                   : undefined)} />
           </div>
 
@@ -206,6 +213,12 @@ export function Purchases() {
                     Excludes Import (IOL) — the in-house import channel rather than a
                     vendor. Its {money(kpis.excluded_supplier_value)} is still counted in
                     Total Value above.
+                    {kpis.unattributed_lines > 0 && (
+                      <> A further {money(kpis.unattributed_value)} across{' '}
+                      {kpis.unattributed_lines.toLocaleString()} lines carries no supplier
+                      at all — in-house purchases, where the group is buying from itself.
+                      That money is in Total Value too, but in no bar here.</>
+                    )}
                   </p>
                 </>
               )}
