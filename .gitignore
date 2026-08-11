@@ -1,6 +1,7 @@
 .env
 /venv
 __pycache__/
+*.py[cod]
 
 # Source workbooks. These are ~169 MB of Excel exports and do not belong in
 # git: pushing them is what made the last push time out, and they change every
