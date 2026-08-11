@@ -1,4 +1,18 @@
 import { apiFetch } from './client'
+import type { ReferenceSet } from '@/components/ReferenceList'
+import type { ResolvedPeriod, Coverage } from '@/components/PeriodFilter'
+import type { DataNote } from '@/components/DataNotes'
+
+/** Every tab carries the same three things as the other dashboards: the window
+ *  it actually used, what its source holds, and where a figure rests on a
+ *  partly-filled column. Logistics was the one screen without them. */
+export interface TabMeta {
+  period: ResolvedPeriod
+  coverage: Coverage
+  dataNotes: DataNote[]
+  dateField: string
+  dateFieldOptions: { value: string; label: string }[]
+}
 
 /**
  * Logistics is three endpoints, not one — /dashboard/logistics/{shipments,
@@ -48,10 +62,24 @@ export interface ShipmentsFilters {
   etd_from?: string
   etd_to?: string
   search?: string
+  /** Local / Export / Not stated — the thing the tab label used to assert. */
+  order_type?: string[]
+  /** The dashboard-wide window. Omit BOTH for the current month. */
+  date_from?: string
+  date_to?: string
+  /** Which date it applies to: etd (sailing) | eta (arrival). */
+  date_field?: string
 }
 
-export interface ShipmentsResponse {
+export interface ShipmentsResponse extends TabMeta {
   kpis: ShipmentKpis
+  references: {
+    orders: ReferenceSet
+    delivered: ReferenceSet
+    not_linked: ReferenceSet
+  }
+  /** The buckets the Local/Export filter offers, including "Not stated". */
+  orderTypes: string[]
   statusSplit: LabelValue[]
   costPerKgByCountry: LabelValue[]
   statuses: string[]
@@ -67,6 +95,13 @@ export async function getShipmentsDashboard(filters: ShipmentsFilters = {}): Pro
     status_split: LabelValue[]; cost_per_kg_by_country: LabelValue[]
     statuses: string[]; stages: string[]; shipping_lines: string[]
     countries: string[]; customers: string[]
+    references: ShipmentsResponse['references']
+    order_types: string[]
+    period: ResolvedPeriod
+    coverage: Coverage
+    data_notes: DataNote[]
+    date_field: string
+    date_field_options: { value: string; label: string }[]
   } }>(`/dashboard/logistics/shipments${buildQuery(filters)}`)
   return {
     kpis: data.kpis,
@@ -77,6 +112,13 @@ export async function getShipmentsDashboard(filters: ShipmentsFilters = {}): Pro
     shippingLines: data.shipping_lines,
     countries: data.countries,
     customers: data.customers,
+    references: data.references,
+    orderTypes: data.order_types,
+    period: data.period,
+    coverage: data.coverage,
+    dataNotes: data.data_notes,
+    dateField: data.date_field,
+    dateFieldOptions: data.date_field_options,
   }
 }
 
@@ -99,10 +141,18 @@ export interface PackingFilters {
   packing_from?: string
   packing_to?: string
   search?: string
+  date_from?: string
+  date_to?: string
+  /** packed | rfd */
+  date_field?: string
 }
 
-export interface PackingResponse {
+export interface PackingResponse extends TabMeta {
   kpis: PackingKpis
+  references: {
+    packages: ReferenceSet
+    packed: ReferenceSet
+  }
   statusSplit: LabelValue[]
   byCategory: LabelValue[]
   byBusinessType: LabelValue[]
@@ -121,6 +171,12 @@ export async function getPackingDashboard(filters: PackingFilters = {}): Promise
     by_business_type: LabelValue[]; by_customer: LabelValue[]
     statuses: string[]; works: string[]; product_categories: string[]
     business_types: string[]; customers: string[]
+    references: PackingResponse['references']
+    period: ResolvedPeriod
+    coverage: Coverage
+    data_notes: DataNote[]
+    date_field: string
+    date_field_options: { value: string; label: string }[]
   } }>(`/dashboard/logistics/packing${buildQuery(filters)}`)
   return {
     kpis: data.kpis,
@@ -133,6 +189,12 @@ export async function getPackingDashboard(filters: PackingFilters = {}): Promise
     productCategories: data.product_categories,
     businessTypes: data.business_types,
     customers: data.customers,
+    references: data.references,
+    period: data.period,
+    coverage: data.coverage,
+    dataNotes: data.data_notes,
+    dateField: data.date_field,
+    dateFieldOptions: data.date_field_options,
   }
 }
 
@@ -157,10 +219,19 @@ export interface TransportFilters {
   exec_from?: string
   exec_to?: string
   search?: string
+  date_from?: string
+  date_to?: string
+  /** etd (execution) | eta (arrival at works) */
+  date_field?: string
 }
 
-export interface TransportResponse {
+export interface TransportResponse extends TabMeta {
   kpis: TransportKpis
+  references: {
+    jobs: ReferenceSet
+    delivered: ReferenceSet
+    in_progress: ReferenceSet
+  }
   statusSplit: LabelValue[]
   byMovementType: LabelValue[]
   byTransporter: LabelValue[]
@@ -168,6 +239,7 @@ export interface TransportResponse {
   byCustomer: LabelValue[]
   byProvince: LabelValue[]
   statuses: string[]
+  /** Includes "Unclassified" — 207 jobs genuinely state no movement type. */
   movementTypes: string[]
   sources: string[]
   paymentStatuses: string[]
@@ -185,6 +257,12 @@ export async function getTransportDashboard(filters: TransportFilters = {}): Pro
     statuses: string[]; movement_types: string[]; sources: string[]
     payment_statuses: string[]; transporters: string[]
     customers: string[]; provinces: string[]
+    references: TransportResponse['references']
+    period: ResolvedPeriod
+    coverage: Coverage
+    data_notes: DataNote[]
+    date_field: string
+    date_field_options: { value: string; label: string }[]
   } }>(`/dashboard/logistics/transport${buildQuery(filters)}`)
   return {
     kpis: data.kpis,
@@ -201,5 +279,11 @@ export async function getTransportDashboard(filters: TransportFilters = {}): Pro
     transporters: data.transporters,
     customers: data.customers,
     provinces: data.provinces,
+    references: data.references,
+    period: data.period,
+    coverage: data.coverage,
+    dataNotes: data.data_notes,
+    dateField: data.date_field,
+    dateFieldOptions: data.date_field_options,
   }
 }

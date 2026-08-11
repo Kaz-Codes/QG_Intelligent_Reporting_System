@@ -67,9 +67,59 @@ CHECKS = [
         "expect": "any",
     },
     {
+        "label": "Import per-line ETAs",
+        "sql": ("SELECT count(eta_works), count(*) FROM consignment_items "
+                "WHERE is_deleted = false"),
+        "why": ("dating import money by the LINE rather than by its consignment "
+                "header — 46 lines arrive in a different month from their header"),
+        "repair": "app.loading.scripts.backfill_line_eta_works",
+        "expect": "any",
+    },
+    {
         "label": "Stock ABC ranks",
         "sql": "SELECT count(*) FILTER (WHERE rank <> 'C'), count(*) FROM stock",
         "why": "the A/B classification; everything defaults to C when the AB workbook is not read",
+        "repair": None,
+        "expect": "any",
+    },
+    {
+        "label": "Logistics customer links",
+        "sql": "SELECT count(customer_id), count(*) FROM logistics_consignments",
+        "why": ("the Customer master, which is seeded FROM these orders; a "
+                "reload drops them and they must be rebuilt in the same run"),
+        "repair": "app.loading.scripts.add_customer_master",
+    },
+    {
+        "label": "Logistics export numbers",
+        "sql": ("SELECT count(*) FILTER (WHERE batch_no IS NOT NULL), count(*) "
+                "FROM logistics_consignments"),
+        "why": ("the export/batch row key that merges the shipment, packing and "
+                "documentation sheets — the workbook has renamed it before"),
+        "repair": None,
+        "expect": "any",
+    },
+    {
+        "label": "Trucking movement types",
+        "sql": ("SELECT count(movement_type), count(*) FROM trucking_consignments "
+                "WHERE is_deleted = false"),
+        "why": "the movement split; unclassified jobs fall into their own bucket",
+        "repair": None,
+        "expect": "any",
+    },
+    {
+        "label": "Intra-factory movements",
+        "sql": ("SELECT count(*) FILTER (WHERE movement_type = 'Intrafactory'), "
+                "count(*) FROM trucking_consignments WHERE is_deleted = false"),
+        "why": ("the Intra Factory Shifting sheet — a SEPARATE sheet that went "
+                "unread entirely for a long time, hiding 875 jobs"),
+        "repair": None,
+        "expect": "any",
+    },
+    {
+        "label": "Trucking shifting types",
+        "sql": ("SELECT count(shifting_type), count(*) FROM trucking_consignments "
+                "WHERE movement_type = 'Intrafactory' AND is_deleted = false"),
+        "why": "Regular / Special / Others on intra-factory moves",
         "repair": None,
         "expect": "any",
     },
@@ -84,6 +134,73 @@ CHECKS = [
         "why": "the movement and runway figures, which key on the item code",
     },
 ]
+
+
+#-----------------------------------------------------
+# A COLUMN CAN BE FULL AND STILL BE WRONG
+#
+# The coverage checks above catch an EMPTY column. They did not catch the
+# packing sheet writing bare Excel day-serials, because `pd.to_datetime` read
+# 46239 as nanoseconds and produced 1970-01-01 — 570 packing dates, all
+# populated, all the Unix epoch, and every packing figure silently describing a
+# period 56 years before the business existed.
+#
+# So dates are also checked for PLAUSIBILITY. Anything at or before 1971 is the
+# epoch leaking through, which never means what it says.
+#-----------------------------------------------------
+
+DATE_SANITY = [
+    ("logistics_packages", "packing_date"),
+    ("logistics_packages", "packing_ready_date"),
+    ("logistics_consignments", "etd_sailing_date"),
+    ("logistics_consignments", "actual_arrival_date"),
+    ("logistics_consignments", "gate_out_date"),
+    ("trucking_consignments", "execution_date"),
+    ("trucking_consignments", "eta_works"),
+    ("consignments", "eta_works"),
+    ("consignment_items", "eta_works"),
+    ("purchases_data", "po_date"),
+    ("purchases_data", "purchase"),
+    ("issuance", "from_date"),
+]
+
+
+def verify_dates():
+    """Report any date column whose values fall in the Excel-epoch trap."""
+    print()
+    print("=" * 60)
+    print("DATE PLAUSIBILITY — is any column secretly the Unix epoch?")
+    print("=" * 60)
+
+    bad = []
+    for table, column in DATE_SANITY:
+        try:
+            cursor.execute(
+                f"SELECT count(*) FILTER (WHERE {column} <= DATE '1971-01-01'), "
+                f"count({column}) FROM {table}"
+            )
+            epoch, filled = cursor.fetchone()
+        except Exception:
+            connection.rollback()
+            continue
+
+        if not filled:
+            continue
+        if epoch:
+            bad.append((table, column, epoch, filled))
+            print(f"   {table}.{column:<24} EPOCH  {epoch:>6,} of {filled:>7,}")
+
+    if not bad:
+        print("   every date column holds plausible dates.")
+        return []
+
+    print()
+    print("!" * 60)
+    print("DATES READ AS THE EPOCH — the workbook is storing Excel day-serials")
+    print("!" * 60)
+    print("   Use clean_date_any (not clean_date) on those columns: it decodes")
+    print("   a bare serial, where pd.to_datetime reads it as nanoseconds.")
+    return bad
 
 
 def _measure(check):

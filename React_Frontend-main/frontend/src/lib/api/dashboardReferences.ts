@@ -42,3 +42,11 @@ export const overviewRefPager = pagerFor('/dashboard/overview/references')
 export const importsRefPager = pagerFor('/dashboard/imports/references')
 export const purchasesRefPager = pagerFor('/dashboard/purchases/references')
 export const inventoryRefPager = pagerFor('/dashboard/inventory/references')
+
+/**
+ * Logistics is three tabs against three different sources, so its pager takes
+ * a `tab` in the query and the endpoint routes on it — one endpoint rather
+ * than three near-identical ones, and one place where the tab's filters and
+ * its reference keys have to agree.
+ */
+export const logisticsRefPager = pagerFor('/dashboard/logistics/references')

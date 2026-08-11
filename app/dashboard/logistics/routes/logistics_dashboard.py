@@ -17,6 +17,16 @@ from app.dashboard.logistics.calculations import (
 )
 from app.accounts.permissions import CAN_VIEW_LOGISTICS_DASHBOARD
 from typing import Optional
+
+from app.dashboard.period import resolve_period, serialize_period
+from app.dashboard.data_quality import coverage_note, collect
+from app.dashboard.logistics.helpers import (
+    shipments_coverage, packing_coverage, transport_coverage,
+    SHIPMENT_DATE_OPTIONS, SHIPMENT_DATE_DEFAULT,
+    PACKING_DATE_OPTIONS, PACKING_DATE_DEFAULT,
+    TRANSPORT_DATE_OPTIONS, TRANSPORT_DATE_DEFAULT,
+    NOT_STATED, UNCLASSIFIED,
+)
 from datetime import date
 
 
@@ -35,6 +45,14 @@ def shipments_dashboard(
     etd_from : Optional[date] = None,
     etd_to : Optional[date] = None,
     search : Optional[str] = None,
+    # Local against export. Its own filter rather than a hidden assumption:
+    # 392 of 745 orders do not say, so "Not stated" is a selectable bucket.
+    order_type : Optional[list[str]] = Query(None),
+    # The dashboard-wide window. Both omitted -> the current month.
+    date_from : Optional[date] = None,
+    date_to : Optional[date] = None,
+    # Which date it applies to: etd (sailing) | eta (arrival).
+    date_field : Optional[str] = None,
     ):
 
     db = SessionLocal()
@@ -42,8 +60,26 @@ def shipments_dashboard(
         authorize(authenticate(request), CAN_VIEW_LOGISTICS_DASHBOARD, db)
 
         all_orders = fetch_orders(db)
+        period_from, period_to, period_kind = resolve_period(date_from, date_to)
+
         orders = fetch_filtered_orders(
-            db, status, shipping_line, country, customer, etd_from, etd_to, search
+            db, status, shipping_line, country, customer, etd_from, etd_to, search,
+            period_from, period_to, date_field, order_type,
+        )
+
+        cover = shipments_coverage(db, period_from, period_to, date_field)
+        stated = sum(1 for o in orders if o.order_type)
+        notes = collect(
+            coverage_note(
+                cover["rows_in_period"], cover["rows_total"], "logistics orders",
+                cover["date_field"],
+                "Orders with no date in that column fall in no period at all.",
+            ),
+            coverage_note(
+                stated, len(orders), "orders in this period",
+                "a local/export type",
+                "The Local/Export filter can only narrow the ones that say.",
+            ),
         )
 
         # Stage is a derived roll-up of the status, so it is filtered here.
@@ -66,7 +102,12 @@ def shipments_dashboard(
                 customers.add(o.customer_name)
 
         data = {
-            **serialize_shipments(orders),
+            **serialize_shipments(orders, cover, notes),
+            "period": serialize_period(period_from, period_to, period_kind),
+            "date_field": date_field or SHIPMENT_DATE_DEFAULT,
+            "date_field_options": SHIPMENT_DATE_OPTIONS,
+            # A real bucket, offered alongside the values the column holds.
+            "order_types": ["Export", "Local", NOT_STATED],
             "statuses": sorted(statuses),
             "stages": SHIPMENT_STAGES,
             "shipping_lines": sorted(shipping_lines),
@@ -101,6 +142,10 @@ def packing_dashboard(
     packing_from : Optional[date] = None,
     packing_to : Optional[date] = None,
     search : Optional[str] = None,
+    date_from : Optional[date] = None,
+    date_to : Optional[date] = None,
+    # packed | rfd
+    date_field : Optional[str] = None,
     ):
 
     db = SessionLocal()
@@ -108,9 +153,27 @@ def packing_dashboard(
         authorize(authenticate(request), CAN_VIEW_LOGISTICS_DASHBOARD, db)
 
         all_packages = fetch_packages(db)
+        period_from, period_to, period_kind = resolve_period(date_from, date_to)
+
         packages = fetch_filtered_packages(
             db, status, works, product_category, business_type, customer,
             packing_from, packing_to, search,
+            period_from, period_to, date_field,
+        )
+
+        cover = packing_coverage(db, period_from, period_to, date_field)
+        costed = sum(1 for p in packages if p.actual_packing_cost)
+        notes = collect(
+            coverage_note(
+                cover["rows_in_period"], cover["rows_total"], "packages",
+                cover["date_field"],
+            ),
+            coverage_note(
+                costed, len(packages), "packages in this period",
+                "an actual packing cost",
+                "Packing savings cannot be computed without it, so it is "
+                "reported as unavailable rather than as zero.",
+            ),
         )
 
         statuses = set()
@@ -133,7 +196,10 @@ def packing_dashboard(
                     customers.add(order.customer_name)
 
         data = {
-            **serialize_packing(packages),
+            **serialize_packing(packages, cover, notes),
+            "period": serialize_period(period_from, period_to, period_kind),
+            "date_field": date_field or PACKING_DATE_DEFAULT,
+            "date_field_options": PACKING_DATE_OPTIONS,
             "statuses": sorted(statuses),
             "works": sorted(works_list),
             "product_categories": sorted(categories),
@@ -170,6 +236,10 @@ def transport_dashboard(
     exec_from : Optional[date] = None,
     exec_to : Optional[date] = None,
     search : Optional[str] = None,
+    date_from : Optional[date] = None,
+    date_to : Optional[date] = None,
+    # etd (execution) | eta (arrival at works)
+    date_field : Optional[str] = None,
     ):
 
     db = SessionLocal()
@@ -177,9 +247,31 @@ def transport_dashboard(
         authorize(authenticate(request), CAN_VIEW_LOGISTICS_DASHBOARD, db)
 
         all_jobs = fetch_trucking(db)
+        period_from, period_to, period_kind = resolve_period(date_from, date_to)
+
         jobs = fetch_filtered_trucking(
             db, movement_type, source, payment_status, transporter,
             exec_from, exec_to, search,
+            period_from, period_to, date_field,
+        )
+
+        cover = transport_coverage(db, period_from, period_to, date_field)
+        typed = sum(1 for j in jobs if j.movement_type)
+        freighted = sum(1 for j in jobs if j.actual_freight is not None)
+        notes = collect(
+            coverage_note(
+                cover["rows_in_period"], cover["rows_total"], "trucking jobs",
+                cover["date_field"],
+            ),
+            coverage_note(
+                typed, len(jobs), "jobs in this period", "a movement type",
+                "Those sit in the Unclassified bucket rather than being folded "
+                "into Inbound or Outbound, which cannot be inferred.",
+            ),
+            coverage_note(
+                freighted, len(jobs), "jobs in this period", "a freight figure",
+                "Cost totals cover only the jobs that recorded one.",
+            ),
         )
 
         # customer / city / province are resolved from the linked logistics
@@ -220,9 +312,17 @@ def transport_dashboard(
                 provinces.add(p)
 
         data = {
-            **serialize_transport(jobs, links),
+            **serialize_transport(jobs, links, cover, notes),
+            "period": serialize_period(period_from, period_to, period_kind),
+            "date_field": date_field or TRANSPORT_DATE_DEFAULT,
+            "date_field_options": TRANSPORT_DATE_OPTIONS,
+            # Offered as a selectable bucket: 207 jobs genuinely say nothing,
+            # and there is no way to tell which way they went.
+
             "statuses": TRANSPORT_STATUSES,
-            "movement_types": sorted(movement_types),
+            # The values present, PLUS the bucket for the 207 jobs that state
+            # no movement type — a real answer, and selectable as one.
+            "movement_types": sorted(movement_types) + [UNCLASSIFIED],
             "sources": sorted(sources),
             "payment_statuses": sorted(payment_statuses),
             "transporters": sorted(transporters),

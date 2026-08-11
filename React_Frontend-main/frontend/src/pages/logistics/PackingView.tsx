@@ -11,6 +11,11 @@ import { CategoryBar } from '@/components/charts/CategoryBar'
 import { Donut } from '@/components/charts/Donut'
 import { RankedBar } from '@/components/charts/RankedBar'
 import { money } from '@/lib/format'
+import { PeriodFilter, PeriodSummary, EMPTY_PERIOD, type Period } from '@/components/PeriodFilter'
+import { DataNotes } from '@/components/DataNotes'
+import { Label } from '@/components/ui/label'
+import { LOGISTICS_HELP } from '@/lib/metricHelp'
+import { logisticsRefPager } from '@/lib/api/dashboardReferences'
 import { useDebounced } from '@/lib/useDebounced'
 import { usePackingDashboard } from '@/lib/api/useLogisticsDashboard'
 
@@ -31,6 +36,10 @@ export function PackingView() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [search, setSearch] = useState('')
+  // Empty = this month, resolved by the backend.
+  const [period, setPeriod] = useState<Period>(EMPTY_PERIOD)
+  // Packed, or ready-for-dispatch — two real events with two different dates.
+  const [dateField, setDateField] = useState('packed')
   const [tab, setTab] = useState<(typeof TABS)[number]['value']>('status')
 
   const debouncedSearch = useDebounced(search)
@@ -39,12 +48,52 @@ export function PackingView() {
     status, works, product_category: productCategory, business_type: businessType, customer,
     packing_from: dateFrom || undefined, packing_to: dateTo || undefined,
     search: debouncedSearch.trim() || undefined,
+    date_from: period.from || undefined,
+    date_to: period.to || undefined,
+    date_field: dateField,
+  })
+
+  const refs = data?.references
+
+  const pager = (key: string) => logisticsRefPager(key, {
+    tab: 'packing',
+    status, works, product_category: productCategory, business_type: businessType,
+    customer, packing_from: dateFrom, packing_to: dateTo,
+    search: debouncedSearch.trim(),
+    date_from: period.from, date_to: period.to, date_field: dateField,
   })
 
   const kpis = data?.kpis
 
   return (
     <div className="flex flex-col gap-6">
+      {/* The window, and which date it means — the same control, wording and
+          "jump to the latest month with data" as every other dashboard. */}
+      <div className="rounded-xl border border-line bg-surface p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <PeriodFilter period={period} onChange={setPeriod} range={data?.coverage}
+            label="Reporting period" />
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="packing-date-field" className="text-xs">Filter on</Label>
+            <select
+              id="packing-date-field"
+              value={dateField}
+              onChange={(e) => setDateField(e.target.value)}
+              className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+            >
+              {(data?.dateFieldOptions ?? []).map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {data && (
+          <div className="mt-3">
+            <PeriodSummary period={data.period} coverage={data.coverage} onJumpToLatest={setPeriod} />
+          </div>
+        )}
+      </div>
+
       <FilterBar search={{ value: search, onChange: setSearch, placeholder: 'Search by customer, job no, or product category…' }}>
         <DateRangeFilter label="Packing Date" from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
         <MultiSelectFilter label="Customer" options={data?.customers ?? []} value={customer} onChange={setCustomer} />
@@ -63,18 +112,27 @@ export function PackingView() {
 
       <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && (
+      {data && kpis && refs && (
         <>
+          {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
+
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-            <KpiCard label="Packing Jobs Shown" value={kpis.packing_jobs_shown.toLocaleString()} />
-            <KpiCard label="Packed" value={`${kpis.packed}`} direction={kpis.packed ? 'up' : null} goodWhen="up" />
+            <KpiCard label="Packages" value={kpis.packing_jobs_shown.toLocaleString()}
+              refs={refs.packages} fetchRefs={pager('packages')}
+              help={LOGISTICS_HELP.packages} />
+            <KpiCard label="Packed" value={`${kpis.packed}`}
+              direction={kpis.packed ? 'up' : null} goodWhen="up"
+              refs={refs.packed} fetchRefs={pager('packed')}
+              help={LOGISTICS_HELP.packed} />
             <KpiCard
               label="Avg RFD Delay"
               value={kpis.avg_rfd_delay_days != null ? `${kpis.avg_rfd_delay_days.toFixed(1)} days` : '—'}
               direction={kpis.avg_rfd_delay_days != null && kpis.avg_rfd_delay_days > 0 ? 'up' : null}
               goodWhen="down"
             />
-            <KpiCard label="Total Packing Cost" value={money(kpis.total_cost)} />
+            <KpiCard label="Total Packing Cost" value={money(kpis.total_cost)}
+              refs={refs.packages} fetchRefs={pager('packages')}
+              help={LOGISTICS_HELP.packingCost} />
             <KpiCard label="Product Categories" value={`${kpis.categories}`} />
           </div>
 
