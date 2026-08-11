@@ -246,12 +246,12 @@ logistics_consignments(id PK, order_type, department, origin_country,
     NUMBER and batch_label the batch - together they identify the order in the
     business's own language.
     current_status - THE SEVEN VALUES THAT ACTUALLY EXIST, with live counts:
-        'Under Production' 584 | 'Under Packing' 465 | 'Transportation' 212
+        The live values and counts are in the profile block - do NOT rely
         'Delivered' 111 | 'On Water' 38 | 'At QFL' 10 | 'At Port' 4
     There is NO 'Sailing', NO 'Gate Out' and NO 'Packed' in this column - those
     are the ERP's enum names, not what the loaders wrote. Filtering on them
     returns 0 rows and no error. Not-yet-shipped is 'Under Production' /
-    'Under Packing'; shipped-not-arrived is 'Transportation' / 'On Water';
+    'Under Packing'; shipped-not-arrived is whatever remains after those;
     arrived-not-closed is 'At Port' / 'At QFL' - THESE COUNT AS ARRIVED, NOT
     in transit (business rule); closed is 'Delivered'.
     The cost columns are the export expenditure breakdown; total shipping cost
@@ -378,7 +378,8 @@ literal label saying which side each row came from:
            lc.etd_sailing_date, lc.actual_arrival_date
     FROM logistics_consignments lc
     WHERE lc.is_deleted = false
-      AND lc.current_status IN ('Transportation', 'On Water')
+      AND lc.current_status NOT IN ('Under Production', 'Under Packing',
+                                    'At Port', 'At QFL', 'Delivered')
     UNION ALL
     SELECT 'Road', tc.id, tc.reference_no, tc.customer_name, 'Going to load',
            tc.created_at::date, NULL
@@ -398,7 +399,8 @@ literal label saying which side each row came from:
              AND li.is_deleted = false
             WHERE lc.is_deleted = false
               AND li.item_detail ~* '[[:<:]]shafts?[[:>:]]'
-              AND lc.current_status IN ('Transportation', 'On Water')
+              AND lc.current_status NOT IN ('Under Production', 'Under Packing',
+                                    'At Port', 'At QFL', 'Delivered')
             ...same for the imports and road arms...
         ) t
 
@@ -409,7 +411,7 @@ literal label saying which side each row came from:
 
     The trap is answering from ONE side and reporting it as the whole picture.
     NO STATUS STRING EXISTS ON MORE THAN ONE SIDE. Inbound says 'In Transit';
-    outbound says 'Transportation' / 'On Water'; road says 'Going to load'.
+    outbound uses its own set (see the profile); road says 'Going to load'.
     Filtering all three on one vocabulary returns 0 from the other two and
     reports it as an answer.
 

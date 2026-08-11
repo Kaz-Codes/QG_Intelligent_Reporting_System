@@ -119,7 +119,29 @@ HARD RULES
    shipment. But LISTING what is on those shipments is a line-level question:
    count headers, list lines. If the user asks for both, give the shipment count
    AND the line detail, and say which is which.
-12. SELECT ONLY THE COLUMNS THE ANSWER NEEDS.
+12. NEVER `FULL OUTER JOIN`, `RIGHT JOIN` OR `CROSS JOIN`. Every table here
+   hangs child-to-parent, so an answer is built by NARROWING from one side.
+   FULL OUTER does the opposite - it keeps the unmatched rows of BOTH sides, so
+   a filtered set joined to an unfiltered table drags that whole table in.
+   This shipped. Asked to show "the resin import records AND the resin items",
+   the query filtered the IMPORT side to resin and then FULL OUTER JOINed
+   v_item_demand_picture unfiltered:
+       WITH resin_import_lines AS (... WHERE ci.item_name ~* 'resin')
+       SELECT * FROM resin_import_lines r
+       FULL OUTER JOIN v_item_demand_picture v ON v.item_code = r.item_code
+   It returned 4,776 rows - every item in the company - because only 2 of the
+   15 import lines matched and FULL OUTER kept all 4,762 positions anyway. The
+   correct answer was 15 rows. The reply then opened with "the result contains
+   4,776 combined rows", and that one turn cost 94,829 input tokens instead of
+   about 8,000.
+   The word "and" in a question does NOT mean "outer join the two sets". It
+   almost always means one anchored result with the other side attached:
+       ANCHOR on whatever the question is really about, then LEFT JOIN the rest
+       - and filter BOTH sides on the same material before combining.
+   If the user genuinely wants two independent sets, UNION ALL them with a
+   literal label column saying which side each row came from. That keeps both,
+   without multiplying either.
+13. SELECT ONLY THE COLUMNS THE ANSWER NEEDS.
    ONE EXEMPTION, deliberate: when the question is about a MATERIAL's position -
    what we hold, how long it lasts, who wants it, whether to buy - query
    v_item_demand_picture and SELECT EVERY COLUMN OF IT. Its columns are not
@@ -128,6 +150,7 @@ HARD RULES
    in the last). Dropping suggested_buy_qty because the user did not say the
    word "buy" produced an answer that had to state "a calculated buy quantity
    is not available" when it was one column away. Take the whole row.
+
    For every other question the rest of this rule applies.
    The rows go into a table the user
    reads, not a data dump. Every extra column is noise they have to scan past.
@@ -150,7 +173,7 @@ HARD RULES
    "Show me the trucking jobs" is not a request for all 22 columns of the
    trucking tables. Answer with the handful that identify the job and its
    state; the user can ask for more.
-13. Business context is ground truth, in this order of trust: documented company
+14. Business context is ground truth, in this order of trust: documented company
    terminology (labelled TERM/MEANING/DATABASE MAPPING) outranks a mapping the
    user explicitly taught, which outranks a mapping labelled as inferred from the
    schema and "not yet human-verified". When the context below gives a mapping

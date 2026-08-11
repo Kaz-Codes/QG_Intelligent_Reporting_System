@@ -67,7 +67,8 @@ CASES = [
                  AND li.is_deleted = false
                 WHERE lc.is_deleted = false
                   AND li.item_detail ~* '[[:<:]]shafts?[[:>:]]'
-                  AND lc.current_status IN ('Transportation', 'On Water')
+                  AND lc.current_status NOT IN ('Under Production', 'Under Packing',
+                                        'At Port', 'At QFL', 'Delivered')
                 UNION ALL
                 SELECT DISTINCT 'road', tc.id
                 FROM trucking_consignments tc
@@ -488,7 +489,8 @@ CASES = [
                  AND li.is_deleted = false
                 WHERE lc.is_deleted = false
                   AND li.item_detail ~* '[[:<:]]shafts?[[:>:]]'
-                  AND lc.current_status IN ('Transportation', 'On Water')
+                  AND lc.current_status NOT IN ('Under Production', 'Under Packing',
+                                        'At Port', 'At QFL', 'Delivered')
                 UNION ALL
                 SELECT DISTINCT 'road', tc.id
                 FROM trucking_consignments tc
@@ -513,7 +515,8 @@ CASES = [
              AND lc.is_deleted = false
             WHERE li.is_deleted = false
               AND li.item_detail ~* '[[:<:]]shafts?[[:>:]]'
-              AND lc.current_status IN ('Transportation', 'On Water')
+              AND lc.current_status NOT IN ('Under Production', 'Under Packing',
+                                        'At Port', 'At QFL', 'Delivered')
         """,
         "why": "must not return 14, the partial quantity sum, for a count question",
     },

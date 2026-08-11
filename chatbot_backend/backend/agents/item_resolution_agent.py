@@ -308,6 +308,104 @@ def _all_note(item_name: str, codes: List[str]) -> str:
     )
 
 
+def _position_note(item_name: str, codes=None) -> str:
+    """The item's standing position, formatted for the answer.
+
+    Read straight from v_item_demand_picture, which is one row per item_code.
+    Returns "" on any problem - a missing position note must never cost the user
+    their actual answer.
+    """
+    try:
+        from sqlalchemy import text
+
+        from backend.config import get_engine
+
+        where, params = "", {}
+        if codes:
+            where = "WHERE item_code = ANY(:codes)"
+            params["codes"] = list(codes)
+        elif item_name:
+            where = "WHERE item_name ~* :pat"
+            params["pat"] = r"[[:<:]]" + re.escape(item_name.strip()) + r"s?[[:>:]]"
+        else:
+            return ""
+
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT item_code, item_name, available_qty, issued_qty_3m,
+                           issued_since, data_through, days_of_cover,
+                           open_demand_qty, open_requisitions, demand_statuses,
+                           demand_overdue, earliest_required_date,
+                           incoming_qty, earliest_eta, incoming_statuses,
+                           suggested_buy_qty, rank
+                    FROM v_item_demand_picture
+                    {where}
+                    ORDER BY available_qty DESC NULLS LAST
+                    LIMIT 6
+                    """
+                ),
+                params,
+            ).mappings().all()
+    except Exception:
+        return ""
+
+    if not rows:
+        return ""
+
+    lines = [
+        f"STANDING POSITION for '{item_name}' - state these BESIDE the answer to "
+        f"the question that was actually asked, in the lens each belongs to. Do "
+        f"NOT let them replace that answer, and do not repeat them as a table:",
+    ]
+    for r in rows:
+        bits = [f"  {r['item_name']} ({r['item_code']})"]
+        bits.append(f"    stock now: {r['available_qty']}")
+        if r["issued_qty_3m"] is not None:
+            bits.append(
+                f"    issued since {r['issued_since']}: {r['issued_qty_3m']}"
+                f" (issuance data runs to {r['data_through']})"
+            )
+        bits.append(
+            f"    days of cover: {r['days_of_cover'] if r['days_of_cover'] is not None else 'not measurable - no issues in 3 months'}"
+        )
+        if r["open_demand_qty"]:
+            over = " OVERDUE" if r["demand_overdue"] else ""
+            bits.append(
+                f"    open demand: {r['open_demand_qty']} across "
+                f"{r['open_requisitions']} requisition(s) [{r['demand_statuses']}]"
+                f" required by {r['earliest_required_date']}{over}"
+            )
+        else:
+            bits.append("    open demand: none")
+        if r["incoming_qty"]:
+            bits.append(
+                f"    inbound: {r['incoming_qty']} , earliest ETA "
+                f"{r['earliest_eta']} [{r['incoming_statuses']}]"
+            )
+        else:
+            bits.append("    inbound: nothing on the way")
+        bits.append(
+            f"    shortfall to buy: {r['suggested_buy_qty']}"
+            " (committed demand only, no safety stock is set)"
+        )
+        if r["rank"]:
+            bits.append(f"    ABC rank: {r['rank']}")
+        lines.append("\n".join(bits))
+    return "\n".join(lines)
+
+
+def _with_position(notes, item_name, codes=None):
+    """Append the standing position to whatever notes this path produced.
+
+    Every return path goes through here so none can quietly ship without the
+    figures the user expects beside an item answer.
+    """
+    note = _position_note(item_name, codes)
+    return [*notes, note] if note else list(notes)
+
+
 def item_resolution_agent(state: dict) -> dict:
     if state.get("route") != "data":
         return {}
@@ -330,7 +428,7 @@ def item_resolution_agent(state: dict) -> dict:
         str((entities.get("metric") or "")),
         state.get("intent", ""),
     ):
-        return {"item_context": [_category_note(item_name)]}
+        return {"item_context": _with_position([_category_note(item_name)], item_name)}
 
     lookup = find_items_by_name(item_name)
     candidates = lookup["rows"]
@@ -362,7 +460,7 @@ def item_resolution_agent(state: dict) -> dict:
     # contain the literal plural, so the tie-break below would auto-pin it and
     # filter the whole question down to Cast Iron Scrap.
     if not truncated and _looks_like_category(item_name, candidates):
-        return {"item_context": [_category_note(item_name)]}
+        return {"item_context": _with_position([_category_note(item_name)], item_name)}
 
     # The user may have ALREADY identified the item by including its spec
     # ("resin a85"). If one candidate matches what they typed more completely
@@ -374,7 +472,7 @@ def item_resolution_agent(state: dict) -> dict:
             return {
                 # _auto_note, not _pin_note: we inferred this, the user never
                 # saw it, and the SQL agent must be able to override it.
-                "item_context": [_auto_note(item_name, [best[0]["item_code"]])],
+                "item_context": _with_position([_auto_note(item_name, [best[0]["item_code"]])], item_name, [best[0]["item_code"]]),
                 "entities": {**entities, "item_code": best[0]["item_code"]},
             }
         # A clear top tier that is smaller than the full set still narrows the
@@ -417,12 +515,12 @@ def item_resolution_agent(state: dict) -> dict:
     if selection is not None:
         all_of_them, codes = selection
         if all_of_them:
-            return {"item_context": [_all_note(item_name, sorted(valid_codes))]}
+            return {"item_context": _with_position([_all_note(item_name, sorted(valid_codes))], item_name, sorted(valid_codes))}
         if codes:
             resolved = {**entities}
             if len(codes) == 1:
                 resolved["item_code"] = codes[0]
-            return {"item_context": [_pin_note(item_name, codes)], "entities": resolved}
+            return {"item_context": _with_position([_pin_note(item_name, codes)], item_name, codes), "entities": resolved}
 
     # POSITION QUESTIONS DO NOT NEED A CHOICE. "how much lime stone do we have",
     # "days of cover for X", "should we buy more X" are answered per item_code

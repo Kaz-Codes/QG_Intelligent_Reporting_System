@@ -343,6 +343,20 @@ recent AS (
       AND i.from_date >= w.win_start
     GROUP BY i.item_code
 ),
+-- A FULL YEAR drives the cover figure. Three months is too short a base: a
+-- quiet quarter sent Resin Sand to 3,001.9 days (8.2 years) off 31 kg, where a
+-- year of issuance puts it at 245. A year also spans seasonality, so a
+-- seasonal item does not look critical or comfortable purely by when it is
+-- asked about.
+yearly AS (
+    SELECT i.item_code,
+           SUM(COALESCE(i.quantity, 0))            AS issued_qty_12m,
+           COUNT(*)                                AS issue_lines_12m
+    FROM issuance i
+    WHERE i.status = 'Issue'
+      AND i.from_date >= (CURRENT_DATE - INTERVAL '12 months')
+    GROUP BY i.item_code
+),
 demand AS (
     SELECT sr.item_code,
            SUM(COALESCE(sr.pending_quantity, 0))   AS open_demand_qty,
@@ -411,22 +425,20 @@ SELECT p.item_code,
        w.win_start                                 AS issued_since,
        w.data_through,
 
-       -- Daily burn over the days in the window that could hold data.
-       ROUND(
-           COALESCE(r.issued_qty_3m, 0)
-           / GREATEST(1, LEAST(w.win_end, w.data_through) - w.win_start)::numeric,
-           4
-       )                                           AS daily_burn,
+       COALESCE(y.issued_qty_12m, 0)               AS issued_qty_12m,
+       COALESCE(y.issue_lines_12m, 0)              AS issue_lines_12m,
+
+       -- The business's formula: a year's issuance spread over 365 days.
+       ROUND(COALESCE(y.issued_qty_12m, 0) / 365.0, 4) AS daily_burn,
 
        -- NULL, not infinity, when nothing has been issued: "we cannot tell"
        -- is the honest answer, and a made-up large number reads as comfort.
+       -- STOCK DAYS = stock in hand / (yearly issuance / 365).
+       -- NULL, never infinity, when nothing moved in a year: "we cannot tell"
+       -- is the honest answer, and a huge number reads as comfort.
        CASE
-           WHEN COALESCE(r.issued_qty_3m, 0) <= 0 THEN NULL
-           ELSE ROUND(
-               p.available_qty
-               / (COALESCE(r.issued_qty_3m, 0)
-                  / GREATEST(1, LEAST(w.win_end, w.data_through) - w.win_start)::numeric),
-               1)
+           WHEN COALESCE(y.issued_qty_12m, 0) <= 0 THEN NULL
+           ELSE ROUND(p.available_qty / (y.issued_qty_12m / 365.0), 1)
        END                                         AS days_of_cover,
 
        COALESCE(d.open_demand_qty, 0)              AS open_demand_qty,
@@ -450,5 +462,6 @@ SELECT p.item_code,
 FROM v_item_stock_position p
 CROSS JOIN win w
 LEFT JOIN recent   r ON r.item_code = p.item_code
+LEFT JOIN yearly   y ON y.item_code = p.item_code
 LEFT JOIN demand   d ON d.item_code = p.item_code
 LEFT JOIN incoming i ON i.item_code = p.item_code;

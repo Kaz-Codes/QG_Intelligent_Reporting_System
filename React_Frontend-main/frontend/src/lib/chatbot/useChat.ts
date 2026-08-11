@@ -13,7 +13,10 @@ const THREAD_STORAGE_KEY = 'qgirs-chatbot-thread-id'
 let messageSeq = 0
 const nextId = () => `m${Date.now()}-${messageSeq++}`
 
-export function useChat() {
+// Renamed from useChat: this is the IMPLEMENTATION, called exactly once by
+// ChatProvider. Components consume it through useChat() from ChatProvider,
+// which is mounted above the router so navigation cannot unmount it.
+export function useChatState() {
   const [messages, setMessages] = useState<AssistantMessage[]>([])
   const [threadId, setThreadId] = useState<string | null>(
     () => window.localStorage.getItem(THREAD_STORAGE_KEY) || null,

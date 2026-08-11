@@ -5,7 +5,7 @@ import { AssistantDataTable } from '@/components/assistant/AssistantDataTable'
 import { AssistantMarkdown } from '@/components/assistant/AssistantMarkdown'
 import { ClarifyOptions } from '@/components/assistant/ClarifyOptions'
 import { DevDetailsPanel } from '@/components/assistant/DevDetailsPanel'
-import { useChat } from '@/lib/chatbot/useChat'
+import { useChat } from '@/lib/chatbot/ChatProvider'
 import { useChatHealth } from '@/lib/chatbot/useHealth'
 import type { AssistantMessage } from '@/lib/chatbot/types'
 // Tightly cropped from qadri_logo_transparent.webp — that source has ~75px
