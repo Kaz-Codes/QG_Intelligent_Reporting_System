@@ -1,5 +1,5 @@
 {
-  "fingerprint": "items:27747:2026-08-11 12:10:17.368082+05:00|suppliers:65:2026-08-11 12:11:23.281565+05:00|branches:4:2026-08-11 12:11:23.645328+05:00|ports:24:2026-08-11 12:11:24.310247+05:00|clearing_agents:5:2026-08-11 12:11:23.989430+05:00|stock:6070:|issuance:245094:|store_requisition:7075:|purchases_data:65520:|consignments:178:2026-08-11 12:11:24.591880+05:00|consignment_items:450:2026-08-11 12:11:24.976948+05:00|payments:0:|logistics_consignments:0:|logistics_items:0:|logistics_packages:0:|logistics_containers:0:|trucking_consignments:494:2026-08-11 12:11:26.424533+05:00|trucking_vehicles:592:2026-08-11 12:11:26.756751+05:00",
+  "fingerprint": "items:27747:2026-08-11 12:56:07.109811+05:00|suppliers:65:2026-08-11 12:57:15.987928+05:00|branches:4:2026-08-11 12:57:16.287517+05:00|ports:24:2026-08-11 12:57:17.086895+05:00|clearing_agents:5:2026-08-11 12:57:16.716996+05:00|customers:188:2026-08-11 12:57:21.408830+05:00|stock:6070:|issuance:245094:|store_requisition:7075:|purchases_data:65520:|consignments:178:2026-08-11 12:57:17.486297+05:00|consignment_items:450:2026-08-11 12:57:17.872838+05:00|payments:0:|logistics_consignments:745:2026-08-11 12:57:17.974461+05:00|logistics_items:711:2026-08-11 12:57:19.595634+05:00|logistics_packages:678:2026-08-11 12:57:19.646356+05:00|logistics_containers:54:2026-08-11 12:57:19.721556+05:00|trucking_consignments:1369:2026-08-11 12:57:19.737810+05:00|trucking_vehicles:1467:2026-08-11 12:57:20.471313+05:00",
   "tables": {
     "items": {
       "rows": 27747,
@@ -437,6 +437,11 @@
           }
         ]
       },
+      "patchy": {}
+    },
+    "customers": {
+      "rows": 188,
+      "vocabularies": {},
       "patchy": {}
     },
     "stock": {
@@ -1262,29 +1267,282 @@
       "patchy": {}
     },
     "logistics_consignments": {
-      "rows": 0,
-      "vocabularies": {},
-      "patchy": {}
+      "rows": 745,
+      "vocabularies": {
+        "order_type": [
+          {
+            "value": "Export",
+            "rows": 346
+          },
+          {
+            "value": "Local",
+            "rows": 7
+          }
+        ],
+        "department": [
+          {
+            "value": "Sugar",
+            "rows": 76
+          },
+          {
+            "value": "Cement",
+            "rows": 40
+          },
+          {
+            "value": "G.I Floor Mills",
+            "rows": 1
+          }
+        ],
+        "job_kind": [
+          {
+            "value": "standard",
+            "rows": 745
+          }
+        ],
+        "incoterm": [
+          {
+            "value": "CFR",
+            "rows": 112
+          },
+          {
+            "value": "CIF",
+            "rows": 59
+          },
+          {
+            "value": "FOB",
+            "rows": 49
+          }
+        ],
+        "clearing_agent": [
+          {
+            "value": "Broco",
+            "rows": 84
+          },
+          {
+            "value": "H & H",
+            "rows": 83
+          },
+          {
+            "value": "H&H",
+            "rows": 39
+          },
+          {
+            "value": "Raaziq",
+            "rows": 8
+          },
+          {
+            "value": "Port Link",
+            "rows": 4
+          },
+          {
+            "value": ".",
+            "rows": 3
+          },
+          {
+            "value": "Eastern",
+            "rows": 3
+          },
+          {
+            "value": "DSV",
+            "rows": 3
+          },
+          {
+            "value": "AIG",
+            "rows": 2
+          },
+          {
+            "value": "Eastern Freigher",
+            "rows": 2
+          },
+          {
+            "value": "DLI",
+            "rows": 1
+          },
+          {
+            "value": "CEVA",
+            "rows": 1
+          },
+          {
+            "value": "Hapag Llyod",
+            "rows": 1
+          },
+          {
+            "value": "EASTERN",
+            "rows": 1
+          },
+          {
+            "value": "CFWW",
+            "rows": 1
+          },
+          {
+            "value": "HAPAG LLYOD",
+            "rows": 1
+          },
+          {
+            "value": "FOB",
+            "rows": 1
+          }
+        ],
+        "current_status": [
+          {
+            "value": "Under Packing",
+            "rows": 422
+          },
+          {
+            "value": "Under Production",
+            "rows": 133
+          },
+          {
+            "value": "Delivered",
+            "rows": 131
+          },
+          {
+            "value": "On Water",
+            "rows": 50
+          },
+          {
+            "value": "At QFL",
+            "rows": 9
+          }
+        ],
+        "record_state": [
+          {
+            "value": "draft",
+            "rows": 614
+          },
+          {
+            "value": "submitted",
+            "rows": 131
+          }
+        ]
+      },
+      "patchy": {
+        "batch_no": 0.2792,
+        "packing_cost": 0.157,
+        "transportation_charges": 0.0,
+        "container_detention": 0.0,
+        "insurance": 0.0161,
+        "trucking_lhr_to_khi": 0.145,
+        "fumigation_cost": 0.0805,
+        "lashing": 0.0926,
+        "qfl_charges": 0.1463,
+        "qfl_container_movement": 0.106,
+        "custom_clearance_charges": 0.1047,
+        "port_charges": 0.1034,
+        "dhl_charges": 0.0215,
+        "sea_air_freight": 0.1168
+      }
     },
     "logistics_items": {
-      "rows": 0,
+      "rows": 711,
       "vocabularies": {},
-      "patchy": {}
+      "patchy": {
+        "unit_weight": 0.0,
+        "gross_weight": 0.9156
+      }
     },
     "logistics_packages": {
-      "rows": 0,
-      "vocabularies": {},
-      "patchy": {}
+      "rows": 678,
+      "vocabularies": {
+        "packing_works": [
+          {
+            "value": "QEN",
+            "rows": 431
+          },
+          {
+            "value": "QE",
+            "rows": 181
+          },
+          {
+            "value": "QCL",
+            "rows": 42
+          },
+          {
+            "value": "QE/QEN",
+            "rows": 5
+          },
+          {
+            "value": "QCL/QE",
+            "rows": 5
+          },
+          {
+            "value": "QEN/QE",
+            "rows": 5
+          },
+          {
+            "value": "QE/QCL",
+            "rows": 2
+          },
+          {
+            "value": "QE / QCL",
+            "rows": 2
+          },
+          {
+            "value": "IOL",
+            "rows": 1
+          },
+          {
+            "value": "QE+QEN",
+            "rows": 1
+          },
+          {
+            "value": "QE/ QBL-1",
+            "rows": 1
+          },
+          {
+            "value": "QEN+QE",
+            "rows": 1
+          },
+          {
+            "value": "QFL",
+            "rows": 1
+          }
+        ],
+        "status": [
+          {
+            "value": "Packed",
+            "rows": 592
+          },
+          {
+            "value": "Packing under manufacturing",
+            "rows": 78
+          },
+          {
+            "value": "Under Packing",
+            "rows": 8
+          }
+        ]
+      },
+      "patchy": {
+        "quoted_packing_cost": 0.0428,
+        "actual_packing_cost": 0.0,
+        "gross_weight": 0.9115
+      }
     },
     "logistics_containers": {
-      "rows": 0,
-      "vocabularies": {},
+      "rows": 54,
+      "vocabularies": {
+        "container_type": [
+          {
+            "value": "LCL",
+            "rows": 51
+          },
+          {
+            "value": "AIR",
+            "rows": 3
+          }
+        ]
+      },
       "patchy": {}
     },
     "trucking_consignments": {
-      "rows": 494,
+      "rows": 1369,
       "vocabularies": {
         "movement_type": [
+          {
+            "value": "Intrafactory",
+            "rows": 875
+          },
           {
             "value": "Outbound",
             "rows": 214
@@ -1297,7 +1555,7 @@
         "source": [
           {
             "value": "manual",
-            "rows": 374
+            "rows": 1249
           },
           {
             "value": "from-import-fob",
@@ -1307,11 +1565,15 @@
         "transporter_name": [
           {
             "value": "Dream Line",
-            "rows": 78
+            "rows": 894
           },
           {
             "value": "Inland Goods",
-            "rows": 42
+            "rows": 48
+          },
+          {
+            "value": "Naveed Sabir",
+            "rows": 38
           },
           {
             "value": "Ittefaq Shalmani",
@@ -1335,15 +1597,19 @@
           },
           {
             "value": "Manj Goods",
-            "rows": 10
+            "rows": 13
           },
           {
             "value": "Taqwa Goods",
-            "rows": 10
+            "rows": 13
           },
           {
             "value": "Waqas Goods",
             "rows": 6
+          },
+          {
+            "value": "In Land",
+            "rows": 5
           },
           {
             "value": "Builty",
@@ -1354,7 +1620,7 @@
             "rows": 3
           },
           {
-            "value": "Dream line",
+            "value": "Imran Taj",
             "rows": 2
           },
           {
@@ -1362,19 +1628,27 @@
             "rows": 2
           },
           {
-            "value": "M.N Sulehri Goods",
-            "rows": 1
+            "value": "Dream line",
+            "rows": 2
           },
           {
             "value": "Sheikh Logistics",
             "rows": 1
           },
           {
-            "value": "Broco Logistics",
+            "value": "Imran Trolley",
             "rows": 1
           },
           {
             "value": "New Karachi Hazara",
+            "rows": 1
+          },
+          {
+            "value": "M.N Sulehri Goods",
+            "rows": 1
+          },
+          {
+            "value": "Broco Logistics",
             "rows": 1
           },
           {
@@ -1384,39 +1658,81 @@
           {
             "value": "N.Sulehri Goods",
             "rows": 1
+          },
+          {
+            "value": "Imdad Goods",
+            "rows": 1
+          }
+        ],
+        "shifting_type": [
+          {
+            "value": "Regular",
+            "rows": 710
+          },
+          {
+            "value": "Others",
+            "rows": 92
+          },
+          {
+            "value": "Special",
+            "rows": 73
           }
         ],
         "pickup": [
           {
             "value": "QEN",
-            "rows": 220
+            "rows": 361
           },
           {
             "value": "QE",
-            "rows": 81
+            "rows": 316
           },
           {
             "value": "QCL",
-            "rows": 16
+            "rows": 242
+          },
+          {
+            "value": "QBL-II",
+            "rows": 171
+          },
+          {
+            "value": "QBL-I",
+            "rows": 75
+          },
+          {
+            "value": "Ravi Tech",
+            "rows": 7
+          },
+          {
+            "value": "Mak Engineering",
+            "rows": 5
+          },
+          {
+            "value": "QE-II",
+            "rows": 3
+          },
+          {
+            "value": "Butt Steels",
+            "rows": 2
           },
           {
             "value": "QE/QEN",
             "rows": 2
           },
           {
-            "value": "QBL-I",
-            "rows": 1
+            "value": "Naseer Engineering",
+            "rows": 2
           },
           {
-            "value": "QBL-II",
-            "rows": 1
-          },
-          {
-            "value": "QEN / QE",
-            "rows": 1
+            "value": "Nazeer Eng",
+            "rows": 2
           },
           {
             "value": "Tapal Enterprises",
+            "rows": 1
+          },
+          {
+            "value": "Sitara Chemical",
             "rows": 1
           },
           {
@@ -1424,7 +1740,39 @@
             "rows": 1
           },
           {
-            "value": "QE-II",
+            "value": "Ppular Engineering",
+            "rows": 1
+          },
+          {
+            "value": "Popular Engineering",
+            "rows": 1
+          },
+          {
+            "value": "VC Department",
+            "rows": 1
+          },
+          {
+            "value": "Misri Shah",
+            "rows": 1
+          },
+          {
+            "value": "Model Press",
+            "rows": 1
+          },
+          {
+            "value": "QBL-I / QE",
+            "rows": 1
+          },
+          {
+            "value": "Langar Hayat",
+            "rows": 1
+          },
+          {
+            "value": "QBL-iI",
+            "rows": 1
+          },
+          {
+            "value": "QEN / QE",
             "rows": 1
           }
         ],
@@ -1442,10 +1790,24 @@
             "rows": 2
           }
         ],
+        "remarks": [
+          {
+            "value": "Half Builty",
+            "rows": 6
+          },
+          {
+            "value": "65000/- Rent Decided by Muneeb",
+            "rows": 1
+          },
+          {
+            "value": "Overwidth",
+            "rows": 1
+          }
+        ],
         "record_state": [
           {
             "value": "submitted",
-            "rows": 263
+            "rows": 1138
           },
           {
             "value": "draft",
@@ -1454,105 +1816,15 @@
         ]
       },
       "patchy": {
-        "quoted_freight": 0.5506,
-        "actual_freight": 0.5769,
+        "quoted_freight": 0.1987,
+        "actual_freight": 0.8283,
         "paid_amount": 0.0,
-        "detention": 0.081
+        "detention": 0.0292
       }
     },
     "trucking_vehicles": {
-      "rows": 592,
+      "rows": 1467,
       "vocabularies": {
-        "vehicle_type": [
-          {
-            "value": "40' Flat Bed",
-            "rows": 172
-          },
-          {
-            "value": "40' Container Carrier",
-            "rows": 35
-          },
-          {
-            "value": "Shehzore",
-            "rows": 29
-          },
-          {
-            "value": "20' Container Carrier",
-            "rows": 21
-          },
-          {
-            "value": "14' Mazda",
-            "rows": 9
-          },
-          {
-            "value": "20' Flat Bed",
-            "rows": 9
-          },
-          {
-            "value": "20' C. Carrier",
-            "rows": 8
-          },
-          {
-            "value": "20' Mazda",
-            "rows": 7
-          },
-          {
-            "value": "40' Flatbed",
-            "rows": 6
-          },
-          {
-            "value": "Mazda",
-            "rows": 6
-          },
-          {
-            "value": "18' Mazda",
-            "rows": 4
-          },
-          {
-            "value": "16' Mazda",
-            "rows": 3
-          },
-          {
-            "value": "40' Flat bed",
-            "rows": 3
-          },
-          {
-            "value": "Part load",
-            "rows": 2
-          },
-          {
-            "value": "Daewoo",
-            "rows": 2
-          },
-          {
-            "value": "40; Flat Bed",
-            "rows": 2
-          },
-          {
-            "value": "40' C. Carrier",
-            "rows": 2
-          },
-          {
-            "value": "Part Load",
-            "rows": 1
-          },
-          {
-            "value": "Shahzore",
-            "rows": 1
-          },
-          {
-            "value": "45' Flat Bed",
-            "rows": 1
-          },
-          {
-            "value": "Loose Material",
-            "rows": 1
-          },
-          {
-            "value": "40' Flat Bed O/W",
-            "rows": 1
-          }
-        ],
         "container_type": [
           {
             "value": "20 FT",
@@ -1566,7 +1838,7 @@
         "tracking_status": [
           {
             "value": "Delivered",
-            "rows": 340
+            "rows": 1215
           },
           {
             "value": "Going to load",
@@ -1583,7 +1855,7 @@
         ]
       },
       "patchy": {
-        "no_of_packages": 0.8395,
+        "no_of_packages": 0.3388,
         "net_weight": 0.0
       }
     }

@@ -47,7 +47,7 @@ PATCHY_BELOW = 0.95
 # The business tables. System/audit tables carry nothing a business question
 # needs and would only spend prompt budget.
 TABLES = [
-    "items", "suppliers", "branches", "ports", "clearing_agents",
+    "items", "suppliers", "branches", "ports", "clearing_agents", "customers",
     "stock", "issuance", "store_requisition", "purchases_data",
     "consignments", "consignment_items", "payments",
     "logistics_consignments", "logistics_items", "logistics_packages",
