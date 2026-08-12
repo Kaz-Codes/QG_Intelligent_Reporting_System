@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from backend.graph.memory import get_checkpointer
 from backend.api.identity import current_user_id
-from backend.database import chat_log
+from backend.database import chat_log, conversation_store
 from backend.graph.workflow import build_graph
 from backend.tools.postgres_tools import ping
 
@@ -447,3 +447,70 @@ def health() -> Dict[str, Any]:
         "database": "up" if ping() else "down",
         "warm": getattr(app_main, "_WARM", False),
     }
+
+
+# ---------------------------------------------------------------------------
+# The user's own conversation: saved as they go, restored when they come back.
+#
+# Separate from /chat/{id}/history, which replays the graph checkpointer and so
+# only ever has prose. These carry the rendered messages - tables, charts, the
+# clarification chips - so a restored screen looks exactly like the one they
+# left rather than a transcript of it.
+# ---------------------------------------------------------------------------
+
+
+class ConversationBody(BaseModel):
+    thread_id: str
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@router.put("/conversation")
+def save_conversation(body: ConversationBody, http_request: Request) -> Dict[str, Any]:
+    """Upsert the signed-in user's conversation."""
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        # Nothing to attach it to. Not an error - an anonymous session simply
+        # has no conversation to restore later.
+        return {"saved": False, "reason": "not signed in"}
+
+    existing = conversation_store.owner(body.thread_id)
+    if existing is not None and existing != user_id:
+        raise HTTPException(status_code=403, detail="That conversation belongs to another user.")
+
+    return {"saved": conversation_store.save(body.thread_id, user_id, body.messages)}
+
+
+@router.get("/conversation")
+def restore_conversation(http_request: Request) -> Dict[str, Any]:
+    """
+    The signed-in user's most recent conversation, or an empty one.
+
+    Only status='active' is returned, so a conversation the user deleted stays
+    deleted for them however many times they sign back in.
+    """
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        return {"thread_id": None, "messages": []}
+
+    found = conversation_store.latest(user_id)
+    if not found:
+        return {"thread_id": None, "messages": []}
+    return {
+        "thread_id": found["thread_id"],
+        "messages": found["messages"],
+        "updated_at": str(found.get("updated_at") or ""),
+    }
+
+
+@router.delete("/conversation/{thread_id}")
+def delete_conversation(thread_id: str, http_request: Request) -> Dict[str, Any]:
+    """
+    Clear it from the user's screen, keep it in the database.
+
+    A soft delete: status becomes 'deleted' and the row stays, so what was
+    asked is still on record even though the user has cleared their view.
+    """
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        return {"deleted": False, "reason": "not signed in"}
+    return {"deleted": conversation_store.soft_delete(thread_id, user_id)}

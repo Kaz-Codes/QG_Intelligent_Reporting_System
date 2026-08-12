@@ -139,6 +139,17 @@ export function useChatState() {
     [threadId, isSending],
   )
 
+  const restoreConversation = useCallback(
+    (restoredThreadId: string, restored: AssistantMessage[]) => {
+      setThreadId(restoredThreadId)
+      window.localStorage.setItem(THREAD_STORAGE_KEY, restoredThreadId)
+      setMessages(restored)
+      setError(null)
+      setStatus('')
+    },
+    [],
+  )
+
   const resetConversation = useCallback(() => {
     abortRef.current?.abort()
     window.localStorage.removeItem(THREAD_STORAGE_KEY)
@@ -149,5 +160,17 @@ export function useChatState() {
     setIsSending(false)
   }, [])
 
-  return { messages, isSending, status, error, threadId, send, resetConversation }
+  return {
+    messages,
+    isSending,
+    status,
+    error,
+    threadId,
+    send,
+    resetConversation,
+    // Used by ChatProvider to put a stored conversation back on screen when the
+    // user signs in again. Not for general use - the message list is otherwise
+    // owned entirely by this hook.
+    restoreConversation,
+  }
 }

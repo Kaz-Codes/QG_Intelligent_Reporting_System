@@ -107,7 +107,7 @@ function AssistantResult({
 }
 
 export function Assistant() {
-  const { messages, isSending, status, error, send, resetConversation } = useChat()
+  const { messages, isSending, status, error, send, clearConversation } = useChat()
   const { status: connection } = useChatHealth()
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -210,7 +210,7 @@ export function Assistant() {
           </div>
         </div>
         <button
-          onClick={resetConversation}
+          onClick={clearConversation}
           className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-canvas-alt hover:text-risk"
         >
           <Trash2 size={13} /> Clear
