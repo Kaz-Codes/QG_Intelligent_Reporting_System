@@ -104,5 +104,122 @@
     "created_at": "2026-08-12T12:20:52",
     "last_used": "2026-08-12T12:20:52",
     "hits": 0
+  },
+  {
+    "fingerprint": "ae650f2ae42238796e7a",
+    "question": "show me resin stock",
+    "normalised": "resin stock",
+    "entity_key": "item=resin",
+    "sql": "SELECT v.item_code, v.item_name, v.rank, v.branch_ranks, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.issued_qty_12m, v.issue_lines_12m, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty, i.default_unit_of_measurement AS uom FROM v_item_demand_picture v LEFT JOIN items i ON i.item_code = v.item_code WHERE v.item_name ~* '[[:<:]]resin[[:>:]]'",
+    "tables_used": [
+      "v_item_demand_picture",
+      "items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "2d10638c22ed7c18",
+    "created_at": "2026-08-12T12:26:53",
+    "last_used": "2026-08-12T12:26:53",
+    "hits": 0
+  },
+  {
+    "fingerprint": "b0901dc259fe84aaa50d",
+    "question": "show me complete resin items details",
+    "normalised": "complete resin items details",
+    "entity_key": "item=resin",
+    "sql": "WITH resin_item_master AS (\n    SELECT\n        i.item_code,\n        i.name,\n        i.default_specification,\n        i.default_unit_of_measurement,\n        i.category,\n        i.is_active,\n        i.is_verified\n    FROM items i\n    WHERE i.name ~* '[[:<:]]resins?[[:>:]]'\n), resin_import_lines AS (\n    SELECT\n        ci.item_code,\n        ci.item_name,\n        ci.specification,\n        ci.unit_of_measurement,\n        c.current_status,\n        c.origin\n    FROM consignments c\n    JOIN consignment_items ci\n      ON ci.consignment_id = c.id\n     AND ci.is_deleted = false\n    WHERE c.is_deleted = false\n      AND ci.item_name ~* '[[:<:]]resins?[[:>:]]'\n), resin_export_lines AS (\n    SELECT\n        li.job_no AS item_code,\n        li.item_detail AS item_name,\n        NULL::text AS specification,\n        NULL::text AS unit_of_measurement,\n        lc.current_status,\n        lc.origin_country AS origin\n    FROM logistics_consignments lc\n    JOIN logistics_items li\n      ON li.consignment_id = lc.id\n     AND li.is_deleted = false\n    WHERE lc.is_deleted = false\n      AND li.item_detail ~* '[[:<:]]resins?[[:>:]]'\n), resin_trucking_records AS (\n    SELECT\n        NULL::text AS item_code,\n        tc.item_details AS item_name,\n        NULL::text AS specification,\n        NULL::text AS unit_of_measurement,\n        tc.movement_type AS current_status,\n        NULL::text AS origin\n    FROM trucking_consignments tc\n    WHERE tc.is_deleted = false\n      AND tc.item_details ~* '[[:<:]]resins?[[:>:]]'\n)\nSELECT\n    'Item master' AS source,\n    rim.item_code,\n    rim.name AS item_name,\n    rim.default_specification AS specification,\n    rim.default_unit_of_measurement AS uom,\n    rim.category,\n    rim.is_active,\n    rim.is_verified,\n    NULL::text AS current_status,\n    NULL::text AS origin\nFROM resin_item_master rim\nUNION ALL\nSELECT\n    'Import line' AS source,\n    ril.item_code,\n    ril.item_name,\n    ril.specification,\n    ril.unit_of_measurement AS uom,\n    NULL::text AS category,\n    NULL::boolean AS is_active,\n    NULL::boolean AS is_verified,\n    ril.current_status,\n    ril.origin\nFROM resin_import_lines ril\nUNION ALL\nSELECT\n    'Export line' AS source,\n    rel.item_code,\n    rel.item_name,\n    rel.specification,\n    rel.unit_of_measurement AS uom,\n    NULL::text AS category,\n    NULL::boolean AS is_active,\n    NULL::boolean AS is_verified,\n    rel.current_status,\n    rel.origin\nFROM resin_export_lines rel\nUNION ALL\nSELECT\n    'Trucking record' AS source,\n    rtr.item_code,\n    rtr.item_name,\n    rtr.specification,\n    rtr.unit_of_measurement AS uom,\n    NULL::text AS category,\n    NULL::boolean AS is_active,\n    NULL::boolean AS is_verified,\n    rtr.current_status,\n    rtr.origin\nFROM resin_trucking_records rtr\nORDER BY source, item_name, item_code",
+    "tables_used": [
+      "items",
+      "consignments",
+      "consignment_items",
+      "logistics_consignments",
+      "logistics_items",
+      "trucking_consignments"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "2d10638c22ed7c18",
+    "created_at": "2026-08-12T12:28:39",
+    "last_used": "2026-08-12T12:28:39",
+    "hits": 0
+  },
+  {
+    "fingerprint": "b939e7cdd33753086224",
+    "question": "show me the value of inventory",
+    "normalised": "value inventory",
+    "entity_key": "",
+    "sql": "SELECT SUM(v.stock_amount) AS inventory_value_pkr\nFROM v_item_stock_position v",
+    "tables_used": [
+      "v_item_stock_position"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "42a681d81a2d9c38",
+    "created_at": "2026-08-12T12:43:34",
+    "last_used": "2026-08-12T12:43:34",
+    "hits": 0
+  },
+  {
+    "fingerprint": "c8d022a2c9b393624475",
+    "question": "who is our top supplier by value",
+    "normalised": "who top supplier by value",
+    "entity_key": "supplier=top supplier",
+    "sql": "WITH supplier_value_rows AS (\n    SELECT\n        p.supplier AS supplier_name,\n        SUM(p.amount) AS local_value,\n        0::numeric AS import_value,\n        COUNT(*) AS local_purchase_lines,\n        0::bigint AS import_consignments,\n        COUNT(p.amount) AS valued_records\n    FROM purchases_data p\n    GROUP BY p.supplier\n    UNION ALL\n    SELECT\n        s.name AS supplier_name,\n        0::numeric AS local_value,\n        SUM(c.pkr_total) AS import_value,\n        0::bigint AS local_purchase_lines,\n        COUNT(*) AS import_consignments,\n        COUNT(c.pkr_total) AS valued_records\n    FROM consignments c\n    LEFT JOIN suppliers s ON s.id = c.supplier_id\n    WHERE c.is_deleted = false\n    GROUP BY s.name\n), combined_suppliers AS (\n    SELECT\n        LOWER(TRIM(svr.supplier_name)) AS supplier_key,\n        MIN(svr.supplier_name) AS supplier_name,\n        COALESCE(SUM(svr.local_value), 0) + COALESCE(SUM(svr.import_value), 0) AS total_procurement_value,\n        SUM(svr.local_purchase_lines) AS local_purchase_lines,\n        SUM(svr.import_consignments) AS import_consignments,\n        SUM(svr.valued_records) AS valued_records\n    FROM supplier_value_rows svr\n    GROUP BY LOWER(TRIM(svr.supplier_name))\n)\nSELECT\n    cs.supplier_name,\n    CASE\n        WHEN LOWER(TRIM(cs.supplier_name)) = 'import (iol)' THEN 'Import channel'\n        WHEN LOWER(TRIM(cs.supplier_name)) = 'qadbros engineering pvt ltd' THEN 'Inter-company supplier'\n        ELSE 'External supplier'\n    END AS supplier_type,\n    cs.total_procurement_value,\n    COUNT(*) OVER (PARTITION BY cs.total_procurement_value) AS tie_count,\n    cs.local_purchase_lines,\n    cs.import_consignments,\n    cs.valued_records\nFROM combined_suppliers cs\nORDER BY cs.total_procurement_value DESC NULLS LAST, cs.supplier_name NULLS LAST",
+    "tables_used": [
+      "purchases_data",
+      "consignments",
+      "suppliers"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "760780c421849e00",
+    "created_at": "2026-08-12T12:46:38",
+    "last_used": "2026-08-12T12:46:38",
+    "hits": 0
+  },
+  {
+    "fingerprint": "2b669caf2dec4197b784",
+    "question": "top 3 suppliers",
+    "normalised": "top 3 suppliers",
+    "entity_key": "",
+    "sql": "WITH supplier_spend_rows AS (\n    SELECT\n        lower(trim(p.supplier)) AS supplier_key,\n        trim(p.supplier) AS supplier_name,\n        p.amount AS spend_amount\n    FROM purchases_data p\n    WHERE p.supplier IS NOT NULL\n\n    UNION ALL\n\n    SELECT\n        lower(trim(s.name)) AS supplier_key,\n        trim(s.name) AS supplier_name,\n        c.pkr_total AS spend_amount\n    FROM consignments c\n    LEFT JOIN suppliers s ON s.id = c.supplier_id\n    WHERE c.is_deleted = false\n      AND s.name IS NOT NULL\n), supplier_totals AS (\n    SELECT\n        ssr.supplier_key,\n        min(ssr.supplier_name) AS supplier_name,\n        coalesce(sum(ssr.spend_amount), 0) AS total_spend_pkr,\n        count(*) AS purchase_records,\n        count(ssr.spend_amount) AS valued_purchase_records\n    FROM supplier_spend_rows ssr\n    GROUP BY ssr.supplier_key\n)\nSELECT\n    st.supplier_name,\n    st.total_spend_pkr,\n    st.purchase_records,\n    st.valued_purchase_records,\n    CASE\n        WHEN st.supplier_key = 'import (iol)' THEN 'Import channel, not a company'\n        WHEN st.supplier_key = 'qadbros engineering pvt ltd' THEN 'Group company / inter-company transfer'\n        ELSE 'Supplier'\n    END AS supplier_type,\n    count(*) OVER (PARTITION BY st.total_spend_pkr) AS tie_count\nFROM supplier_totals st\nORDER BY st.total_spend_pkr DESC NULLS LAST, st.supplier_name\nLIMIT 3",
+    "tables_used": [
+      "purchases_data",
+      "consignments",
+      "suppliers"
+    ],
+    "limit_is_user_requested": true,
+    "schema_hash": "760780c421849e00",
+    "created_at": "2026-08-12T12:47:30",
+    "last_used": "2026-08-12T12:47:30",
+    "hits": 0
+  },
+  {
+    "fingerprint": "2e23faf56af124718061",
+    "question": "Both combined",
+    "normalised": "both combined",
+    "entity_key": "supplier=top supplier",
+    "sql": "WITH supplier_value_records AS (\n    SELECT\n        LOWER(TRIM(p.supplier)) AS supplier_key,\n        p.supplier AS supplier_name,\n        p.amount AS value_pkr\n    FROM purchases_data p\n    UNION ALL\n    SELECT\n        LOWER(TRIM(s.name)) AS supplier_key,\n        s.name AS supplier_name,\n        c.pkr_total AS value_pkr\n    FROM consignments c\n    LEFT JOIN suppliers s ON s.id = c.supplier_id\n    WHERE c.is_deleted = false\n), supplier_totals AS (\n    SELECT\n        svr.supplier_key,\n        MAX(svr.supplier_name) AS supplier_name,\n        SUM(svr.value_pkr) AS total_value_pkr,\n        COUNT(*) AS contributing_records,\n        COUNT(svr.value_pkr) AS valued_records,\n        MAX(svr.value_pkr) AS largest_single_record_value_pkr\n    FROM supplier_value_records svr\n    GROUP BY svr.supplier_key\n), ranked_suppliers AS (\n    SELECT\n        st.supplier_name,\n        st.total_value_pkr,\n        st.contributing_records,\n        st.valued_records,\n        st.largest_single_record_value_pkr,\n        COUNT(*) OVER (PARTITION BY st.total_value_pkr) AS tie_count\n    FROM supplier_totals st\n)\nSELECT\n    rs.supplier_name,\n    rs.total_value_pkr,\n    rs.contributing_records,\n    rs.valued_records,\n    rs.largest_single_record_value_pkr,\n    rs.tie_count\nFROM ranked_suppliers rs\nORDER BY rs.total_value_pkr DESC NULLS LAST, rs.supplier_name ASC NULLS LAST\nLIMIT 1",
+    "tables_used": [
+      "purchases_data",
+      "consignments",
+      "suppliers"
+    ],
+    "limit_is_user_requested": true,
+    "schema_hash": "86c43b34510ad7e6",
+    "created_at": "2026-08-12T12:55:38",
+    "last_used": "2026-08-12T12:55:38",
+    "hits": 0
+  },
+  {
+    "fingerprint": "c109f606d51ff3922050",
+    "question": "top 5 suppliers by value in local purchases",
+    "normalised": "top 5 suppliers by value local purchases",
+    "entity_key": "",
+    "sql": "WITH supplier_totals AS (\n    SELECT\n        p.supplier AS supplier_name,\n        COUNT(*) AS purchase_lines,\n        SUM(p.amount) AS total_purchase_value,\n        MAX(p.amount) AS largest_line_value\n    FROM purchases_data p\n    GROUP BY p.supplier\n)\nSELECT\n    st.supplier_name,\n    st.purchase_lines,\n    st.total_purchase_value,\n    st.largest_line_value,\n    st.largest_line_value / NULLIF(st.total_purchase_value, 0) AS largest_line_share,\n    COUNT(*) OVER (PARTITION BY st.total_purchase_value) AS tie_count\nFROM supplier_totals st\nORDER BY st.total_purchase_value DESC NULLS LAST, st.supplier_name\nLIMIT 5",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": true,
+    "schema_hash": "86c43b34510ad7e6",
+    "created_at": "2026-08-12T12:55:53",
+    "last_used": "2026-08-12T12:55:53",
+    "hits": 0
   }
 ]

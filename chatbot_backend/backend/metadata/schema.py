@@ -131,6 +131,23 @@ purchases_data(id PK, item_code -> items.item_code, item_name, specification,
     observed procurement lead time. There is no separate purchase_order table
     any more; po_number and po_date live here.
 
+    A SUPPLIER LIVES IN TWO PLACES. Local buying is purchases_data.supplier
+    (free text); importing is consignments.supplier_id -> suppliers.name, with
+    the value in consignments.pkr_total. They share no table and no key, so a
+    "top supplier" ranking must say which scope it used. To combine them, UNION
+    ALL the two sides into (supplier_name, value) and aggregate on the trimmed,
+    lower-cased name - the same company is spelled differently across the two.
+
+    `amount` IS THE MONEY (PKR) - the purchase value of that line, populated on
+    every one of the 65,520 rows. `qty` is units and says nothing about worth.
+    ANY question about value, spend, worth, cost or "biggest/top supplier"
+    without a stated unit means SUM(amount), never SUM(qty). The two rank
+    suppliers completely differently: by value the largest is 1.59bn on 5.4m
+    units, while the largest by quantity is 21.2m units worth only 133m - so
+    answering a value question with quantity names a different supplier
+    entirely, not merely a different number. When a question could mean either,
+    report by amount and say so.
+
 === IMPORTS ===
 
 consignments(id PK, branch_id -> branches, supplier_id -> suppliers,
@@ -339,10 +356,20 @@ the filter yourself: the view is the definition, and rewriting it by hand is
 how the same question ends up with different answers on different runs.
 
 v_item_stock_position(item_code, item_name, branches_held_at, stock_qty,
-                      hold_qty, available_qty, available_amount, is_out_of_stock)
+                      hold_qty, available_qty, stock_amount, available_amount,
+                      is_out_of_stock, rank, branch_ranks)
     Stock collapsed to ONE ROW PER ITEM across all branches. Use this for any
     "how many items ..." stock question - the raw `stock` table has one row per
     item per branch, so counting it counts item-branch pairs instead.
+
+    THE VALUE OF INVENTORY IS stock_amount, NOT available_amount.
+    "What is our inventory worth / value of stock / how much is inventory" =
+    SUM(stock_amount) - everything held, including reserved stock, because
+    stock on hold is committed but still owned. available_amount is the
+    narrower "what could we use or sell today" figure and is 121.7m lower;
+    answering the ownership question with it understates inventory by 12%.
+    Use available_amount only when the user explicitly asks about unreserved,
+    usable or sellable value, and say which one you used.
 
 v_out_of_stock_items(item_code, item_name, rank, branch_ranks, branches_held_at,
                      stock_qty, hold_qty, available_qty)

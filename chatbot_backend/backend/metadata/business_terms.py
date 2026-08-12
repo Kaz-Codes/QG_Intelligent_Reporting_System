@@ -220,6 +220,75 @@ BUSINESS_TERMS = [
         ),
     },
     {
+        "term": (
+            "inventory value / value of inventory / stock value / "
+            "what is our stock worth"
+        ),
+        "meaning": (
+            "The money tied up in stock the company HOLDS - all of it, "
+            "including quantities reserved against a job. Held stock is "
+            "committed, not gone, so it is still owned inventory and still "
+            "counts towards what inventory is worth."
+        ),
+        "maps_to": (
+            "SUM(stock_amount) FROM v_item_stock_position. NOT "
+            "available_amount: that is the unreserved portion only and is "
+            "121.7m lower - answering 'what is our inventory worth' with it "
+            "understates by 12%. Use available_amount ONLY when the user "
+            "explicitly asks what is usable, unreserved or sellable, and say "
+            "which measure the figure is."
+        ),
+        "notes": (
+            "The two measures, so an answer can name them: stock_amount is "
+            "total value held; available_amount is the unreserved part; the "
+            "difference is the value of stock on hold.\n"
+            "No currency is stored on the stock table. Figures are PKR - state "
+            "the currency rather than reporting a bare number.\n"
+            "Value comes from the stock export's own amount columns; there is "
+            "no unit-rate table to recompute it from, so never derive a value "
+            "by multiplying quantity by a rate found elsewhere."
+        ),
+    },
+    {
+        "term": (
+            "top supplier / biggest supplier / supplier spend / "
+            "purchases by value / how much do we buy from"
+        ),
+        "meaning": (
+            "How much MONEY went to a supplier, not how many units they "
+            "delivered. 'Top', 'biggest' and 'largest' about a supplier mean "
+            "by value unless the user says quantity, tonnage or units."
+        ),
+        "maps_to": (
+            "SUM(purchases_data.amount) GROUP BY purchases_data.supplier. "
+            "purchases_data.amount is the PKR value of the line and is "
+            "populated on every row. NEVER rank suppliers by SUM(qty) for a "
+            "value question - the orders differ, not just the numbers: the "
+            "largest supplier by value is 1.59bn on 5.4m units, while the "
+            "largest by quantity moved 21.2m units worth only 133m."
+        ),
+        "notes": (
+            "TWO ENTRIES IN THIS LIST ARE NOT ORDINARY VENDORS, and a ranking "
+            "that presents them as such misleads:\n"
+            "* 'Import (IOL)' is the IMPORT CHANNEL, not a company - it is the "
+            "largest line by value. It represents everything bought from "
+            "abroad rather than one vendor.\n"
+            "* 'Qadbros Engineering Pvt Ltd' is one of the group's OWN "
+            "companies, so that spend is an inter-company transfer, not "
+            "external procurement.\n"
+            "Do not silently drop either - report the ranking as it is and say "
+            "what they are, so the reader can judge. If the user asks for "
+            "EXTERNAL suppliers or third-party spend, exclude both and say you "
+            "did.\n"
+            "SAY WHEN ONE RECORD CARRIES THE RANKING. If a single row accounts "
+            "for most of a ranked total - a supplier whose whole position rests "
+            "on one order, one consignment, one line - state that beside the "
+            "figure. A top spot that would vanish if one record were removed is "
+            "a fact about that record, not about the supplier, and it is often "
+            "a data-entry error rather than a real position."
+        ),
+    },
+    {
         "term": "consumption / issuance / burn rate",
         "meaning": (
             "Material issued out of the store to a department or job. "

@@ -228,6 +228,22 @@ SELECT s.item_code,
        SUM(COALESCE(s.stock_qty, 0))               AS stock_qty,
        SUM(COALESCE(s.hold_qty, 0))                AS hold_qty,
        SUM(COALESCE(s.available_qty, 0))           AS available_qty,
+
+       -- THE VALUE OF THE INVENTORY: everything held, including stock that is
+       -- reserved. Held stock is committed, not gone, so it is still inventory
+       -- the company owns - this is the figure "what is our inventory worth"
+       -- must use.
+       --
+       -- Exposed because it was MISSING, and its absence chose the wrong
+       -- answer: available_amount was the only value column in this view, so
+       -- "the value of inventory" was answered as 860,385,662.91 (available
+       -- only) when the company holds 982,117,697.87. A 121.7m understatement
+       -- that no rule could have prevented, because the right column was not
+       -- reachable.
+       SUM(COALESCE(s.stock_qty_amount, 0))        AS stock_amount,
+
+       -- The narrower measure: value of the UNRESERVED portion only. Answers
+       -- "what could we use or sell today", not "what do we own".
        SUM(COALESCE(s.available_amount, 0))        AS available_amount,
        (SUM(COALESCE(s.available_qty, 0)) <= 0)    AS is_out_of_stock,
 
