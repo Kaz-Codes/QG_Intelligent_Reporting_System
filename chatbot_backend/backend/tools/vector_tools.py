@@ -362,6 +362,25 @@ def _entry_doc(entry: Dict[str, Any]) -> str:
 COMPANY_WIDE = 0
 
 
+def _owner_or_none(user_id: Optional[int]) -> Optional[int]:
+    """
+    The owner to file a new entry under, or None if we cannot tell who it is.
+
+    Deliberately NOT `user_id or COMPANY_WIDE`. That reading turns an unknown
+    caller into the company: when the session cookie failed to verify, every
+    term taught in that window was written as owner 0 and became authoritative
+    for everybody - silently recreating the exact leak per-user scoping exists
+    to prevent, and doing it precisely when identity was broken.
+
+    Scoping a teaching to nobody is not a safe default, so there is none: an
+    unidentified teaching is refused instead. Note that 0 is a legitimate owner
+    value here, so the check is `is None`, not falsiness.
+    """
+    if user_id is None:
+        return None
+    return int(user_id)
+
+
 def _entry_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "kind": "learned",
@@ -406,7 +425,11 @@ def persist_learned_term(
     if not PERSIST_LEARNED or not question or not notes:
         return False
 
-    owner = int(user_id or COMPANY_WIDE)
+    # No identifiable user means no owner to scope this to. Refuse rather than
+    # let it default to company-wide.
+    owner = _owner_or_none(user_id)
+    if owner is None:
+        return False
 
     entries = load_learned()
     key = _norm(question)
@@ -443,7 +466,12 @@ def persist_taught_term(
     if not PERSIST_LEARNED or not term or not meaning:
         return False
 
-    owner = int(user_id or COMPANY_WIDE)
+    # Same rule as an inferred term: unattributable teachings are not saved.
+    # This is the one the user actually feels - a term taught anonymously and
+    # filed company-wide changes the answers everyone else gets.
+    owner = _owner_or_none(user_id)
+    if owner is None:
+        return False
 
     entries = load_learned()
     key = _norm(term)

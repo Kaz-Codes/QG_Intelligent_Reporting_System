@@ -133,6 +133,11 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         row_count=result.get("row_count"),
         meta={"intent": result.get("intent", ""), "domain": result.get("domain", "")},
     )
+    # Stored server-side so the conversation survives whether or not the
+    # browser gets round to sending it back.
+    conversation_store.append_turn(
+        thread_id, user_id, request.message, response.model_dump()
+    )
     return response
 
 
@@ -284,6 +289,8 @@ async def _event_stream(
         row_count=payload.get("row_count"),
         meta={"intent": payload.get("intent", ""), "domain": payload.get("domain", "")},
     )
+
+    conversation_store.append_turn(thread_id, user_id, request.message, payload)
 
     yield _sse({"type": "done", **payload})
 

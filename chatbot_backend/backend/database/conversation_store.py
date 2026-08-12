@@ -118,6 +118,78 @@ def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
         return False
 
 
+def append_turn(
+    thread_id: str,
+    user_id: Optional[int],
+    question: str,
+    payload: Dict[str, Any],
+) -> bool:
+    """
+    Append one exchange to the stored conversation, server-side.
+
+    The conversation used to be saved only when the BROWSER sent it back after
+    each turn. That made persistence depend on a client call succeeding - and
+    when the proxy did not route /conversation, every one of those calls 404'd
+    and the table stayed empty with nothing reporting a problem. Storage should
+    not hinge on the client remembering to ask.
+
+    So the server appends as it answers. The two message objects are built in
+    the shape the Assistant page renders, so a restored conversation still
+    draws tables and charts exactly as it did live; the browser's PUT is now
+    belt-and-braces that refines the same row rather than the only thing
+    creating it.
+
+    A conversation the user deleted is NOT resurrected: appending to a
+    'deleted' thread leaves it deleted, so asking again in an old thread does
+    not undo the delete.
+    """
+    if not thread_id or user_id is None or not ensure_table():
+        return False
+
+    rows = payload.get("rows") or []
+    assistant: Dict[str, Any] = {
+        "role": "assistant",
+        "content": payload.get("answer", ""),
+        "columns": payload.get("columns") or [],
+        "rows": rows,
+        "charts": payload.get("charts") or [],
+        "clarificationOptions": payload.get("clarification_options") or [],
+        "meta": {
+            "route": payload.get("route", ""),
+            "domain": payload.get("domain", ""),
+            "intent": payload.get("intent", ""),
+            "rowCount": payload.get("row_count"),
+            "sql": payload.get("sql", ""),
+            "analysisType": payload.get("analysis_type", ""),
+        },
+    }
+    turn = _trim([{"role": "user", "content": question}, assistant])
+
+    try:
+        with get_engine().begin() as conn:
+            conn.execute(
+                text(
+                    f"""
+                    INSERT INTO {_TABLE} (thread_id, user_id, messages, title, status)
+                    VALUES (:t, :u, CAST(:m AS JSONB), :ti, 'active')
+                    ON CONFLICT (thread_id) DO UPDATE
+                       SET messages   = {_TABLE}.messages || CAST(:m AS JSONB),
+                           updated_at = now()
+                     WHERE {_TABLE}.user_id = EXCLUDED.user_id
+                    """
+                ),
+                {
+                    "t": thread_id,
+                    "u": user_id,
+                    "m": json.dumps(turn, default=str),
+                    "ti": (question or "")[:120],
+                },
+            )
+        return True
+    except Exception:
+        return False
+
+
 def latest(user_id: int) -> Optional[Dict[str, Any]]:
     """That user's most recent ACTIVE conversation, or None."""
     if user_id is None or not ensure_table():
