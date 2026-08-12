@@ -217,6 +217,8 @@ WHERE lower(trim(i.name)) IN (
 -- Dropped rather than replaced: CREATE OR REPLACE cannot add a column to
 -- an existing view, and the dependent views are rebuilt below anyway.
 DROP VIEW IF EXISTS v_item_demand_picture;
+DROP VIEW IF EXISTS v_branch_depleted_items;
+DROP VIEW IF EXISTS v_out_of_stock_by_branch;
 DROP VIEW IF EXISTS v_out_of_stock_items;
 DROP VIEW IF EXISTS v_item_stock_position;
 CREATE VIEW v_item_stock_position AS
@@ -242,11 +244,19 @@ GROUP BY s.item_code;
 
 
 -- ---------------------------------------------------------------------------
--- v_out_of_stock_items - items with nothing usable left ANYWHERE
+-- v_out_of_stock_items - THE DEFINITION OF "OUT OF STOCK". 871 items.
 --
 -- An item at zero in one branch while another branch still holds it is NOT out
 -- of stock; it is out at that branch. Items with no stock row at all are not
 -- here either - they are simply not stocked, which is a different question.
+--
+-- THIS IS THE ONLY DEFINITION. Every out-of-stock answer, at any grain, must
+-- come from this view or one of the two below that are derived from it. Do not
+-- write `available_qty <= 0` against `stock` to answer an out-of-stock
+-- question: that is a DIFFERENT set (1,160 items - anything empty at any one
+-- branch), and mixing the two is what made "how many items are out of stock?"
+-- return 871 while "which branch has the most?" returned per-branch counts
+-- that summed past 871. Two true numbers, one contradiction on screen.
 -- ---------------------------------------------------------------------------
 CREATE VIEW v_out_of_stock_items AS
 SELECT p.item_code,
@@ -259,6 +269,63 @@ SELECT p.item_code,
        p.available_qty
 FROM v_item_stock_position AS p
 WHERE p.is_out_of_stock;
+
+
+-- ---------------------------------------------------------------------------
+-- v_out_of_stock_by_branch - the SAME 871 items, split by where they sit
+--
+-- For "which branch has the most out-of-stock items". Derived from the view
+-- above rather than recomputed, so a branch figure can never disagree with the
+-- company total: every row here belongs to an item that is out of stock by the
+-- one definition.
+--
+-- A caveat to state when reporting these: an item stocked at three branches is
+-- out of stock at all three, so it appears three times and the branch counts
+-- sum to MORE than 871. That is the count of affected item-locations, not a
+-- partition of the 871. Say "items affected at this branch", never imply the
+-- branches divide the total between them.
+-- ---------------------------------------------------------------------------
+CREATE VIEW v_out_of_stock_by_branch AS
+SELECT s.branch,
+       o.item_code,
+       o.item_name,
+       o.rank,
+       s.rank                              AS branch_rank,
+       COALESCE(s.stock_qty, 0)            AS branch_stock_qty,
+       COALESCE(s.hold_qty, 0)             AS branch_hold_qty,
+       COALESCE(s.available_qty, 0)        AS branch_available_qty,
+       o.branches_held_at
+FROM v_out_of_stock_items AS o
+JOIN stock AS s ON s.item_code = o.item_code;
+
+
+-- ---------------------------------------------------------------------------
+-- v_branch_depleted_items - "nothing left HERE", which is NOT out of stock
+--
+-- The genuinely different question the old ad-hoc SQL was answering: what has
+-- run dry at this branch, whether or not another branch can cover it. Useful
+-- to a storekeeper, and deliberately given its own name so it can never be
+-- reported as "out of stock" - an item empty here with 500 at the next branch
+-- is a TRANSFER, not a purchase.
+--
+-- Call these items DEPLETED AT THAT BRANCH. Reserve "out of stock" for
+-- v_out_of_stock_items.
+-- ---------------------------------------------------------------------------
+CREATE VIEW v_branch_depleted_items AS
+SELECT s.branch,
+       s.item_code,
+       s.item_name,
+       s.rank                                     AS branch_rank,
+       COALESCE(s.stock_qty, 0)                   AS branch_stock_qty,
+       COALESCE(s.hold_qty, 0)                    AS branch_hold_qty,
+       COALESCE(s.available_qty, 0)               AS branch_available_qty,
+       p.available_qty                            AS company_available_qty,
+       -- The distinction in one column: TRUE means nowhere else has it either,
+       -- so this row is also in v_out_of_stock_items.
+       p.is_out_of_stock                          AS out_of_stock_company_wide
+FROM stock AS s
+JOIN v_item_stock_position AS p ON p.item_code = s.item_code
+WHERE COALESCE(s.available_qty, 0) <= 0;
 
 
 -- ---------------------------------------------------------------------------

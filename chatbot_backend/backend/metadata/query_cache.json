@@ -1,1 +1,108 @@
-[]
+[
+  {
+    "fingerprint": "0034f9d7e687476fd8e6",
+    "question": "what is the status of resin",
+    "normalised": "status resin",
+    "entity_key": "item=resin",
+    "sql": "SELECT v.item_code, v.item_name, v.rank, v.branch_ranks, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.issued_qty_12m, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty FROM v_item_demand_picture v WHERE v.item_name ~* '[[:<:]]resins?[[:>:]]'",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "c75df86d365e0ef7",
+    "created_at": "2026-08-12T10:44:40",
+    "last_used": "2026-08-12T11:35:49",
+    "hits": 3
+  },
+  {
+    "fingerprint": "1c767b8d42059672e88d",
+    "question": "show me status of hardner",
+    "normalised": "status hardner",
+    "entity_key": "item=hardner",
+    "sql": "SELECT v.*\nFROM v_item_demand_picture AS v\nWHERE v.item_name ~* '[[:<:]]hardners?[[:>:]]'\n   OR v.item_name ~* '[[:<:]]hardeners?[[:>:]]'\nORDER BY v.item_code",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "c75df86d365e0ef7",
+    "created_at": "2026-08-12T10:47:09",
+    "last_used": "2026-08-12T10:47:09",
+    "hits": 0
+  },
+  {
+    "fingerprint": "eac20be458de93859391",
+    "question": "how many items are out of stock, all dates",
+    "normalised": "how many items out stock all dates",
+    "entity_key": "status=out of stock",
+    "sql": "SELECT COUNT(*) AS out_of_stock_item_count\nFROM v_out_of_stock_items",
+    "tables_used": [
+      "v_out_of_stock_items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "c75df86d365e0ef7",
+    "created_at": "2026-08-12T11:12:25",
+    "last_used": "2026-08-12T11:19:44",
+    "hits": 1
+  },
+  {
+    "fingerprint": "6b8b4635e6a838410a2e",
+    "question": "what is the stock of resin",
+    "normalised": "stock resin",
+    "entity_key": "item=resin",
+    "sql": "SELECT v.*\nFROM v_item_demand_picture AS v\nWHERE v.item_name ~* '[[:<:]]resins?[[:>:]]'\nORDER BY v.item_name, v.item_code",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "c75df86d365e0ef7",
+    "created_at": "2026-08-12T11:59:17",
+    "last_used": "2026-08-12T11:59:17",
+    "hits": 0
+  },
+  {
+    "fingerprint": "c7aa6be21d961d02b4e7",
+    "question": "how many items are out of stock",
+    "normalised": "how many items out stock",
+    "entity_key": "status=out of stock",
+    "sql": "SELECT COUNT(*) AS out_of_stock_item_count\nFROM v_out_of_stock_items v",
+    "tables_used": [
+      "v_out_of_stock_items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "2d10638c22ed7c18",
+    "created_at": "2026-08-12T12:20:17",
+    "last_used": "2026-08-12T12:20:17",
+    "hits": 0
+  },
+  {
+    "fingerprint": "4e442294f53a53f0c497",
+    "question": "which branch has the most out of stock items",
+    "normalised": "which branch most out stock items",
+    "entity_key": "branch=branch|status=out of stock",
+    "sql": "WITH branch_counts AS (\n    SELECT v.branch,\n           COUNT(*) AS out_of_stock_item_count\n    FROM v_out_of_stock_by_branch v\n    GROUP BY v.branch\n)\nSELECT b.branch,\n       b.out_of_stock_item_count,\n       COUNT(*) OVER (PARTITION BY b.out_of_stock_item_count) AS tie_count\nFROM branch_counts b\nORDER BY b.out_of_stock_item_count DESC, b.branch",
+    "tables_used": [
+      "v_out_of_stock_by_branch"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "2d10638c22ed7c18",
+    "created_at": "2026-08-12T12:20:30",
+    "last_used": "2026-08-12T12:20:30",
+    "hits": 0
+  },
+  {
+    "fingerprint": "36cf28d8729a9975a003",
+    "question": "what has run out at Qadcast",
+    "normalised": "run out at qadcast",
+    "entity_key": "branch=qadcast|status=out of stock",
+    "sql": "SELECT v.item_code,\n       v.item_name,\n       i.default_unit_of_measurement AS uom,\n       v.branch,\n       v.branch_rank,\n       v.branch_available_qty,\n       v.company_available_qty,\n       v.out_of_stock_company_wide\nFROM v_branch_depleted_items v\nLEFT JOIN items i ON i.item_code = v.item_code\nWHERE v.branch ILIKE '%Qadcast%'\nORDER BY v.item_name, v.item_code",
+    "tables_used": [
+      "v_branch_depleted_items",
+      "items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "2d10638c22ed7c18",
+    "created_at": "2026-08-12T12:20:52",
+    "last_used": "2026-08-12T12:20:52",
+    "hits": 0
+  }
+]

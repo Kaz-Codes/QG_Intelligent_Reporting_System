@@ -138,6 +138,22 @@ def _schema_hash() -> str:
     except Exception:
         parts.append("sql-prompt-unavailable")
 
+    # The GUARDS, for the same reason as the prompt. Correctness rules are
+    # written in two places, and a rule added here is invisible to the schema,
+    # the terms and the prompt alike. Adding the guard that forbids computing
+    # out-of-stock by hand did not change any of those, so three cached
+    # branch queries kept replaying the very SQL it now rejects - and a cache
+    # hit never reaches the guard to be caught. Hashing the source ties every
+    # cached query to the rules it was checked against.
+    try:
+        from pathlib import Path
+
+        import backend.tools.sql_guards as _guards
+
+        parts.append(Path(_guards.__file__).read_text(encoding="utf-8"))
+    except Exception:
+        parts.append("guards-unavailable")
+
     # The DATA fingerprint, so loading a workbook retires queries written
     # against the old contents - a filter on a status that no longer exists
     # would otherwise replay forever and quietly return nothing.

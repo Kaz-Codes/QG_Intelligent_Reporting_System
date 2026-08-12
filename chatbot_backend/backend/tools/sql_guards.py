@@ -272,6 +272,60 @@ def check_joins(sql: str) -> List[str]:
     return problems
 
 
+# `available_qty` as a whole column name. The negative lookbehind keeps this
+# from firing on the views' own `branch_available_qty` / `company_available_qty`,
+# which are the CORRECT things to filter on.
+_RAW_EMPTY = re.compile(
+    r"(?<![a-z_])available_qty\s*(?:<=\s*0|<\s*1|=\s*0)\b", re.IGNORECASE
+)
+_STOCK_TABLE = re.compile(r"\b(?:FROM|JOIN)\s+stock\b", re.IGNORECASE)
+_OOS_VIEWS = re.compile(
+    r"\bv_(?:out_of_stock_items|out_of_stock_by_branch|branch_depleted_items"
+    r"|item_stock_position)\b",
+    re.IGNORECASE,
+)
+
+
+def check_out_of_stock(sql: str) -> List[str]:
+    """
+    Out-of-stock must come from the view, not from a hand-written predicate.
+
+    There are two true answers here and they are not interchangeable. The view
+    defines out of stock as nothing usable ANYWHERE (871 items). Writing
+    `available_qty <= 0` against `stock` instead counts anything empty at any
+    single branch (1,160) - a different question, whose per-branch figures sum
+    past the company total.
+
+    Both were being produced in the same session: "how many items are out of
+    stock?" answered 871 from the view, then "which branch has the most?"
+    answered from hand-written SQL, and the branch numbers added up to more
+    than the total the user had just been given. Nothing was wrong with either
+    query, which is exactly why documenting the rule is not enough to hold it -
+    the model has a working alternative and no error to learn from.
+
+    Blocking, for the same reason as check_joins: the query runs cleanly and
+    returns a plausible number, so nothing downstream can catch it.
+    """
+    if not _RAW_EMPTY.search(sql) or not _STOCK_TABLE.search(sql):
+        return []
+    if _OOS_VIEWS.search(sql):
+        # Already anchored on a view; a raw predicate alongside it is a
+        # deliberate extra filter, not a competing definition.
+        return []
+    return [
+        "You computed empty stock by hand (`available_qty <= 0` against "
+        "`stock`) instead of using the view that defines it. That predicate "
+        "counts item-branch pairs that are empty AT ONE BRANCH (1,160 items), "
+        "which is NOT what this system means by out of stock (871 items - "
+        "nothing usable at ANY branch), so the number will contradict every "
+        "other out-of-stock answer. Use `v_out_of_stock_items` for the company "
+        "total, `v_out_of_stock_by_branch` for a per-branch split of those same "
+        "items, or - if the question really is about what has run dry at one "
+        "site regardless of other branches - `v_branch_depleted_items`, and "
+        "call those items DEPLETED at that branch rather than out of stock."
+    ]
+
+
 def inspect(sql: str, profile: Optional[Dict] = None) -> Tuple[List[str], List[str]]:
     """
     Check a query. Returns (blocking, advisory).
@@ -296,7 +350,7 @@ def inspect(sql: str, profile: Optional[Dict] = None) -> Tuple[List[str], List[s
 
     # check_joins is blocking: the query runs cleanly and returns a whole table,
     # so nothing after this point can tell it was wrong.
-    blocking = check_literals(sql, profile) + check_joins(sql)
+    blocking = check_literals(sql, profile) + check_joins(sql) + check_out_of_stock(sql)
     advisory = check_sums(sql, profile) + check_distinct(sql)
     return blocking, advisory
 

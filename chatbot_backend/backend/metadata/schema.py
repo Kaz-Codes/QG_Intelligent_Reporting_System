@@ -344,10 +344,38 @@ v_item_stock_position(item_code, item_name, branches_held_at, stock_qty,
     "how many items ..." stock question - the raw `stock` table has one row per
     item per branch, so counting it counts item-branch pairs instead.
 
-v_out_of_stock_items(item_code, item_name, branches_held_at, stock_qty,
-                     hold_qty, available_qty)
-    Items with nothing usable left ANYWHERE. An item at zero in
-    one branch while another still holds it is not here.
+v_out_of_stock_items(item_code, item_name, rank, branch_ranks, branches_held_at,
+                     stock_qty, hold_qty, available_qty)
+    THE definition of "out of stock": items with nothing usable left ANYWHERE.
+    An item at zero in one branch while another still holds it is not here.
+    871 items.
+
+    NEVER answer an out-of-stock question by writing `available_qty <= 0`
+    against `stock`. That is a different and larger set (1,160 items - anything
+    empty at any single branch), and using it alongside this view makes "how
+    many items are out of stock" and "which branch has the most" contradict
+    each other on screen. Use this view, or the branch split below.
+
+v_out_of_stock_by_branch(branch, item_code, item_name, rank, branch_rank,
+                         branch_stock_qty, branch_hold_qty,
+                         branch_available_qty, branches_held_at)
+    The SAME 871 items broken out by the branches that stock them - use this
+    for "which branch has the most out-of-stock items". Derived from the view
+    above, so branch figures can never disagree with the company total.
+
+    WHEN REPORTING: an item stocked at three branches appears three times, so
+    branch counts sum to MORE than 871. Say "items affected at this branch";
+    never say or imply that the branches divide the 871 between them.
+
+v_branch_depleted_items(branch, item_code, item_name, branch_rank,
+                        branch_stock_qty, branch_hold_qty, branch_available_qty,
+                        company_available_qty, out_of_stock_company_wide)
+    A DIFFERENT question: what has run dry AT ONE BRANCH, whether or not
+    another branch can cover it. Call these DEPLETED AT THAT BRANCH - never
+    "out of stock". An item empty here with 500 at the next branch is a
+    TRANSFER, not a purchase. Use it for "what has run out at <branch>";
+    out_of_stock_company_wide tells you which of them are genuinely out of
+    stock as well.
 
 v_item_types(item_type, display_name, item_codes, category)
     One row per distinct item NAME. A "type" is a name, not an item_code -

@@ -188,9 +188,14 @@ BUSINESS_TERMS = [
         ),
         "maps_to": (
             "SELECT FROM THE VIEW v_out_of_stock_items - already one "
-            "per ITEM rather than per item-branch. For stock levels generally "
+            "per ITEM rather than per item-branch, and the single definition "
+            "of the phrase (871 items). For a per-branch split of those SAME "
+            "items use v_out_of_stock_by_branch. For stock levels generally "
             "use v_item_stock_position, which carries available_qty summed "
-            "across branches plus an is_out_of_stock flag."
+            "across branches plus an is_out_of_stock flag. Never hand-write "
+            "available_qty <= 0 against stock to answer this - that counts a "
+            "different, larger set and its per-branch figures will not "
+            "reconcile with the company total."
         ),
         "notes": (
             "COUNT THE ITEM, NOT THE ROW. stock holds one row per item PER "
@@ -202,9 +207,12 @@ BUSINESS_TERMS = [
             "items have physical stock that is entirely reserved, and they are "
             "unavailable in practice. Filtering stock_qty = 0 instead returns "
             "35 and badly understates it.\n"
-            "'Out of stock at BRANCH X' is the different, per-branch question: "
-            "filter available_qty <= 0 AND branch ILIKE '%X%' without the "
-            "GROUP BY.\n"
+            "'Out of stock at BRANCH X' is a DIFFERENT question and has its own "
+            "view - v_branch_depleted_items, filtered on branch. Those items are "
+            "DEPLETED AT THAT BRANCH, not out of stock: one sitting at zero here "
+            "with 500 at the next branch is a transfer, not a purchase. Do not "
+            "write the filter by hand; that is what made the company total and "
+            "the branch figures disagree.\n"
             "Items with NO stock row at all (22,987 of them) are NOT out of "
             "stock - they are simply not stocked items. Never include them "
             "unless the user explicitly asks about uncatalogued or never-held "
