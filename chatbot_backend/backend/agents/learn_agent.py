@@ -70,11 +70,28 @@ def learn_agent(state: dict) -> dict:
     if result.aliases:
         meaning += f" (also: {', '.join(result.aliases)})"
 
+    # Attributed to whoever taught it. A teaching applies to that person
+    # only - company-wide vocabulary belongs in business_terms.py, where a
+    # human reviews it.
+    # A term is remembered FOR THE PERSON WHO TAUGHT IT, so an unidentified
+    # caller has nowhere to file it. Say that plainly instead of offering a
+    # retry that will fail the same way: retrying does not produce a session.
+    if state.get("user_id") is None:
+        return {
+            "taught_ok": False,
+            "taught_confirmation": (
+                "I can only remember a term for the person who taught it, and I "
+                "can't tell who you are in this session. Please sign in and tell "
+                "me again — it will be saved to your account only."
+            ),
+        }
+
     saved = vector_tools.persist_taught_term(
         term=result.term.strip(),
         meaning=meaning,
         maps_to=result.maps_to.strip(),
         notes="Defined by the user.",
+        user_id=state.get("user_id"),
     )
 
     if not saved:

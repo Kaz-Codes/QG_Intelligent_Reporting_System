@@ -188,9 +188,14 @@ BUSINESS_TERMS = [
         ),
         "maps_to": (
             "SELECT FROM THE VIEW v_out_of_stock_items - already one "
-            "per ITEM rather than per item-branch. For stock levels generally "
+            "per ITEM rather than per item-branch, and the single definition "
+            "of the phrase (871 items). For a per-branch split of those SAME "
+            "items use v_out_of_stock_by_branch. For stock levels generally "
             "use v_item_stock_position, which carries available_qty summed "
-            "across branches plus an is_out_of_stock flag."
+            "across branches plus an is_out_of_stock flag. Never hand-write "
+            "available_qty <= 0 against stock to answer this - that counts a "
+            "different, larger set and its per-branch figures will not "
+            "reconcile with the company total."
         ),
         "notes": (
             "COUNT THE ITEM, NOT THE ROW. stock holds one row per item PER "
@@ -202,13 +207,85 @@ BUSINESS_TERMS = [
             "items have physical stock that is entirely reserved, and they are "
             "unavailable in practice. Filtering stock_qty = 0 instead returns "
             "35 and badly understates it.\n"
-            "'Out of stock at BRANCH X' is the different, per-branch question: "
-            "filter available_qty <= 0 AND branch ILIKE '%X%' without the "
-            "GROUP BY.\n"
+            "'Out of stock at BRANCH X' is a DIFFERENT question and has its own "
+            "view - v_branch_depleted_items, filtered on branch. Those items are "
+            "DEPLETED AT THAT BRANCH, not out of stock: one sitting at zero here "
+            "with 500 at the next branch is a transfer, not a purchase. Do not "
+            "write the filter by hand; that is what made the company total and "
+            "the branch figures disagree.\n"
             "Items with NO stock row at all (22,987 of them) are NOT out of "
             "stock - they are simply not stocked items. Never include them "
             "unless the user explicitly asks about uncatalogued or never-held "
             "items."
+        ),
+    },
+    {
+        "term": (
+            "inventory value / value of inventory / stock value / "
+            "what is our stock worth"
+        ),
+        "meaning": (
+            "The money tied up in stock the company HOLDS - all of it, "
+            "including quantities reserved against a job. Held stock is "
+            "committed, not gone, so it is still owned inventory and still "
+            "counts towards what inventory is worth."
+        ),
+        "maps_to": (
+            "SUM(stock_amount) FROM v_item_stock_position. NOT "
+            "available_amount: that is the unreserved portion only and is "
+            "121.7m lower - answering 'what is our inventory worth' with it "
+            "understates by 12%. Use available_amount ONLY when the user "
+            "explicitly asks what is usable, unreserved or sellable, and say "
+            "which measure the figure is."
+        ),
+        "notes": (
+            "The two measures, so an answer can name them: stock_amount is "
+            "total value held; available_amount is the unreserved part; the "
+            "difference is the value of stock on hold.\n"
+            "No currency is stored on the stock table. Figures are PKR - state "
+            "the currency rather than reporting a bare number.\n"
+            "Value comes from the stock export's own amount columns; there is "
+            "no unit-rate table to recompute it from, so never derive a value "
+            "by multiplying quantity by a rate found elsewhere."
+        ),
+    },
+    {
+        "term": (
+            "top supplier / biggest supplier / supplier spend / "
+            "purchases by value / how much do we buy from"
+        ),
+        "meaning": (
+            "How much MONEY went to a supplier, not how many units they "
+            "delivered. 'Top', 'biggest' and 'largest' about a supplier mean "
+            "by value unless the user says quantity, tonnage or units."
+        ),
+        "maps_to": (
+            "SUM(purchases_data.amount) GROUP BY purchases_data.supplier. "
+            "purchases_data.amount is the PKR value of the line and is "
+            "populated on every row. NEVER rank suppliers by SUM(qty) for a "
+            "value question - the orders differ, not just the numbers: the "
+            "largest supplier by value is 1.59bn on 5.4m units, while the "
+            "largest by quantity moved 21.2m units worth only 133m."
+        ),
+        "notes": (
+            "TWO ENTRIES IN THIS LIST ARE NOT ORDINARY VENDORS, and a ranking "
+            "that presents them as such misleads:\n"
+            "* 'Import (IOL)' is the IMPORT CHANNEL, not a company - it is the "
+            "largest line by value. It represents everything bought from "
+            "abroad rather than one vendor.\n"
+            "* 'Qadbros Engineering Pvt Ltd' is one of the group's OWN "
+            "companies, so that spend is an inter-company transfer, not "
+            "external procurement.\n"
+            "Do not silently drop either - report the ranking as it is and say "
+            "what they are, so the reader can judge. If the user asks for "
+            "EXTERNAL suppliers or third-party spend, exclude both and say you "
+            "did.\n"
+            "SAY WHEN ONE RECORD CARRIES THE RANKING. If a single row accounts "
+            "for most of a ranked total - a supplier whose whole position rests "
+            "on one order, one consignment, one line - state that beside the "
+            "figure. A top spot that would vanish if one record were removed is "
+            "a fact about that record, not about the supplier, and it is often "
+            "a data-entry error rather than a real position."
         ),
     },
     {

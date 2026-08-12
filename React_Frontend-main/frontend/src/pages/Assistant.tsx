@@ -107,7 +107,7 @@ function AssistantResult({
 }
 
 export function Assistant() {
-  const { messages, isSending, status, error, send, resetConversation } = useChat()
+  const { messages, isSending, status, error, send, clearConversation } = useChat()
   const { status: connection } = useChatHealth()
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -135,6 +135,17 @@ export function Assistant() {
       <input
         value={input}
         onChange={(e) => setInput(e.target.value)}
+        // ENTER SENDS - with or without Shift.
+        //
+        // A single-line input has no second line to go to, but the browser
+        // only submits a form on a bare Enter: press Shift+Enter and the
+        // keystroke is swallowed, so the message just sits there looking
+        // ignored. Handling the key directly makes both send.
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+          e.preventDefault()
+          if (input.trim() && !isSending) handleSend(input)
+        }}
         placeholder={`Message ${BOT_NAME}…`}
         autoFocus
         className="flex-1 bg-transparent px-1 text-sm text-ink outline-none placeholder:text-muted"
@@ -210,7 +221,7 @@ export function Assistant() {
           </div>
         </div>
         <button
-          onClick={resetConversation}
+          onClick={clearConversation}
           className="inline-flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-canvas-alt hover:text-risk"
         >
           <Trash2 size={13} /> Clear

@@ -4,8 +4,8 @@
 // The Assistant page reads this and renders; it never calls the API client
 // directly.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchChatHistory, streamMessage } from './api'
+import { useCallback, useRef, useState } from 'react'
+import { streamMessage } from './api'
 import type { AssistantMessage } from './types'
 
 const THREAD_STORAGE_KEY = 'qgirs-chatbot-thread-id'
@@ -28,29 +28,26 @@ export function useChatState() {
 
   const abortRef = useRef<AbortController | null>(null)
 
-  // On first mount, if we already have a thread id, replay its history so a
-  // page refresh does not lose the visible conversation.
-  useEffect(() => {
-    if (!threadId) return
-    const controller = new AbortController()
-
-    fetchChatHistory(threadId, { signal: controller.signal })
-      .then((data) => {
-        const restored = (data.messages || []).map((m) => ({
-          id: nextId(),
-          role: m.role,
-          content: m.content,
-        }))
-        if (restored.length) setMessages(restored)
-      })
-      .catch(() => {
-        // A stale/unknown thread id is not worth surfacing — just start fresh.
-      })
-
-    return () => controller.abort()
-    // Intentionally run once for the initial thread id only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // RESTORING ON LOAD IS ChatProvider's JOB, NOT THIS HOOK'S.
+  //
+  // This used to replay fetchChatHistory(threadId) for a thread id kept in
+  // localStorage. Two things were wrong with it once conversations were stored
+  // per user in the database:
+  //
+  //   * IT RACED THE REAL RESTORE. ChatProvider fetches the saved conversation
+  //     and calls restoreConversation(); this effect fetched the same thread's
+  //     history in parallel and called setMessages() on whatever came back.
+  //     Whichever request finished LAST won, so the outcome varied run to run.
+  //
+  //   * IT WON WITH LESS. The history endpoint returns {role, content} only -
+  //     no rows, no columns, no charts. When it won the race it replaced a
+  //     fully restored conversation with a text-only copy of itself, silently
+  //     dropping every table the user was looking at.
+  //
+  // The database copy is authoritative: it survives a backend restart, which
+  // the in-memory graph history does not, and it carries what the page renders.
+  // So there is exactly one restore path now, and it is the one that holds the
+  // whole message.
 
   const send = useCallback(
     async (text: string) => {
@@ -139,6 +136,17 @@ export function useChatState() {
     [threadId, isSending],
   )
 
+  const restoreConversation = useCallback(
+    (restoredThreadId: string, restored: AssistantMessage[]) => {
+      setThreadId(restoredThreadId)
+      window.localStorage.setItem(THREAD_STORAGE_KEY, restoredThreadId)
+      setMessages(restored)
+      setError(null)
+      setStatus('')
+    },
+    [],
+  )
+
   const resetConversation = useCallback(() => {
     abortRef.current?.abort()
     window.localStorage.removeItem(THREAD_STORAGE_KEY)
@@ -149,5 +157,17 @@ export function useChatState() {
     setIsSending(false)
   }, [])
 
-  return { messages, isSending, status, error, threadId, send, resetConversation }
+  return {
+    messages,
+    isSending,
+    status,
+    error,
+    threadId,
+    send,
+    resetConversation,
+    // Used by ChatProvider to put a stored conversation back on screen when the
+    // user signs in again. Not for general use - the message list is otherwise
+    // owned entirely by this hook.
+    restoreConversation,
+  }
 }

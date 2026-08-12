@@ -9,7 +9,7 @@ have to carry the whole state forward.
 appends to the conversation instead of replacing it.
 """
 
-from typing import Annotated, Any, Dict, List, TypedDict
+from typing import Optional, Annotated, Any, Dict, List, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -30,6 +30,11 @@ class ChatState(TypedDict, total=False):
     clarification_options: List[str]
 
     # --- business context (schema + terminology retrieval) ---
+    # Who is asking. Set by the API from the session cookie, and used to
+    # scope learned terms: one user's teaching must not answer another
+    # user's question.
+    user_id: Optional[int]
+
     context: List[str]
     knowledge_inferred: bool    # True when the Knowledge Agent had to derive it
     knowledge_confident: bool

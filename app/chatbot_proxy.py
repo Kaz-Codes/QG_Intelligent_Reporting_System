@@ -78,8 +78,54 @@ async def chat_stream(request: Request):
 
 
 @router.get("/chat/{thread_id}/history")
-async def chat_history(thread_id: str):
-    upstream = await _client.get(f"/api/chat/{thread_id}/history")
+async def chat_history(thread_id: str, request: Request):
+    # The cookie has to travel: the chatbot decides whether this caller owns
+    # the thread, and without it every request looks anonymous.
+    upstream = await _client.get(
+        f"/api/chat/{thread_id}/history", headers=_forward_headers(request.headers)
+    )
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_forward_headers(upstream.headers),
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+# The user's saved conversation. Forwarded like everything else so the session
+# cookie reaches the chatbot, which is what scopes a conversation to its owner.
+@router.put("/conversation")
+async def save_conversation(request: Request):
+    body = await request.body()
+    upstream = await _client.put(
+        "/api/conversation", content=body, headers=_forward_headers(request.headers)
+    )
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_forward_headers(upstream.headers),
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+@router.get("/conversation")
+async def restore_conversation(request: Request):
+    upstream = await _client.get(
+        "/api/conversation", headers=_forward_headers(request.headers)
+    )
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_forward_headers(upstream.headers),
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+@router.delete("/conversation/{thread_id}")
+async def delete_conversation(thread_id: str, request: Request):
+    upstream = await _client.delete(
+        f"/api/conversation/{thread_id}", headers=_forward_headers(request.headers)
+    )
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,

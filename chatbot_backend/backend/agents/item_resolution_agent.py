@@ -161,6 +161,28 @@ def _best_matches(query: str, candidates: List[dict]) -> List[dict]:
     return exact or worded or loose
 
 
+def _matched_on_words(query: str, candidate: dict) -> bool:
+    """True only when every token of the query is a WHOLE WORD in the candidate.
+
+    The guard against auto-pinning a coincidence: "rank" is a substring of
+    "Crank", "bar" of "Barrel", "oil" of "Boiler". A substring hit tells you
+    nothing about whether the user meant that item.
+    """
+    tokens = [t.lower() for t in re.split(r"[^0-9a-zA-Z]+", query or "") if t]
+    if not tokens:
+        return False
+
+    hay = _haystack(candidate)
+    # The EXACT tier is safe too: "resin a85" normalises to the same string as
+    # Resin + spec "A-85", so the user has already named the item precisely -
+    # even though "a85" is not a whole word once punctuation is stripped.
+    if _tight(query) and _tight(hay) == _tight(query):
+        return True
+
+    words = set(re.split(r"[^0-9a-z]+", hay.lower()))
+    return all(t in words for t in tokens)
+
+
 def _pin_note(item_name: str, codes: List[str]) -> str:
     """The user really did choose these - state it as settled."""
     codes_list = ", ".join(f"'{c}'" for c in codes)
@@ -468,7 +490,16 @@ def item_resolution_agent(state: dict) -> dict:
     # list is friction, not diligence. Only a genuine tie gets a question.
     if not truncated:
         best = _best_matches(item_name, candidates)
-        if len(best) == 1:
+        # A SUBSTRING-ONLY match must never auto-pin. _best_matches falls back
+        # to a loose tier where every token merely appears SOMEWHERE in the
+        # text, and that tier matches things nobody meant: asked "which A rank
+        # items are out of stock", it resolved 'A rank items' to
+        # 'Crank Lath Machine Tol Post' - because "rank" is inside "Crank" -
+        # and pinned it as an exact item_code. The query then filtered the whole
+        # question down to one irrelevant machine part and answered 0.
+        # Pinning is only safe on a whole-word or exact match; a loose hit is a
+        # coincidence of spelling, not an identification.
+        if len(best) == 1 and _matched_on_words(item_name, best[0]):
             return {
                 # _auto_note, not _pin_note: we inferred this, the user never
                 # saw it, and the SQL agent must be able to override it.

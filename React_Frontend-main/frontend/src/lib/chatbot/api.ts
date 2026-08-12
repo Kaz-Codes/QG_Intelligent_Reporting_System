@@ -38,6 +38,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     response = await fetch(`${CHATBOT_BASE_URL}${path}`, {
       ...init,
+      // The chatbot sits on the API's origin, not the dev server's, so the
+      // session cookie is NOT sent by default. Without this the backend sees
+      // every request as anonymous - no owner on a conversation, nothing to
+      // restore, and no audit trail.
+      credentials: 'include',
       headers: init.body ? { 'Content-Type': 'application/json', ...init.headers } : init.headers,
     })
   } catch (err) {
@@ -88,6 +93,9 @@ export async function streamMessage(
   try {
     response = await fetch(`${CHATBOT_BASE_URL}/chat/stream`, {
       method: 'POST',
+      // Same reason as request(): cross-origin, so the session cookie only
+      // travels when asked for. This is the endpoint the UI actually uses.
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, thread_id: threadId || undefined }),
       signal: opts.signal,
@@ -136,4 +144,27 @@ export function fetchChatHistory(
 /** Chatbot backend + database health, for the connection indicator. */
 export function fetchChatHealth(opts: { signal?: AbortSignal } = {}): Promise<HealthResponse> {
   return request('/health', { signal: opts.signal })
+}
+
+
+/** The user's saved conversation, restored when they sign back in. */
+export async function saveConversation(
+  threadId: string,
+  messages: unknown[],
+): Promise<{ saved: boolean }> {
+  return request('/conversation', {
+    method: 'PUT',
+    body: JSON.stringify({ thread_id: threadId, messages }),
+  })
+}
+
+export async function fetchConversation(
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ thread_id: string | null; messages: unknown[] }> {
+  return request('/conversation', { signal: opts.signal })
+}
+
+/** Clears it from the user's view. The row stays in the database. */
+export async function deleteConversation(threadId: string): Promise<{ deleted: boolean }> {
+  return request(`/conversation/${encodeURIComponent(threadId)}`, { method: 'DELETE' })
 }

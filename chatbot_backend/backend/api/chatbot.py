@@ -11,12 +11,14 @@ import json
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from pydantic import BaseModel, Field
 
 from backend.graph.memory import get_checkpointer
+from backend.api.identity import current_user_id
+from backend.database import chat_log, conversation_store
 from backend.graph.workflow import build_graph
 from backend.tools.postgres_tools import ping
 
@@ -89,13 +91,23 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     thread_id = request.thread_id or str(uuid.uuid4())
+    user_id = current_user_id(http_request)
+
+    # A thread belongs to whoever started it. Refusing to continue somebody
+    # else's is what stops a thread id left in a shared browser handing the
+    # next person the previous user's conversation.
+    owner = chat_log.thread_owner(thread_id)
+    if owner is not None and user_id is not None and owner != user_id:
+        raise HTTPException(status_code=403, detail="That conversation belongs to another user.")
 
     try:
         result = _graph.invoke(
             {
                 "user_query": request.message,
+                # Scopes learned-term retrieval to this user.
+                "user_id": user_id,
                 "messages": [HumanMessage(content=request.message)],
                 # Reset per-turn scratch fields so a retry budget or error from
                 # the previous turn does not leak into this one.
@@ -110,7 +122,23 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     _maybe_persist_learned(result)
     _maybe_cache_query(result)
-    return _build_response(thread_id, result)
+    response = _build_response(thread_id, result)
+    chat_log.log_turn(
+        thread_id=thread_id,
+        user_id=user_id,
+        question=request.message,
+        answer=response.answer,
+        route=result.get("route", ""),
+        sql_text=result.get("sql", ""),
+        row_count=result.get("row_count"),
+        meta={"intent": result.get("intent", ""), "domain": result.get("domain", "")},
+    )
+    # Stored server-side so the conversation survives whether or not the
+    # browser gets round to sending it back.
+    conversation_store.append_turn(
+        thread_id, user_id, request.message, response.model_dump()
+    )
+    return response
 
 
 def _build_response(thread_id: str, result: Dict[str, Any]) -> ChatResponse:
@@ -165,7 +193,9 @@ def _sse(payload: Dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
 
-async def _event_stream(request: ChatRequest, thread_id: str) -> AsyncIterator[str]:
+async def _event_stream(
+    request: ChatRequest, thread_id: str, user_id: Optional[int] = None
+) -> AsyncIterator[str]:
     """
     Run the graph, emitting progress as it goes.
 
@@ -196,6 +226,8 @@ async def _event_stream(request: ChatRequest, thread_id: str) -> AsyncIterator[s
         async for mode, chunk in _graph.astream(
             {
                 "user_query": request.message,
+                # Scopes learned-term retrieval to this user.
+                "user_id": user_id,
                 "messages": [HumanMessage(content=request.message)],
                 "sql_attempts": 0,
                 "sql_error": "",
@@ -244,11 +276,27 @@ async def _event_stream(request: ChatRequest, thread_id: str) -> AsyncIterator[s
     # Clarification and teach replies short-circuit the LLM, so no tokens were
     # streamed - the client uses `answer` from here in that case.
     payload["streamed"] = streamed_any_token
+
+    # Logged as the stream closes, so the record carries the answer the user
+    # actually saw rather than a half-written one.
+    chat_log.log_turn(
+        thread_id=thread_id,
+        user_id=user_id,
+        question=request.message,
+        answer=payload.get("answer", ""),
+        route=payload.get("route", ""),
+        sql_text=(result or {}).get("sql", ""),
+        row_count=payload.get("row_count"),
+        meta={"intent": payload.get("intent", ""), "domain": payload.get("domain", "")},
+    )
+
+    conversation_store.append_turn(thread_id, user_id, request.message, payload)
+
     yield _sse({"type": "done", **payload})
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, http_request: Request):
     """
     Same turn as POST /chat, streamed as Server-Sent Events.
 
@@ -258,8 +306,16 @@ async def chat_stream(request: ChatRequest):
     non-streaming clients.
     """
     thread_id = request.thread_id or str(uuid.uuid4())
+    user_id = current_user_id(http_request)
+
+    # A thread belongs to whoever started it. This is what stops a thread id
+    # left in a shared browser continuing the previous user's conversation.
+    owner = chat_log.thread_owner(thread_id)
+    if owner is not None and user_id is not None and owner != user_id:
+        raise HTTPException(status_code=403, detail="That conversation belongs to another user.")
+
     return StreamingResponse(
-        _event_stream(request, thread_id),
+        _event_stream(request, thread_id, user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -298,6 +354,9 @@ def _maybe_persist_learned(result: Dict[str, Any]) -> None:
             result.get("rewritten_query") or result.get("user_query", ""),
             result["knowledge_notes"],
             confident=True,
+            # Scoped to the asker: an inference made while answering one
+            # person's question should not silently answer another's.
+            user_id=result.get("user_id"),
         )
     except Exception:
         # Persistence is best-effort - never fail a good answer over it.
@@ -360,8 +419,21 @@ def _maybe_cache_query(result: Dict[str, Any]) -> None:
 
 
 @router.get("/chat/{thread_id}/history")
-def history(thread_id: str) -> Dict[str, Any]:
-    """Replay a conversation from the checkpointer."""
+def history(thread_id: str, http_request: Request) -> Dict[str, Any]:
+    """Replay a conversation - but only for the user it belongs to.
+
+    This used to hand any thread to anyone holding its id, which is how a
+    thread id surviving logout in localStorage showed the next user the
+    previous one's conversation.
+    """
+    user_id = current_user_id(http_request)
+    owner = chat_log.thread_owner(thread_id)
+    if owner is not None and owner != user_id:
+        # Empty, not 403: the client asks for history on every page load, and a
+        # stale id from a previous session is an ordinary event, not an error
+        # worth showing the user.
+        return {"thread_id": thread_id, "messages": []}
+
     snapshot = _graph.get_state({"configurable": {"thread_id": thread_id}})
     messages = snapshot.values.get("messages", []) if snapshot else []
     return {
@@ -389,3 +461,70 @@ def health() -> Dict[str, Any]:
         "database": "up" if ping() else "down",
         "warm": getattr(app_main, "_WARM", False),
     }
+
+
+# ---------------------------------------------------------------------------
+# The user's own conversation: saved as they go, restored when they come back.
+#
+# Separate from /chat/{id}/history, which replays the graph checkpointer and so
+# only ever has prose. These carry the rendered messages - tables, charts, the
+# clarification chips - so a restored screen looks exactly like the one they
+# left rather than a transcript of it.
+# ---------------------------------------------------------------------------
+
+
+class ConversationBody(BaseModel):
+    thread_id: str
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@router.put("/conversation")
+def save_conversation(body: ConversationBody, http_request: Request) -> Dict[str, Any]:
+    """Upsert the signed-in user's conversation."""
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        # Nothing to attach it to. Not an error - an anonymous session simply
+        # has no conversation to restore later.
+        return {"saved": False, "reason": "not signed in"}
+
+    existing = conversation_store.owner(body.thread_id)
+    if existing is not None and existing != user_id:
+        raise HTTPException(status_code=403, detail="That conversation belongs to another user.")
+
+    return {"saved": conversation_store.save(body.thread_id, user_id, body.messages)}
+
+
+@router.get("/conversation")
+def restore_conversation(http_request: Request) -> Dict[str, Any]:
+    """
+    The signed-in user's most recent conversation, or an empty one.
+
+    Only status='active' is returned, so a conversation the user deleted stays
+    deleted for them however many times they sign back in.
+    """
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        return {"thread_id": None, "messages": []}
+
+    found = conversation_store.latest(user_id)
+    if not found:
+        return {"thread_id": None, "messages": []}
+    return {
+        "thread_id": found["thread_id"],
+        "messages": found["messages"],
+        "updated_at": str(found.get("updated_at") or ""),
+    }
+
+
+@router.delete("/conversation/{thread_id}")
+def delete_conversation(thread_id: str, http_request: Request) -> Dict[str, Any]:
+    """
+    Clear it from the user's screen, keep it in the database.
+
+    A soft delete: status becomes 'deleted' and the row stays, so what was
+    asked is still on record even though the user has cleared their view.
+    """
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        return {"deleted": False, "reason": "not signed in"}
+    return {"deleted": conversation_store.soft_delete(thread_id, user_id)}
