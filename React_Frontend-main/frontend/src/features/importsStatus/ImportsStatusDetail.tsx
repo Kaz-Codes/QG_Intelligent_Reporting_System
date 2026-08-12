@@ -242,7 +242,7 @@ export function ImportsStatusDetail() {
       )}
 
       {/* section nav */}
-      <nav className="sticky top-14 z-10 flex gap-1 overflow-x-auto rounded-lg border border-line bg-surface p-1">
+      <nav className="sticky top-0 z-20 -mx-1 flex gap-1 overflow-x-auto rounded-lg border border-line bg-surface p-1 shadow-sm">
         {WIZARD_STEPS.map((s) => (
           <a key={s.key} href={`#s-${s.key}`} className="flex-1 whitespace-nowrap rounded px-3 py-1.5 text-center text-xs text-muted hover:bg-canvas-alt hover:text-ink">
             {s.label}
@@ -467,7 +467,7 @@ function Section({
   id, title, children, edit,
 }: { id: string; title: string; editStep?: string; children: React.ReactNode; edit?: React.ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-28 rounded-xl border border-line bg-surface">
+    <section id={id} className="scroll-mt-20 rounded-xl border border-line bg-surface">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
         {edit}
