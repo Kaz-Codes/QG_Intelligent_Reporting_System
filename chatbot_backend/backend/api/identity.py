@@ -22,17 +22,73 @@ app/auth/create_token.py and set as an httponly cookie named `access_token`.
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 load_dotenv()
 
 COOKIE_NAME = "access_token"
 ALGORITHM = "HS256"
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_secret() -> Optional[str]:
+    """
+    The key the ERP signs its cookies with.
+
+    THE ERP'S VALUE WINS, and that is not a preference - it is the definition.
+    The ERP issues the token; this service only verifies it. If the two .env
+    files disagree, the chatbot's own value is simply the wrong key for the job,
+    and using it means every request is anonymous.
+
+    This is worth resolving automatically because .env is gitignored - correctly,
+    it holds secrets - so nothing carries the value between machines and the two
+    files drift apart on every new checkout. The result is invisible: answers
+    keep working while conversations are never stored or restored, audit rows
+    get no user, and taught terms cannot be attributed. That failure has been
+    hit on more than one machine, each time costing a long hunt for a database
+    or frontend bug that was never there.
+
+    So: read the ERP's .env, which sits at the repo root above this package, and
+    prefer it. Falls back to this service's own value when the ERP's cannot be
+    found, which is what a standalone deployment looks like.
+    """
+    own = os.getenv("JWT_SECRET_KEY")
+
+    erp_env = None
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / ".env"
+        # Skip our own .env; we want the one belonging to the ERP above us.
+        if candidate.exists() and candidate.parent.name != "chatbot_backend":
+            erp_env = candidate
+            break
+
+    if erp_env is None:
+        return own
+
+    try:
+        erp_secret = dotenv_values(erp_env).get("JWT_SECRET_KEY")
+    except Exception:
+        return own
+
+    if not erp_secret:
+        return own
+    if own and own != erp_secret:
+        log.warning(
+            "JWT_SECRET_KEY in chatbot_backend/.env does not match the ERP's "
+            "(%s). Using the ERP's, because it is what signs the session "
+            "cookie - otherwise every user would be anonymous here. Align the "
+            "two files to silence this.",
+            erp_env,
+        )
+    return erp_secret
+
+
+SECRET_KEY = _resolve_secret()
 
 # A token that arrives and FAILS to verify is the single most expensive silent
 # failure in this system, so it is reported - once, not per request, because a
