@@ -52,6 +52,26 @@ CREATE INDEX IF NOT EXISTS {_TABLE}_user_idx
     ON {_TABLE} (user_id, status, updated_at DESC);
 """
 
+# user_id IS users.id - the same value the ERP puts in the session token - so a
+# conversation joins straight to its owner:
+#
+#   SELECT u.username, c.title, c.updated_at
+#     FROM chatbot_conversations c JOIN users u ON u.id = c.user_id
+#
+# The foreign key makes that relationship real rather than conventional: a row
+# can no longer be written against a user who does not exist, which is what
+# keeps "whose chat is this" answerable months later.
+#
+# RESTRICT, not CASCADE. Deleting a user must not silently delete the record of
+# what they asked - the whole point of soft-deleting conversations is that the
+# history outlives the user's own clearing of it. Deactivate users
+# (users.is_active) rather than removing them.
+_FK = f"""
+ALTER TABLE {_TABLE}
+  ADD CONSTRAINT {_TABLE}_user_fk
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT
+"""
+
 _ready = False
 
 
@@ -65,7 +85,34 @@ def ensure_table() -> bool:
         _ready = True
     except Exception:
         _ready = False
+    if _ready:
+        _link_to_users()
     return _ready
+
+
+def _link_to_users() -> None:
+    """
+    Add the users foreign key if it is not already there.
+
+    Deliberately separate from ensure_table and deliberately silent on failure.
+    The constraint is an integrity improvement, not a precondition for storing
+    a conversation - if the users table lives elsewhere, or existing rows do
+    not satisfy it, the right outcome is an unlinked table that still saves
+    chats, not a chatbot that has quietly stopped remembering anything.
+    """
+    try:
+        with get_engine().begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_constraint WHERE conname = :n "
+                    "AND conrelid = CAST(:t AS regclass)"
+                ),
+                {"n": f"{_TABLE}_user_fk", "t": _TABLE},
+            ).first()
+            if not exists:
+                conn.execute(text(_FK))
+    except Exception:
+        pass
 
 
 def _trim(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

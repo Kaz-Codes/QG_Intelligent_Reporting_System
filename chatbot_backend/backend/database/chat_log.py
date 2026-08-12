@@ -51,6 +51,18 @@ CREATE INDEX IF NOT EXISTS {_TABLE}_thread_idx  ON {_TABLE} (thread_id, id);
 CREATE INDEX IF NOT EXISTS {_TABLE}_user_idx    ON {_TABLE} (user_id, created_at DESC);
 """
 
+# user_id is users.id, so "what did this person ask" is a join, not a guess.
+#
+# SET NULL, not RESTRICT, and the column stays nullable. Unlike a conversation,
+# an audit row can legitimately have no user - the chatbot still answers an
+# unauthenticated caller - and if a user is ever removed the record of what was
+# asked and which SQL ran must survive them, unattributed rather than deleted.
+_FK = f"""
+ALTER TABLE {_TABLE}
+  ADD CONSTRAINT {_TABLE}_user_fk
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+"""
+
 _ready = False
 
 
@@ -65,7 +77,26 @@ def ensure_table() -> bool:
         _ready = True
     except Exception:
         _ready = False
+    if _ready:
+        _link_to_users()
     return _ready
+
+
+def _link_to_users() -> None:
+    """Best-effort foreign key; see conversation_store._link_to_users."""
+    try:
+        with get_engine().begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_constraint WHERE conname = :n "
+                    "AND conrelid = CAST(:t AS regclass)"
+                ),
+                {"n": f"{_TABLE}_user_fk", "t": _TABLE},
+            ).first()
+            if not exists:
+                conn.execute(text(_FK))
+    except Exception:
+        pass
 
 
 def log_turn(

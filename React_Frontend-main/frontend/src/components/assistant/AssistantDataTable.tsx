@@ -1,12 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
-import { useRowWindow } from './useRowWindow'
-import { ArrowDown, ArrowUp, Download, GripVertical, Sheet } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Download, GripVertical, Sheet } from 'lucide-react'
 
 // Renders the rows behind an assistant answer as a real, interactive table:
 // click a header to sort, drag a header's grip to reorder columns, search
-// globally or within one column, and every row is present (the backend does
-// not cap them — the container just scrolls). Export what's currently shown
-// (after filtering/sorting/reordering) as CSV or a real .xlsx.
+// globally or within one column, and page through the result. Export what's
+// currently shown (after filtering/sorting/reordering) as CSV or a real .xlsx.
+//
+// PAGED, NOT SCROLLED. Every row the backend returns is still here — sorting,
+// searching and export all see the complete result — but only one page of them
+// is ever in the DOM. A 3,000-row answer used to mean 3,000 <tr> elements,
+// which is what made the page lag; now it means 20, and the cost of rendering
+// an answer no longer depends on how big the answer is.
 //
 // Deliberately separate from the app's own <DataTable> (components/DataTable.tsx),
 // which renders a fixed, page-defined column set — an assistant answer's
@@ -106,6 +110,10 @@ function toCsv(columns: string[], rows: Record<string, unknown>[]): string {
   return `${header}\n${body}`
 }
 
+// One screenful. Small enough that a page renders instantly however large the
+// underlying result is.
+const PAGE_SIZE = 20
+
 interface Props {
   columns?: string[]
   rows: Record<string, unknown>[]
@@ -155,8 +163,26 @@ export function AssistantDataTable({ columns, rows }: Props) {
     })
   }, [filteredRows, sort])
 
-  // Only the rows in view are drawn; see useRowWindow for why.
-  const win = useRowWindow(visibleRows.length)
+  const [page, setPage] = useState(1)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE))
+  // Clamped rather than trusted: filtering can shrink the result under the
+  // page the user is on, and page 7 of 2 would render as empty.
+  const safePage = Math.min(page, pageCount)
+  const firstRow = (safePage - 1) * PAGE_SIZE
+  const pageRows = visibleRows.slice(firstRow, firstRow + PAGE_SIZE)
+
+  // Any change to what's being shown starts again from the first page —
+  // staying on page 12 of a search the user just narrowed reads as no results.
+  useEffect(() => {
+    setPage(1)
+  }, [query, colFilters, sort, rows])
+
+  const goToPage = (next: number) => {
+    setPage(Math.min(Math.max(next, 1), pageCount))
+    scrollRef.current?.scrollTo({ top: 0 })
+  }
 
   if (!rows.length || !cols.length) return null
 
@@ -218,8 +244,17 @@ export function AssistantDataTable({ columns, rows }: Props) {
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-surface">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
+        {/* Which rows these are, not just how many — with a page showing 20 of
+            3,000, "3,000 rows" alone leaves the user unsure what they're
+            looking at. */}
         <span className="text-xs text-muted">
-          {filtering ? `${visibleRows.length} of ${rows.length} rows` : `${rows.length} row${rows.length === 1 ? '' : 's'}`}
+          {visibleRows.length > 0 && (
+            <>
+              {(firstRow + 1).toLocaleString()}–{Math.min(firstRow + PAGE_SIZE, visibleRows.length).toLocaleString()} of{' '}
+            </>
+          )}
+          {visibleRows.length.toLocaleString()}
+          {filtering ? ` of ${rows.length.toLocaleString()} rows` : ` row${visibleRows.length === 1 ? '' : 's'}`}
         </span>
         <div className="flex items-center gap-2">
           {rows.length > 5 && (
@@ -247,7 +282,7 @@ export function AssistantDataTable({ columns, rows }: Props) {
         </div>
       </div>
 
-      <div ref={win.scrollRef} className="max-h-[380px] overflow-auto">
+      <div ref={scrollRef} className="max-h-[380px] overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 bg-canvas-alt">
             <tr>
@@ -289,15 +324,8 @@ export function AssistantDataTable({ columns, rows }: Props) {
             </tr>
           </thead>
           <tbody>
-            {/* Stands in for the rows scrolled off the top, so the scrollbar
-                keeps reporting the real length of the result. */}
-            {win.padTop > 0 && (
-              <tr aria-hidden="true" style={{ height: win.padTop }}>
-                <td colSpan={order.length} className="p-0" />
-              </tr>
-            )}
-            {visibleRows.slice(win.start, win.end).map((row, i) => (
-              <tr key={win.start + i} className="odd:bg-canvas">
+            {pageRows.map((row, i) => (
+              <tr key={firstRow + i} className="odd:bg-canvas">
                 {order.map((c) => (
                   <td
                     key={c}
@@ -308,11 +336,6 @@ export function AssistantDataTable({ columns, rows }: Props) {
                 ))}
               </tr>
             ))}
-            {win.padBottom > 0 && (
-              <tr aria-hidden="true" style={{ height: win.padBottom }}>
-                <td colSpan={order.length} className="p-0" />
-              </tr>
-            )}
             {visibleRows.length === 0 && (
               <tr>
                 <td colSpan={order.length} className="px-3 py-6 text-center text-muted">
@@ -323,6 +346,28 @@ export function AssistantDataTable({ columns, rows }: Props) {
           </tbody>
         </table>
       </div>
+
+      {pageCount > 1 && (
+        <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2">
+          <button
+            onClick={() => goToPage(safePage - 1)}
+            disabled={safePage === 1}
+            className="inline-flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-canvas-alt hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ArrowLeft size={12} /> Prev
+          </button>
+          <span className="text-xs tabular-nums text-muted">
+            Page {safePage.toLocaleString()} of {pageCount.toLocaleString()}
+          </span>
+          <button
+            onClick={() => goToPage(safePage + 1)}
+            disabled={safePage === pageCount}
+            className="inline-flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-canvas-alt hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Next <ArrowRight size={12} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
