@@ -8,6 +8,7 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth/AuthContext'
+import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
 import { can } from '@/lib/roleAccess'
 import {
   totalNetWeight, totalPackageGrossWeight, orderTypeLabel, jobNumbers, batchDisplayLabel,
@@ -20,7 +21,8 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { ApiError } from '@/lib/api/client'
 import {
   listLogisticsOrders, fetchLogisticsFilterOptions, exportLogisticsExcel, downloadBlob,
-  reopenLogisticsOrder, type LogisticsQuery,
+  reopenLogisticsOrder, deleteLogisticsOrder, undoDeleteLogisticsOrder,
+  type LogisticsQuery,
 } from '@/lib/api/logistics'
 import { apiToRow, type LogisticsListRow } from '@/lib/api/logisticsMap'
 
@@ -102,6 +104,7 @@ export function LogisticsStatusList() {
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [reopeningId, setReopeningId] = useState<number | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   /** The closed order awaiting reopen confirmation; null means no dialog. */
   const [confirmReopen, setConfirmReopen] = useState<LogisticsListRow | null>(null)
 
@@ -134,6 +137,26 @@ export function LogisticsStatusList() {
 
   useEffect(() => { loadOptions() }, [loadOptions])
 
+  /** Soft delete, and its undo.
+   *
+   *  Re-reads the list rather than patching state: deleting can change which
+   *  page a row belongs on, and the backend decides that.
+   */
+  async function handleDelete(id: number, restore: boolean) {
+    setDeletingId(id)
+    setError(null)
+    try {
+      if (restore) await undoDeleteLogisticsOrder(id)
+      else await deleteLogisticsOrder(id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message
+        : `Could not ${restore ? 'restore' : 'delete'} this order`)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const query: LogisticsQuery = useMemo(() => ({
     page,
     pageSize: PAGE_SIZE,
@@ -148,7 +171,13 @@ export function LogisticsStatusList() {
     // explicitly rather than relying on the server-side default, so the
     // intent is readable at the call site.
     jobKind: 'standard',
-  }), [page, statusFilter, orderTypeFilter, customerFilter, gateOutFrom, gateOutTo, debouncedSearch])
+    // Deleted orders are FETCHED ONLY FOR AN ADMIN. Nobody else can undo a
+    // delete, so for them the rows would be unactionable clutter — and the
+    // list is where the undo button lives, so a deleted order has to be
+    // reachable here rather than hidden on a screen of its own.
+    includeDeleted: !!user?.isAdmin,
+  }), [page, statusFilter, orderTypeFilter, customerFilter, gateOutFrom, gateOutTo,
+       debouncedSearch, user?.isAdmin])
 
   // Any filter change puts us back on page 1 — staying on page 7 of a result
   // set that now has 2 pages would show an empty table.
@@ -352,7 +381,7 @@ export function LogisticsStatusList() {
                 return (
                   <Fragment key={o.id}>
                   <tr
-                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${inMoGroup ? 'border-l-2 border-l-brand' : ''} ${isOpen ? 'bg-canvas-alt' : ''}`}
+                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${inMoGroup ? 'border-l-2 border-l-brand' : ''} ${isOpen ? 'bg-canvas-alt' : ''} ${o.isDeleted ? DELETED_ROW_CLASS : ''}`}
                     onClick={() => setExpandedId(isOpen ? null : o.id)}
                     aria-expanded={isOpen}
                     style={o.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
@@ -460,6 +489,18 @@ export function LogisticsStatusList() {
                         >
                           History
                         </button>
+                        {/* Admin only — and only the admin ever sees a deleted
+                            order to restore, since the list fetches them for
+                            nobody else. */}
+                        {user?.isAdmin && (
+                          <RowDeleteActions
+                            isDeleted={o.isDeleted}
+                            busy={deletingId === o.id}
+                            label={`order ${o.moNo || o.id}`}
+                            onDelete={() => void handleDelete(o.id, false)}
+                            onUndo={() => void handleDelete(o.id, true)}
+                          />
+                        )}
                       </div>
                     </td>
                   </tr>

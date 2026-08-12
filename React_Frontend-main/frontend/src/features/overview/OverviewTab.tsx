@@ -364,7 +364,7 @@ export function OverviewTab() {
               fieldOptions={data.date_field_options.logistics}
               field={logisticsField} onFieldChange={setLogisticsField}
             />
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
               <KpiCard label="Trucking Cost" value={money(data.logistics.trucking_cost.total)}
                 sub="all jobs to date" icon={Truck}
                 refs={data.logistics.references.trucking_cost}

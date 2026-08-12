@@ -121,7 +121,7 @@ export function ShipmentsView() {
               rather than left to be discovered. */}
           {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
             <KpiCard label="Orders"
               value={data.orderTypeCounts.total.toLocaleString()}
               sub={`${data.orderTypeCounts.export.toLocaleString()} export · ${data.orderTypeCounts.local.toLocaleString()} local · ${data.orderTypeCounts.not_stated.toLocaleString()} not stated`}

@@ -18,19 +18,16 @@ import type { PageKey } from '@/theme/tokens'
 export const CAN_VIEW_IMPORTS = 'can_view_imports_consignments'
 export const CAN_ADD_IMPORTS = 'can_add_imports_consignments'
 export const CAN_EDIT_IMPORTS = 'can_edit_imports_consignments'
-export const CAN_DELETE_IMPORTS = 'can_delete_imports_consignments'
 
 // --- logistics consignments ---
 export const CAN_VIEW_LOGISTICS = 'can_view_logistics_consignments'
 export const CAN_ADD_LOGISTICS = 'can_add_logistics_consignments'
 export const CAN_EDIT_LOGISTICS = 'can_edit_logistics_consignments'
-export const CAN_DELETE_LOGISTICS = 'can_delete_logistics_consignments'
 
 // --- trucking consignments ---
 export const CAN_VIEW_TRUCKING = 'can_view_trucking_consignments'
 export const CAN_ADD_TRUCKING = 'can_add_trucking_consignments'
 export const CAN_EDIT_TRUCKING = 'can_edit_trucking_consignments'
-export const CAN_DELETE_TRUCKING = 'can_delete_trucking_consignments'
 
 // --- dashboards (view-only) ---
 export const CAN_VIEW_OVERVIEW_DASHBOARD = 'can_view_overview_dashboard'
@@ -57,7 +54,6 @@ export const PERMISSION_GROUPS: { group: string; permissions: { value: Permissio
       { value: CAN_VIEW_IMPORTS, label: 'View' },
       { value: CAN_ADD_IMPORTS, label: 'Add' },
       { value: CAN_EDIT_IMPORTS, label: 'Edit' },
-      { value: CAN_DELETE_IMPORTS, label: 'Delete' },
     ],
   },
   {
@@ -66,7 +62,6 @@ export const PERMISSION_GROUPS: { group: string; permissions: { value: Permissio
       { value: CAN_VIEW_LOGISTICS, label: 'View' },
       { value: CAN_ADD_LOGISTICS, label: 'Add' },
       { value: CAN_EDIT_LOGISTICS, label: 'Edit' },
-      { value: CAN_DELETE_LOGISTICS, label: 'Delete' },
     ],
   },
   {
@@ -75,7 +70,6 @@ export const PERMISSION_GROUPS: { group: string; permissions: { value: Permissio
       { value: CAN_VIEW_TRUCKING, label: 'View' },
       { value: CAN_ADD_TRUCKING, label: 'Add' },
       { value: CAN_EDIT_TRUCKING, label: 'Edit' },
-      { value: CAN_DELETE_TRUCKING, label: 'Delete' },
     ],
   },
   {
@@ -109,9 +103,9 @@ export const PERMISSION_GROUPS: { group: string; permissions: { value: Permissio
 export const PERMISSIONS = PERMISSION_GROUPS.flatMap((g) => g.permissions)
 
 export const PERMISSION_NAMES = [
-  CAN_VIEW_IMPORTS, CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS, CAN_DELETE_IMPORTS,
-  CAN_VIEW_LOGISTICS, CAN_ADD_LOGISTICS, CAN_EDIT_LOGISTICS, CAN_DELETE_LOGISTICS,
-  CAN_VIEW_TRUCKING, CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING, CAN_DELETE_TRUCKING,
+  CAN_VIEW_IMPORTS, CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS,
+  CAN_VIEW_LOGISTICS, CAN_ADD_LOGISTICS, CAN_EDIT_LOGISTICS,
+  CAN_VIEW_TRUCKING, CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING,
   CAN_VIEW_OVERVIEW_DASHBOARD, CAN_VIEW_IMPORTS_DASHBOARD, CAN_VIEW_LOGISTICS_DASHBOARD,
   CAN_VIEW_PURCHASES_DASHBOARD, CAN_VIEW_INVENTORY_DASHBOARD,
   CAN_VIEW_MASTER, CAN_ADD_MASTER, CAN_EDIT_MASTER,
@@ -139,10 +133,10 @@ export interface Access {
 /** The three data-entry modules, for module-scoped checks. */
 export type ModuleKey = 'imports' | 'logistics' | 'trucking'
 
-const MODULE_PERMISSIONS: Record<ModuleKey, { view: Permission; add: Permission; edit: Permission; remove: Permission }> = {
-  imports: { view: CAN_VIEW_IMPORTS, add: CAN_ADD_IMPORTS, edit: CAN_EDIT_IMPORTS, remove: CAN_DELETE_IMPORTS },
-  logistics: { view: CAN_VIEW_LOGISTICS, add: CAN_ADD_LOGISTICS, edit: CAN_EDIT_LOGISTICS, remove: CAN_DELETE_LOGISTICS },
-  trucking: { view: CAN_VIEW_TRUCKING, add: CAN_ADD_TRUCKING, edit: CAN_EDIT_TRUCKING, remove: CAN_DELETE_TRUCKING },
+const MODULE_PERMISSIONS: Record<ModuleKey, { view: Permission; add: Permission; edit: Permission }> = {
+  imports: { view: CAN_VIEW_IMPORTS, add: CAN_ADD_IMPORTS, edit: CAN_EDIT_IMPORTS },
+  logistics: { view: CAN_VIEW_LOGISTICS, add: CAN_ADD_LOGISTICS, edit: CAN_EDIT_LOGISTICS },
+  trucking: { view: CAN_VIEW_TRUCKING, add: CAN_ADD_TRUCKING, edit: CAN_EDIT_TRUCKING },
 }
 
 const DASHBOARD_PERMISSIONS: Permission[] = [
@@ -151,9 +145,9 @@ const DASHBOARD_PERMISSIONS: Permission[] = [
 ]
 
 const DATA_ENTRY_PERMISSIONS: Permission[] = [
-  CAN_VIEW_IMPORTS, CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS, CAN_DELETE_IMPORTS,
-  CAN_VIEW_LOGISTICS, CAN_ADD_LOGISTICS, CAN_EDIT_LOGISTICS, CAN_DELETE_LOGISTICS,
-  CAN_VIEW_TRUCKING, CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING, CAN_DELETE_TRUCKING,
+  CAN_VIEW_IMPORTS, CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS,
+  CAN_VIEW_LOGISTICS, CAN_ADD_LOGISTICS, CAN_EDIT_LOGISTICS,
+  CAN_VIEW_TRUCKING, CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING,
 ]
 
 const ALL_PAGES: PageKey[] = ['assistant', 'dashboard', 'reports', 'dataEntry', 'masters', 'userManagement']
@@ -200,7 +194,6 @@ export type Action =
   | 'enter'
   | 'editAny'
   | 'editOwnDraft'
-  | 'delete'
   | 'viewReports'
   | 'manageUsers'
   | 'manageMastersFull'
@@ -215,7 +208,7 @@ export function can(
   if (access.isAdmin) return true
 
   const modules: ModuleKey[] = module ? [module] : ['imports', 'logistics', 'trucking']
-  const forEach = (key: 'view' | 'add' | 'edit' | 'remove') =>
+  const forEach = (key: 'view' | 'add' | 'edit') =>
     modules.some((m) => access.permissions.includes(MODULE_PERMISSIONS[m][key]))
 
   switch (action) {
@@ -226,8 +219,6 @@ export function can(
     case 'editAny':
     case 'editOwnDraft':
       return forEach('edit')
-    case 'delete':
-      return forEach('remove')
     case 'viewReports':
       return has(access, CAN_MAKE_REPORTS)
     case 'manageMastersFull':

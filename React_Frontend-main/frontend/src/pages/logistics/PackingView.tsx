@@ -116,7 +116,7 @@ export function PackingView() {
         <>
           {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
             <KpiCard label="Packages" value={kpis.packing_jobs_shown.toLocaleString()}
               refs={refs.packages} fetchRefs={pager('packages')}
               help={LOGISTICS_HELP.packages} />
