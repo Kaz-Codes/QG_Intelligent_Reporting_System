@@ -43,6 +43,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const lastUserRef = useRef<string | null | undefined>(undefined)
   const restoredForRef = useRef<string | null>(null)
 
+  // useChatState returns a FRESH OBJECT every render, so naming `chat` as an
+  // effect dependency re-runs that effect on every render - and for the restore
+  // below, whose cleanup aborts its own request, that was fatal: the fetch was
+  // cancelled by the next render and the "already restored" guard then stopped
+  // it ever being retried, so a stored conversation never came back. Reading
+  // the hook through a ref lets the effects depend on the USER alone, which is
+  // the only thing that should actually re-trigger them.
+  const chatRef = useRef(chat)
+  chatRef.current = chat
+
   // THE CONVERSATION BELONGS TO THE PERSON WHO IS SIGNED IN.
   //
   // Sitting above the router is what lets an in-flight answer survive
@@ -67,10 +77,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       lastUserRef.current = id
       // Aborts anything in flight, drops the messages and clears the stored
       // thread id, so nothing of the previous session survives.
-      chat.resetConversation()
+      chatRef.current.resetConversation()
       restoredForRef.current = null
     }
-  }, [user?.username, chat])
+  }, [user?.username])
 
   // RESTORE the signed-in user's own conversation.
   //
@@ -81,22 +91,42 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const id = user?.username ?? null
     if (!id || restoredForRef.current === id) return
-    restoredForRef.current = id
 
-    const controller = new AbortController()
-    fetchConversation({ signal: controller.signal })
+    let cancelled = false
+    fetchConversation()
       .then((saved) => {
+        if (cancelled) return
         const messages = (saved?.messages ?? []) as AssistantMessage[]
         if (saved?.thread_id && messages.length) {
-          chat.restoreConversation(saved.thread_id, messages)
+          // Marked only ON SUCCESS - see below.
+          restoredForRef.current = id
+          chatRef.current.restoreConversation(saved.thread_id, messages)
         }
       })
       .catch(() => {
         // A conversation that cannot be restored is not worth an error on
-        // screen - the user simply starts a fresh one.
+        // screen, and leaving the marker unset means the next attempt retries.
       })
-    return () => controller.abort()
-  }, [user?.username, chat])
+    return () => {
+      cancelled = true
+    }
+    // WHY THE MARKER IS SET LATE, AND WHY THIS IS A FLAG NOT AN AbortController.
+    //
+    // StrictMode mounts every effect twice in development: run, clean up, run
+    // again. The original code claimed the marker BEFORE fetching and aborted
+    // the request on cleanup, so the sequence was: start fetch -> abort it ->
+    // re-run and return early because the marker was already claimed. The
+    // request that would have restored the conversation was cancelled, and the
+    // guard guaranteed nothing ever retried it. Restore could not succeed in
+    // development at all, which is why the endpoint returned the conversation
+    // to curl while the screen stayed empty.
+    //
+    // Claiming the marker only after a conversation actually comes back leaves
+    // the second StrictMode run free to fetch again, and the `cancelled` flag
+    // discards the first response instead of killing the request. One duplicate
+    // GET in development, on an idempotent read - which is the cheap half of
+    // this trade.
+  }, [user?.username])
 
   // SAVE after every completed turn, so closing the tab loses nothing.
   //
@@ -123,12 +153,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // and KEEPS the row - the user stops seeing it, the record of what was asked
   // survives, and it never comes back on a later sign-in.
   const clearConversation = useCallback(() => {
-    const id = chat.threadId
-    chat.resetConversation()
+    const id = chatRef.current.threadId
+    chatRef.current.resetConversation()
     restoredForRef.current = user?.username ?? null
     lastSavedRef.current = ''
     if (id) deleteConversation(id).catch(() => {})
-  }, [chat, user?.username])
+  }, [user?.username])
 
   const value = useMemo(() => ({ ...chat, clearConversation }), [chat, clearConversation])
 
