@@ -27,6 +27,9 @@ interface Props<T> {
   rows: T[]
   /** Rows flagged here get a left accent bar — used for "information pending". */
   flagged?: (row: T) => boolean
+  /** Extra classes per row. Used to strike through soft-deleted records, which
+   *  share the list with live ones so their undo button stays reachable. */
+  rowClassName?: (row: T) => string | undefined
   onRowClick?: (row: T) => void
   initialSort?: { key: string; dir: 'asc' | 'desc' }
   empty?: ReactNode
@@ -59,7 +62,7 @@ interface Props<T> {
 }
 
 export function SortableTable<T>({
-  columns, rows, flagged, onRowClick, initialSort, empty, maxHeight = 560, pageSize = 10,
+  columns, rows, flagged, rowClassName, onRowClick, initialSort, empty, maxHeight = 560, pageSize = 10,
   serverPagination, renderExpanded, rowKey,
 }: Props<T>) {
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(initialSort ?? null)
@@ -167,6 +170,7 @@ export function SortableTable<T>({
                     clickable ? 'cursor-pointer hover:bg-canvas-alt' : '',
                     flagged?.(row) ? 'shadow-[inset_3px_0_0_var(--color-warning)]' : '',
                     isOpen ? 'bg-canvas-alt' : '',
+                    rowClassName?.(row) ?? '',
                   ].join(' ')}
                 >
                   {columns.map((col, ci) => (

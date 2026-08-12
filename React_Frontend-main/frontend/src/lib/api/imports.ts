@@ -466,6 +466,29 @@ export async function reopenConsignmentApi(id: number | string): Promise<ApiCons
   return res.data
 }
 
+
+/**
+ * Soft delete, and its undo.
+ *
+ * NOTHING IS EVER HARD-DELETED (see CLAUDE.md): the row keeps its id, its
+ * children and its change history, and only `is_deleted` flips. That is what
+ * makes undo a real operation rather than a re-entry, and why a deleted record
+ * still has to be reachable — a list that hides it leaves the undo endpoint
+ * with no way to be called.
+ *
+ * The DELETED ROWS ARE FETCHED WITH `includeDeleted`, which the list query
+ * already supported and nothing had ever asked for.
+ */
+export async function deleteConsignmentApi(id: number | string): Promise<ApiConsignment> {
+  const res = await apiFetch<DetailEnvelope>(`/consignments/${id}`, { method: 'DELETE' })
+  return res.data
+}
+
+export async function undoDeleteConsignmentApi(id: number | string): Promise<ApiConsignment> {
+  const res = await apiFetch<DetailEnvelope>(`/consignments/undo-delete/${id}`, { method: 'POST' })
+  return res.data
+}
+
 /** Dropdown values built from what is actually stored — see the backend route
  *  for why this can't just be the enums. */
 export async function fetchFilterOptions() {

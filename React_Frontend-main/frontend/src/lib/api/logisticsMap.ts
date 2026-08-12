@@ -138,6 +138,9 @@ export interface LogisticsListRow {
   items: LogisticsListItem[]
   packages: LogisticsListPackage[]
   containers: LogisticsListContainer[]
+  /** Soft-deleted. Only ever present for an admin, who is the only
+   *  one the list fetches deleted rows for. */
+  isDeleted: boolean
 }
 
 /** Numerics cross the wire as STRINGS (the engine's json_serializer uses
@@ -265,6 +268,10 @@ export function apiToRow(o: ApiLogisticsOrder): LogisticsListRow {
     remarksLog: jsonArray<RemarkEntry>(o.remarks_log),
     recordState: o.record_state,
     isLocked: !!o.is_locked,
+    // Soft-deleted rows are only ever FETCHED for an admin (includeDeleted on
+    // the list query), but the flag has to reach the row either way — it is
+    // what decides between the delete and the undo button.
+    isDeleted: !!o.is_deleted,
     items,
     packages,
     containers,

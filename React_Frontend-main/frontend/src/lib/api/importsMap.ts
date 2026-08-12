@@ -134,6 +134,9 @@ export interface ImportsListRow {
   /** The user's own free-text note — distinct from systemRemarks. */
   userRemarks: string | null
   createdBy: string | null
+  /** Soft-deleted. Only ever present for an admin, who is the only
+   *  one the list fetches deleted rows for. */
+  isDeleted: boolean
 }
 
 function mapItem(item: ApiConsignmentItem): ImportsListItem {
@@ -275,6 +278,10 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
     missing: c.missing_fields ?? [],
     recordState: c.record_state,
     isLocked: c.is_locked,
+    // Soft-deleted rows are only ever FETCHED for an admin (includeDeleted on
+    // the list query), but the flag has to reach the row either way — it is
+    // what decides between the delete and the undo button.
+    isDeleted: !!c.is_deleted,
     isClosed: status === CLOSED_STATUS,
 
     sentToLogisticsAt: c.sent_to_logistics_at ?? null,

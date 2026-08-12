@@ -2,9 +2,8 @@ from app.imports.routes.router import router
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
-from app.accounts.permissions import CAN_DELETE_IMPORTS
-from app.imports.helpers import fetch_consignment, verify_entry_ownership
+from app.auth.authorize_user import require_admin
+from app.imports.helpers import fetch_consignment
 from app.imports.serializers import serialize_consignment
 
 @router.post("/undo-delete/{consignment_id}")
@@ -20,9 +19,10 @@ def undo_delete(
         # Authenticate user (whether user is logged in or not)
         user_payload = authenticate(request)
 
-        # Authorize user (Check whether user is allowed for this 
-        # action)
-        user = authorize(user_payload, CAN_DELETE_IMPORTS, db)
+        # ADMIN ONLY, and necessarily so: the only way to see a deleted record
+        # is the admin-only `include_deleted` view, so nobody else could reach
+        # this in the first place.
+        user = require_admin(user_payload, db)
 
         consignment = fetch_consignment(db, consignment_id)
 
@@ -31,9 +31,6 @@ def undo_delete(
                 status_code=404,
                 detail="Consignment not found"
             )
-
-        # Non-admins may only undo the deletion of their own records.
-        verify_entry_ownership(consignment, user, db)
 
         consignment.is_deleted = False
         consignment.deleted_by_id = None

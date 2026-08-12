@@ -135,7 +135,7 @@ export function TransportView() {
         <>
           {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
             <KpiCard label="Trucking Jobs" value={kpis.jobs_shown.toLocaleString()}
               refs={refs.jobs} fetchRefs={pager('jobs')}
               help={LOGISTICS_HELP.jobs} />
