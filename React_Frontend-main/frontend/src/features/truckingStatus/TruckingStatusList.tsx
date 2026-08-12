@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { StatusBadge } from '@/components/StatusBadge'
 import { useAuth } from '@/features/auth/AuthContext'
+import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
 import { can } from '@/lib/roleAccess'
 import { trackingRollup } from './schema'
 import { Pagination, useSort, SortHeader } from '@/components/Pagination'
@@ -16,6 +17,7 @@ import { ApiError } from '@/lib/api/client'
 import {
   listTruckingJobs, getOpenRequests, fetchTruckingFilterOptions,
   exportTruckingExcel, downloadBlob, reopenTruckingJob,
+  deleteTruckingJob, undoDeleteTruckingJob,
   type TruckingQuery, type ApiOpenRequest,
 } from '@/lib/api/trucking'
 import { apiToRow, sourceLabel, type TruckingListRow } from '@/lib/api/truckingMap'
@@ -64,6 +66,7 @@ export function TruckingStatusList() {
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [reopeningId, setReopeningId] = useState<number | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   const [confirmReopen, setConfirmReopen] = useState<TruckingListRow | null>(null)
 
   // --- dropdown options, from the data itself ---
@@ -90,13 +93,38 @@ export function TruckingStatusList() {
 
   useEffect(() => { loadOptions() }, [loadOptions])
 
+  /** Soft delete, and its undo.
+   *
+   *  Re-reads the list rather than patching state: deleting can change which
+   *  page a row belongs on, and the backend decides that.
+   */
+  async function handleDelete(id: number, restore: boolean) {
+    setDeletingId(id)
+    setError(null)
+    try {
+      if (restore) await undoDeleteTruckingJob(id)
+      else await deleteTruckingJob(id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message
+        : `Could not ${restore ? 'restore' : 'delete'} this job`)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const query: TruckingQuery = useMemo(() => ({
     page,
     pageSize: PAGE_SIZE,
     movementType: movementFilter,
     source: sourceFilter,
     search: debouncedSearch,
-  }), [page, movementFilter, sourceFilter, debouncedSearch])
+    // Deleted jobs are FETCHED ONLY FOR AN ADMIN. Nobody else can undo a
+    // delete, so for them the rows would be unactionable clutter — and the
+    // list is where the undo button lives, so a deleted job has to be
+    // reachable here rather than hidden on a screen of its own.
+    includeDeleted: !!user?.isAdmin,
+  }), [page, movementFilter, sourceFilter, debouncedSearch, user?.isAdmin])
 
   // Any filter change goes back to page 1 — staying on page 7 of a set that
   // now has 2 pages would show an empty table.
@@ -327,7 +355,7 @@ export function TruckingStatusList() {
                 return (
                   <Fragment key={r.id}>
                   <tr
-                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${isOpen ? 'bg-canvas-alt' : ''}`}
+                    className={`cursor-pointer border-t border-line hover:bg-canvas-alt ${isOpen ? 'bg-canvas-alt' : ''} ${r.isDeleted ? DELETED_ROW_CLASS : ''}`}
                     onClick={() => setExpandedId(isOpen ? null : r.id)}
                     aria-expanded={isOpen}
                     style={r.missingFields.length > 0 ? { boxShadow: 'inset 3px 0 0 var(--color-watch)' } : undefined}
@@ -409,6 +437,18 @@ export function TruckingStatusList() {
                         >
                           History
                         </button>
+                        {/* Admin only — and only the admin ever sees a deleted
+                            job to restore, since the list fetches them for
+                            nobody else. */}
+                        {user?.isAdmin && (
+                          <RowDeleteActions
+                            isDeleted={r.isDeleted}
+                            busy={deletingId === r.id}
+                            label={`job ${r.systemId}`}
+                            onDelete={() => void handleDelete(r.id, false)}
+                            onUndo={() => void handleDelete(r.id, true)}
+                          />
+                        )}
                       </div>
                     </td>
                   </tr>

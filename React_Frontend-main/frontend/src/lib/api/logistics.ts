@@ -338,6 +338,26 @@ export async function submitLogisticsOrder(id: number | string): Promise<ApiLogi
   return res.data
 }
 
+/**
+ * Soft delete, and its undo.
+ *
+ * NOTHING IS EVER HARD-DELETED (see CLAUDE.md): the row keeps its id, its
+ * children and its change history, and only `is_deleted` flips. That is what
+ * makes undo a real operation rather than a re-entry — and why a deleted record
+ * still has to be reachable, since a list that hides it leaves the undo
+ * endpoint with no way to be called. `includeDeleted` on the list query is what
+ * brings them back; it already existed and nothing had ever asked for it.
+ */
+export async function deleteLogisticsOrder(id: number | string): Promise<ApiLogisticsOrder> {
+  const res = await apiFetch<DetailEnvelope>(`/logistics/${id}`, { method: 'DELETE' })
+  return res.data
+}
+
+export async function undoDeleteLogisticsOrder(id: number | string): Promise<ApiLogisticsOrder> {
+  const res = await apiFetch<DetailEnvelope>(`/logistics/undo-delete/${id}`, { method: 'POST' })
+  return res.data
+}
+
 /** POST /logistics/{id}/reopen — admin-only server-side; clears is_locked. */
 export async function reopenLogisticsOrder(id: number | string): Promise<ApiLogisticsOrder> {
   const res = await apiFetch<DetailEnvelope>(`/logistics/${id}/reopen`, { method: 'POST' })

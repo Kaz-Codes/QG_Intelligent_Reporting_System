@@ -358,6 +358,26 @@ export async function revertTruckingUpdate(id: number | string, historyId: numbe
   return res.data
 }
 
+/**
+ * Soft delete, and its undo.
+ *
+ * NOTHING IS EVER HARD-DELETED (see CLAUDE.md): the row keeps its id, its
+ * children and its change history, and only `is_deleted` flips. That is what
+ * makes undo a real operation rather than a re-entry — and why a deleted record
+ * still has to be reachable, since a list that hides it leaves the undo
+ * endpoint with no way to be called. `includeDeleted` on the list query is what
+ * brings them back; it already existed and nothing had ever asked for it.
+ */
+export async function deleteTruckingJob(id: number | string): Promise<ApiTruckingJob> {
+  const res = await apiFetch<DetailEnvelope>(`/trucking/${id}`, { method: 'DELETE' })
+  return res.data
+}
+
+export async function undoDeleteTruckingJob(id: number | string): Promise<ApiTruckingJob> {
+  const res = await apiFetch<DetailEnvelope>(`/trucking/undo-delete/${id}`, { method: 'POST' })
+  return res.data
+}
+
 /** POST /trucking/{id}/reopen — admin-only server-side; clears is_locked. */
 export async function reopenTruckingJob(id: number | string): Promise<ApiTruckingJob> {
   const res = await apiFetch<DetailEnvelope>(`/trucking/${id}/reopen`, { method: 'POST' })

@@ -11,3 +11,11 @@ app/loading/data/
 # .pyc churn shows up in every diff.
 __pycache__/
 *.py[cod]
+
+# Runtime data, rewritten constantly by whichever machine is running.
+# Tracking these made a merge conflict out of ordinary use (and leaked one
+# user's taught terms). learned_terms.seed.json IS tracked and seeds a
+# fresh install; the live files are rebuilt or grow locally.
+chatbot_backend/backend/metadata/query_cache.json
+chatbot_backend/backend/metadata/data_profile.json
+chatbot_backend/backend/metadata/learned_terms.json

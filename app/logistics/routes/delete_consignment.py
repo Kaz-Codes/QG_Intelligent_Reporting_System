@@ -2,9 +2,8 @@ from app.logistics.routes.router import router
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
-from app.auth.authorize_user import authorize
-from app.accounts.permissions import CAN_DELETE_LOGISTICS
-from app.logistics.helpers import fetch_consignment, verify_entry_ownership
+from app.auth.authorize_user import require_admin
+from app.logistics.helpers import fetch_consignment
 from app.logistics.serializers import serialize_consignment
 from datetime import datetime, timezone
 
@@ -21,9 +20,12 @@ def delete_consignment(
         # Authenticate user (whether user is logged in or not)
         user_payload = authenticate(request)
 
-        # Authorize user (Check whether user is allowed for this
-        # action)
-        user = authorize(user_payload, CAN_DELETE_LOGISTICS, db)
+        # ADMIN ONLY. Deleting used to need `can_delete_*` plus ownership, so a
+        # data-entry user could remove their own records; the business wants
+        # removal to be one person's decision. `require_admin` is the same gate
+        # reopen uses, and it is the SERVER-SIDE boundary — the list hiding the
+        # button for everyone else is only UX.
+        user = require_admin(user_payload, db)
 
         consignment = fetch_consignment(db, consignment_id)
 
@@ -32,9 +34,6 @@ def delete_consignment(
                 status_code=404,
                 detail="Order not found"
             )
-
-        # Non-admins may only delete their own records.
-        verify_entry_ownership(consignment, user, db)
 
         # Nothing is really deleted, only flagged
         consignment.is_deleted = True

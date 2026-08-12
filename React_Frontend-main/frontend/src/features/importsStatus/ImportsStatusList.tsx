@@ -7,6 +7,7 @@ import { MultiSelectFilter } from '@/components/MultiSelectFilter'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
+import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
 import { can } from '@/lib/roleAccess'
 import { SortableTable, type SortableColumn } from './components/SortableTable'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
@@ -15,6 +16,7 @@ import { STAGE_GROUPS } from '@/lib/importsStages'
 import { CANCELLED_STATUS } from './schema'
 import {
   listConsignments, fetchFilterOptions, exportConsignmentsExcel, downloadBlob, reopenConsignmentApi,
+  deleteConsignmentApi, undoDeleteConsignmentApi,
   sendToLogisticsApi, sendToTruckingApi, type ConsignmentQuery,
 } from '@/lib/api/imports'
 import {
@@ -71,6 +73,7 @@ export function ImportsStatusList() {
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [reopeningId, setReopeningId] = useState<number | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   /** The closed consignment awaiting reopen confirmation; null = no dialog. */
   const [confirmReopen, setConfirmReopen] = useState<ImportsListRow | null>(null)
   /** `${id}:${target}` while that hand-off is in flight. */
@@ -131,8 +134,13 @@ export function ImportsStatusList() {
     etdFrom: etdFrom || undefined,
     etdTo: etdTo || undefined,
     search: debouncedSearch,
+    // Deleted consignments are FETCHED ONLY FOR AN ADMIN. Nobody else can undo
+    // a delete, so for them the rows would be unactionable clutter — and the
+    // list is where the undo button lives, so they have to be reachable here
+    // rather than hidden away on a separate screen.
+    includeDeleted: !!user?.isAdmin,
   }), [page, stage, statusFilter, branchIds, supplierIds, requisitionFilter,
-       includeClosed, missingOnly, etdFrom, etdTo, debouncedSearch])
+       includeClosed, missingOnly, etdFrom, etdTo, debouncedSearch, user?.isAdmin])
 
   // Any filter change puts us back on page 1 — staying on page 7 of a result
   // set that now has 2 pages would show an empty table.
@@ -173,6 +181,26 @@ export function ImportsStatusList() {
       setError(err instanceof Error ? err.message : 'Could not reopen this consignment')
     } finally {
       setReopeningId(null)
+    }
+  }
+
+  /** Soft delete, and its undo.
+   *
+   *  The list is re-read afterwards rather than patched locally: deleting can
+   *  change which page a row belongs on, and the backend decides that.
+   */
+  async function handleDelete(row: ImportsListRow, restore: boolean) {
+    setDeletingId(row.id)
+    setError(null)
+    try {
+      if (restore) await undoDeleteConsignmentApi(row.id)
+      else await deleteConsignmentApi(row.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message
+        : `Could not ${restore ? 'restore' : 'delete'} this consignment`)
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -508,6 +536,17 @@ export function ImportsStatusList() {
           >
             History
           </button>
+          {/* Admin only — and only the admin ever sees a deleted row to
+              restore, since the list fetches them for nobody else. */}
+          {user?.isAdmin && (
+            <RowDeleteActions
+              isDeleted={r.isDeleted}
+              busy={deletingId === r.id}
+              label={`consignment ${r.systemId}`}
+              onDelete={() => void handleDelete(r, false)}
+              onUndo={() => void handleDelete(r, true)}
+            />
+          )}
         </div>
       ),
     },
@@ -644,6 +683,7 @@ export function ImportsStatusList() {
         columns={columns}
         rows={rows}
         flagged={(r) => r.missing.length > 0}
+        rowClassName={(r) => (r.isDeleted ? DELETED_ROW_CLASS : undefined)}
         rowKey={(r) => String(r.id)}
         renderExpanded={(r) => <ConsignmentItemsPanel row={r} />}
         initialSort={{ key: 'systemId', dir: 'desc' }}

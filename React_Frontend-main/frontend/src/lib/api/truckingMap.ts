@@ -81,6 +81,9 @@ export interface TruckingListRow {
   createdAt?: string
 
   vehicles: TruckingListVehicle[]
+  /** Soft-deleted. Only ever present for an admin, who is the only
+   *  one the list fetches deleted rows for. */
+  isDeleted: boolean
 }
 
 /** Numerics cross the wire as STRINGS (json_serializer uses default=str). */
@@ -171,6 +174,10 @@ export function apiToRow(j: ApiTruckingJob): TruckingListRow {
 
     recordState: j.record_state,
     isLocked: !!j.is_locked,
+    // Soft-deleted rows are only ever FETCHED for an admin (includeDeleted on
+    // the list query), but the flag has to reach the row either way — it is
+    // what decides between the delete and the undo button.
+    isDeleted: !!j.is_deleted,
     missingFields: j.missing_fields ?? [],
     createdBy: str(j.created_by),
     createdById: j.created_by_id ?? undefined,

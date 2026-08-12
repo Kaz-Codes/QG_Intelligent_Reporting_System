@@ -253,5 +253,20 @@
     "created_at": "2026-08-12T15:39:21",
     "last_used": "2026-08-12T15:39:21",
     "hits": 0
+  },
+  {
+    "fingerprint": "2a17a534ce2a4e4d9ce2",
+    "question": "Which purchase orders are delayed?",
+    "normalised": "which purchase orders delayed",
+    "entity_key": "status=delayed",
+    "sql": "SELECT p.po_number AS purchase_order,\n       COUNT(*) AS delayed_line_count,\n       MIN(p.required_d) AS earliest_required_date,\n       MAX(p.purchase) AS latest_purchase_date,\n       MAX(p.purchase - p.required_d) AS maximum_delay_days\nFROM purchases_data p\nWHERE p.po_number IS NOT NULL\n  AND btrim(p.po_number) <> ''\n  AND p.purchase IS NOT NULL\n  AND p.required_d IS NOT NULL\n  AND p.purchase > p.required_d\nGROUP BY p.po_number\nORDER BY maximum_delay_days DESC, purchase_order",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "a2f3323d11a233d3",
+    "created_at": "2026-08-12T16:28:24",
+    "last_used": "2026-08-12T16:28:24",
+    "hits": 0
   }
 ]

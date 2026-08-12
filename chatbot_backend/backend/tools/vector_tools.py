@@ -306,9 +306,27 @@ def _learned_path() -> Path:
 
 
 def load_learned() -> List[Dict[str, Any]]:
-    """Read the learned-terms file. Returns [] if it does not exist yet."""
+    """
+    Read the learned-terms file, falling back to the shipped seed.
+
+    THE LIVE FILE IS NOT IN GIT, and must not be: every machine rewrites it as
+    people teach terms, so tracking it made a merge conflict out of ordinary
+    use - and pushed one user's private vocabulary to a shared remote, where a
+    later commit overwrote the curated entries with it.
+
+    What IS tracked is learned_terms.seed.json: the company-wide vocabulary
+    (owner 0) that every deployment should start with, and nobody's private
+    terms. A machine with no file of its own reads the seed, so a fresh install
+    still knows the accepted terms instead of starting blank.
+    """
     path = _learned_path()
     if not path.exists():
+        seed = path.with_name("learned_terms.seed.json")
+        if seed.exists():
+            try:
+                return json.loads(seed.read_text(encoding="utf-8")) or []
+            except (json.JSONDecodeError, OSError):
+                return []
         return []
     try:
         return json.loads(path.read_text(encoding="utf-8")) or []
