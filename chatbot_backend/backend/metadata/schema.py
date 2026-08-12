@@ -131,6 +131,23 @@ purchases_data(id PK, item_code -> items.item_code, item_name, specification,
     observed procurement lead time. There is no separate purchase_order table
     any more; po_number and po_date live here.
 
+    A SUPPLIER LIVES IN TWO PLACES. Local buying is purchases_data.supplier
+    (free text); importing is consignments.supplier_id -> suppliers.name, with
+    the value in consignments.pkr_total. They share no table and no key, so a
+    "top supplier" ranking must say which scope it used. To combine them, UNION
+    ALL the two sides into (supplier_name, value) and aggregate on the trimmed,
+    lower-cased name - the same company is spelled differently across the two.
+
+    `amount` IS THE MONEY (PKR) - the purchase value of that line, populated on
+    every one of the 65,520 rows. `qty` is units and says nothing about worth.
+    ANY question about value, spend, worth, cost or "biggest/top supplier"
+    without a stated unit means SUM(amount), never SUM(qty). The two rank
+    suppliers completely differently: by value the largest is 1.59bn on 5.4m
+    units, while the largest by quantity is 21.2m units worth only 133m - so
+    answering a value question with quantity names a different supplier
+    entirely, not merely a different number. When a question could mean either,
+    report by amount and say so.
+
 === IMPORTS ===
 
 consignments(id PK, branch_id -> branches, supplier_id -> suppliers,
@@ -339,15 +356,53 @@ the filter yourself: the view is the definition, and rewriting it by hand is
 how the same question ends up with different answers on different runs.
 
 v_item_stock_position(item_code, item_name, branches_held_at, stock_qty,
-                      hold_qty, available_qty, available_amount, is_out_of_stock)
+                      hold_qty, available_qty, stock_amount, available_amount,
+                      is_out_of_stock, rank, branch_ranks)
     Stock collapsed to ONE ROW PER ITEM across all branches. Use this for any
     "how many items ..." stock question - the raw `stock` table has one row per
     item per branch, so counting it counts item-branch pairs instead.
 
-v_out_of_stock_items(item_code, item_name, branches_held_at, stock_qty,
-                     hold_qty, available_qty)
-    Items with nothing usable left ANYWHERE. An item at zero in
-    one branch while another still holds it is not here.
+    THE VALUE OF INVENTORY IS stock_amount, NOT available_amount.
+    "What is our inventory worth / value of stock / how much is inventory" =
+    SUM(stock_amount) - everything held, including reserved stock, because
+    stock on hold is committed but still owned. available_amount is the
+    narrower "what could we use or sell today" figure and is 121.7m lower;
+    answering the ownership question with it understates inventory by 12%.
+    Use available_amount only when the user explicitly asks about unreserved,
+    usable or sellable value, and say which one you used.
+
+v_out_of_stock_items(item_code, item_name, rank, branch_ranks, branches_held_at,
+                     stock_qty, hold_qty, available_qty)
+    THE definition of "out of stock": items with nothing usable left ANYWHERE.
+    An item at zero in one branch while another still holds it is not here.
+    871 items.
+
+    NEVER answer an out-of-stock question by writing `available_qty <= 0`
+    against `stock`. That is a different and larger set (1,160 items - anything
+    empty at any single branch), and using it alongside this view makes "how
+    many items are out of stock" and "which branch has the most" contradict
+    each other on screen. Use this view, or the branch split below.
+
+v_out_of_stock_by_branch(branch, item_code, item_name, rank, branch_rank,
+                         branch_stock_qty, branch_hold_qty,
+                         branch_available_qty, branches_held_at)
+    The SAME 871 items broken out by the branches that stock them - use this
+    for "which branch has the most out-of-stock items". Derived from the view
+    above, so branch figures can never disagree with the company total.
+
+    WHEN REPORTING: an item stocked at three branches appears three times, so
+    branch counts sum to MORE than 871. Say "items affected at this branch";
+    never say or imply that the branches divide the 871 between them.
+
+v_branch_depleted_items(branch, item_code, item_name, branch_rank,
+                        branch_stock_qty, branch_hold_qty, branch_available_qty,
+                        company_available_qty, out_of_stock_company_wide)
+    A DIFFERENT question: what has run dry AT ONE BRANCH, whether or not
+    another branch can cover it. Call these DEPLETED AT THAT BRANCH - never
+    "out of stock". An item empty here with 500 at the next branch is a
+    TRANSFER, not a purchase. Use it for "what has run out at <branch>";
+    out_of_stock_company_wide tells you which of them are genuinely out of
+    stock as well.
 
 v_item_types(item_type, display_name, item_codes, category)
     One row per distinct item NAME. A "type" is a name, not an item_code -

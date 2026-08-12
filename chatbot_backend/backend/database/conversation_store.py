@@ -52,6 +52,26 @@ CREATE INDEX IF NOT EXISTS {_TABLE}_user_idx
     ON {_TABLE} (user_id, status, updated_at DESC);
 """
 
+# user_id IS users.id - the same value the ERP puts in the session token - so a
+# conversation joins straight to its owner:
+#
+#   SELECT u.username, c.title, c.updated_at
+#     FROM chatbot_conversations c JOIN users u ON u.id = c.user_id
+#
+# The foreign key makes that relationship real rather than conventional: a row
+# can no longer be written against a user who does not exist, which is what
+# keeps "whose chat is this" answerable months later.
+#
+# RESTRICT, not CASCADE. Deleting a user must not silently delete the record of
+# what they asked - the whole point of soft-deleting conversations is that the
+# history outlives the user's own clearing of it. Deactivate users
+# (users.is_active) rather than removing them.
+_FK = f"""
+ALTER TABLE {_TABLE}
+  ADD CONSTRAINT {_TABLE}_user_fk
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT
+"""
+
 _ready = False
 
 
@@ -65,7 +85,34 @@ def ensure_table() -> bool:
         _ready = True
     except Exception:
         _ready = False
+    if _ready:
+        _link_to_users()
     return _ready
+
+
+def _link_to_users() -> None:
+    """
+    Add the users foreign key if it is not already there.
+
+    Deliberately separate from ensure_table and deliberately silent on failure.
+    The constraint is an integrity improvement, not a precondition for storing
+    a conversation - if the users table lives elsewhere, or existing rows do
+    not satisfy it, the right outcome is an unlinked table that still saves
+    chats, not a chatbot that has quietly stopped remembering anything.
+    """
+    try:
+        with get_engine().begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_constraint WHERE conname = :n "
+                    "AND conrelid = CAST(:t AS regclass)"
+                ),
+                {"n": f"{_TABLE}_user_fk", "t": _TABLE},
+            ).first()
+            if not exists:
+                conn.execute(text(_FK))
+    except Exception:
+        pass
 
 
 def _trim(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -112,6 +159,78 @@ def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
                     """
                 ),
                 {"t": thread_id, "u": user_id, "m": payload, "ti": title},
+            )
+        return True
+    except Exception:
+        return False
+
+
+def append_turn(
+    thread_id: str,
+    user_id: Optional[int],
+    question: str,
+    payload: Dict[str, Any],
+) -> bool:
+    """
+    Append one exchange to the stored conversation, server-side.
+
+    The conversation used to be saved only when the BROWSER sent it back after
+    each turn. That made persistence depend on a client call succeeding - and
+    when the proxy did not route /conversation, every one of those calls 404'd
+    and the table stayed empty with nothing reporting a problem. Storage should
+    not hinge on the client remembering to ask.
+
+    So the server appends as it answers. The two message objects are built in
+    the shape the Assistant page renders, so a restored conversation still
+    draws tables and charts exactly as it did live; the browser's PUT is now
+    belt-and-braces that refines the same row rather than the only thing
+    creating it.
+
+    A conversation the user deleted is NOT resurrected: appending to a
+    'deleted' thread leaves it deleted, so asking again in an old thread does
+    not undo the delete.
+    """
+    if not thread_id or user_id is None or not ensure_table():
+        return False
+
+    rows = payload.get("rows") or []
+    assistant: Dict[str, Any] = {
+        "role": "assistant",
+        "content": payload.get("answer", ""),
+        "columns": payload.get("columns") or [],
+        "rows": rows,
+        "charts": payload.get("charts") or [],
+        "clarificationOptions": payload.get("clarification_options") or [],
+        "meta": {
+            "route": payload.get("route", ""),
+            "domain": payload.get("domain", ""),
+            "intent": payload.get("intent", ""),
+            "rowCount": payload.get("row_count"),
+            "sql": payload.get("sql", ""),
+            "analysisType": payload.get("analysis_type", ""),
+        },
+    }
+    turn = _trim([{"role": "user", "content": question}, assistant])
+
+    try:
+        with get_engine().begin() as conn:
+            conn.execute(
+                text(
+                    f"""
+                    INSERT INTO {_TABLE} (thread_id, user_id, messages, title, status)
+                    VALUES (:t, :u, CAST(:m AS JSONB), :ti, 'active')
+                    ON CONFLICT (thread_id) DO UPDATE
+                       SET messages   = {_TABLE}.messages || CAST(:m AS JSONB),
+                           updated_at = now()
+                     WHERE {_TABLE}.user_id = EXCLUDED.user_id
+                    """
+                ),
+                {
+                    "t": thread_id,
+                    "u": user_id,
+                    "m": json.dumps(turn, default=str),
+                    "ti": (question or "")[:120],
+                },
             )
         return True
     except Exception:

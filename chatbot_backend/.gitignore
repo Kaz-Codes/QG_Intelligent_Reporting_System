@@ -7,3 +7,5 @@ __pycache__/
 requirements.no_prophet.txt
 server.out.log
 server.err.log
+.env.bak
+.env.*

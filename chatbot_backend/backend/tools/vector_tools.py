@@ -195,8 +195,33 @@ def _trust_rank(metadata: Dict[str, Any]) -> int:
     return 2
 
 
+def _visibility_filter(user_id: Optional[int]) -> Dict[str, Any]:
+    """What this user is allowed to retrieve.
+
+    Curated terms (kind='term') are the company glossary and always visible.
+    A learned entry is visible only if it is COMPANY_WIDE - the pre-existing
+    accepted vocabulary - or was taught by THIS user. One person's teaching no
+    longer answers another person's question.
+    """
+    owners = [COMPANY_WIDE]
+    if user_id:
+        owners.append(int(user_id))
+    return {
+        "$or": [
+            {"kind": {"$eq": "term"}},
+            {
+                "$and": [
+                    {"kind": {"$eq": "learned"}},
+                    {"owner_id": {"$in": owners}},
+                ]
+            },
+        ]
+    }
+
+
 def search_context(
-    query: str, top_k: int = RAG_TOP_K, max_distance: float = RAG_MAX_DISTANCE
+    query: str, top_k: int = RAG_TOP_K, max_distance: float = RAG_MAX_DISTANCE,
+    user_id: Optional[int] = None,
 ) -> List[str]:
     """
     Term + learned-mapping retrieval for the context agent, ranked by trust
@@ -222,7 +247,7 @@ def search_context(
         result = collection.query(
             query_embeddings=[vector],
             n_results=pool_size,
-            where={"kind": {"$in": ["term", "learned"]}},
+            where=_visibility_filter(user_id),
         )
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
@@ -307,11 +332,23 @@ def _norm(text: str) -> str:
 
 
 def _entry_id(entry: Dict[str, Any]) -> str:
-    """Stable id per entry. Taught terms key by term; inferred by question."""
+    """
+    Stable id per entry, PER OWNER. Taught terms key by term; inferred by
+    question; both are qualified by who owns them.
+
+    The owner used to be missing from this key, and that quietly undid per-user
+    scoping one layer below where it was enforced. The store upserts by id, so
+    two people teaching the same word produced the SAME id and the second write
+    overwrote the first - document, meaning and owner together. The first user
+    did not get a wrong answer; their term vanished from retrieval entirely,
+    while the learned file still listed it because that de-duplicates per owner.
+    Disk said two, the store held one, and retrieval reads the store.
+    """
+    owner = int(entry.get("user_id") or COMPANY_WIDE)
     if entry.get("term"):
-        key = "term:" + _norm(entry["term"])
+        key = f"term:{_norm(entry['term'])}|owner:{owner}"
     else:
-        key = "q:" + _norm(entry.get("question", ""))
+        key = f"q:{_norm(entry.get('question', ''))}|owner:{owner}"
     return "learned-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
@@ -330,6 +367,32 @@ def _entry_doc(entry: Dict[str, Any]) -> str:
     )
 
 
+# A learned entry owned by nobody is COMPANY-WIDE: every user sees it. That is
+# reserved for entries which predate per-user scoping and were accepted as
+# vocabulary. Anything taught since carries the real user id and is private to
+# them.
+COMPANY_WIDE = 0
+
+
+def _owner_or_none(user_id: Optional[int]) -> Optional[int]:
+    """
+    The owner to file a new entry under, or None if we cannot tell who it is.
+
+    Deliberately NOT `user_id or COMPANY_WIDE`. That reading turns an unknown
+    caller into the company: when the session cookie failed to verify, every
+    term taught in that window was written as owner 0 and became authoritative
+    for everybody - silently recreating the exact leak per-user scoping exists
+    to prevent, and doing it precisely when identity was broken.
+
+    Scoping a teaching to nobody is not a safe default, so there is none: an
+    unidentified teaching is refused instead. Note that 0 is a legitimate owner
+    value here, so the check is `is None`, not falsiness.
+    """
+    if user_id is None:
+        return None
+    return int(user_id)
+
+
 def _entry_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "kind": "learned",
@@ -337,6 +400,10 @@ def _entry_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
         "term": entry.get("term", ""),
         "question": entry.get("question", ""),
         "confident": bool(entry.get("confident", True)),
+        # Chroma cannot filter on a key that is absent, so this is always
+        # written - an entry with no owner is stored as COMPANY_WIDE rather
+        # than left blank.
+        "owner_id": int(entry.get("user_id") or COMPANY_WIDE),
     }
 
 
@@ -350,11 +417,43 @@ def _upsert_learned(entries: List[Dict[str, Any]]) -> int:
 
 
 def sync_learned_to_store() -> int:
-    """Push every learned entry from disk into the vector store (idempotent)."""
-    return _upsert_learned(load_learned())
+    """
+    Push every learned entry from disk into the vector store (idempotent), and
+    DROP any learned document the file no longer accounts for.
+
+    The prune matters because ids are derived from content and ownership: when
+    that derivation changed to include the owner, every document already stored
+    kept its old id, so the same term would have existed twice - once under the
+    stale unowned id, once correctly owned - and the stale copy would still have
+    been retrieved. It also cleans up after an entry removed from the file by
+    hand, which previously stayed in the store and kept answering questions.
+
+    The file is the record; this makes the store agree with it.
+    """
+    entries = load_learned()
+    written = _upsert_learned(entries)
+
+    try:
+        collection = get_collection()
+        if collection is None:
+            return written
+        expected = {_entry_id(e) for e in entries}
+        present = collection.get(where={"kind": "learned"}).get("ids") or []
+        stale = [i for i in present if i not in expected]
+        if stale:
+            collection.delete(ids=stale)
+    except Exception:
+        # A failed prune leaves duplicates, which is worse than tidy but far
+        # better than a sync that raises and leaves the store half-written.
+        pass
+
+    return written
 
 
-def persist_learned_term(question: str, notes: List[str], confident: bool = True) -> bool:
+def persist_learned_term(
+    question: str, notes: List[str], confident: bool = True,
+    user_id: Optional[int] = None,
+) -> bool:
     """
     Save an inferred mapping so future similar questions reuse it.
 
@@ -367,14 +466,28 @@ def persist_learned_term(question: str, notes: List[str], confident: bool = True
     if not PERSIST_LEARNED or not question or not notes:
         return False
 
+    # No identifiable user means no owner to scope this to. Refuse rather than
+    # let it default to company-wide.
+    owner = _owner_or_none(user_id)
+    if owner is None:
+        return False
+
     entries = load_learned()
     key = _norm(question)
-    entries = [e for e in entries if _norm(e.get("question", "")) != key]
+    entries = [
+        e
+        for e in entries
+        if not (
+            _norm(e.get("question", "")) == key
+            and int(e.get("user_id") or COMPANY_WIDE) == owner
+        )
+    ]
     entry = {
         "question": question,
         "notes": notes,
         "source": "inferred",
         "confident": bool(confident),
+        "user_id": owner,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     entries.append(entry)
@@ -382,7 +495,8 @@ def persist_learned_term(question: str, notes: List[str], confident: bool = True
 
 
 def persist_taught_term(
-    term: str, meaning: str, maps_to: str = "", notes: str = ""
+    term: str, meaning: str, maps_to: str = "", notes: str = "",
+    user_id: Optional[int] = None,
 ) -> bool:
     """
     Save a term the USER explicitly defined.
@@ -393,9 +507,25 @@ def persist_taught_term(
     if not PERSIST_LEARNED or not term or not meaning:
         return False
 
+    # Same rule as an inferred term: unattributable teachings are not saved.
+    # This is the one the user actually feels - a term taught anonymously and
+    # filed company-wide changes the answers everyone else gets.
+    owner = _owner_or_none(user_id)
+    if owner is None:
+        return False
+
     entries = load_learned()
     key = _norm(term)
-    entries = [e for e in entries if _norm(e.get("term", "")) != key]
+    # De-duplicate WITHIN THIS OWNER only. Keyed on the term alone, one person
+    # redefining a word silently replaced everyone else's definition of it.
+    entries = [
+        e
+        for e in entries
+        if not (
+            _norm(e.get("term", "")) == key
+            and int(e.get("user_id") or COMPANY_WIDE) == owner
+        )
+    ]
     entry = {
         "term": term,
         "meaning": meaning,
@@ -403,6 +533,7 @@ def persist_taught_term(
         "notes": notes,
         "source": "taught",
         "confident": True,
+        "user_id": owner,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     entries.append(entry)
