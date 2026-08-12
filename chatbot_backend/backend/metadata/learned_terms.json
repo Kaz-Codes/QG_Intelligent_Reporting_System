@@ -36,5 +36,15 @@
     "source": "taught",
     "confident": true,
     "created_at": "2026-08-04T11:27:00.521201+00:00"
+  },
+  {
+    "question": "What is the status of silica sand?",
+    "notes": [
+      "Item: identify silica sand by matching the item master `items.name` with a whole-word, case-insensitive singular/plural-safe pattern (e.g. `items.name ~* '[[:<:]]silica sands?[[:>:]]'`); use `items.item_code` for joins to stores tables.",
+      "Current item status: use the semantic view `v_item_stock_position`, joined by `item_code`, to report current stock position across branches—especially `available_qty` (usable stock), `stock_qty`, `hold_qty`, `available_amount`, `branches_held_at`, and `is_out_of_stock`. The raw `stock` table is a branch-level current snapshot, not history; aggregate by item if used directly. If no stock row exists, the schema cannot provide a current stock status for the item."
+    ],
+    "source": "inferred",
+    "confident": true,
+    "created_at": "2026-08-12T10:39:20.952566+00:00"
   }
 ]
