@@ -45,36 +45,6 @@
     "hits": 1
   },
   {
-    "fingerprint": "6b8b4635e6a838410a2e",
-    "question": "what is the stock of resin",
-    "normalised": "stock resin",
-    "entity_key": "item=resin",
-    "sql": "SELECT v.*\nFROM v_item_demand_picture AS v\nWHERE v.item_name ~* '[[:<:]]resins?[[:>:]]'\nORDER BY v.item_name, v.item_code",
-    "tables_used": [
-      "v_item_demand_picture"
-    ],
-    "limit_is_user_requested": false,
-    "schema_hash": "c75df86d365e0ef7",
-    "created_at": "2026-08-12T11:59:17",
-    "last_used": "2026-08-12T11:59:17",
-    "hits": 0
-  },
-  {
-    "fingerprint": "c7aa6be21d961d02b4e7",
-    "question": "how many items are out of stock",
-    "normalised": "how many items out stock",
-    "entity_key": "status=out of stock",
-    "sql": "SELECT COUNT(*) AS out_of_stock_item_count\nFROM v_out_of_stock_items v",
-    "tables_used": [
-      "v_out_of_stock_items"
-    ],
-    "limit_is_user_requested": false,
-    "schema_hash": "2d10638c22ed7c18",
-    "created_at": "2026-08-12T12:20:17",
-    "last_used": "2026-08-12T12:20:17",
-    "hits": 0
-  },
-  {
     "fingerprint": "4e442294f53a53f0c497",
     "question": "which branch has the most out of stock items",
     "normalised": "which branch most out stock items",
@@ -142,21 +112,6 @@
     "hits": 0
   },
   {
-    "fingerprint": "b939e7cdd33753086224",
-    "question": "show me the value of inventory",
-    "normalised": "value inventory",
-    "entity_key": "",
-    "sql": "SELECT SUM(v.stock_amount) AS inventory_value_pkr\nFROM v_item_stock_position v",
-    "tables_used": [
-      "v_item_stock_position"
-    ],
-    "limit_is_user_requested": false,
-    "schema_hash": "42a681d81a2d9c38",
-    "created_at": "2026-08-12T12:43:34",
-    "last_used": "2026-08-12T12:43:34",
-    "hits": 0
-  },
-  {
     "fingerprint": "c8d022a2c9b393624475",
     "question": "who is our top supplier by value",
     "normalised": "who top supplier by value",
@@ -220,6 +175,141 @@
     "schema_hash": "86c43b34510ad7e6",
     "created_at": "2026-08-12T12:55:53",
     "last_used": "2026-08-12T12:55:53",
+    "hits": 0
+  },
+  {
+    "fingerprint": "a3d4a10ddbe0b55d8f1c",
+    "question": "value stock",
+    "normalised": "value stock",
+    "entity_key": "",
+    "sql": "SELECT SUM(v.stock_amount) AS current_inventory_value_pkr\nFROM v_item_stock_position v",
+    "tables_used": [
+      "v_item_stock_position"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "86c43b34510ad7e6",
+    "created_at": "2026-08-12T13:04:51",
+    "last_used": "2026-08-12T13:04:51",
+    "hits": 0
+  },
+  {
+    "fingerprint": "c45ef4cfa97aa2f889e3",
+    "question": "Local purchases",
+    "normalised": "local purchases",
+    "entity_key": "supplier=top supplier",
+    "sql": "WITH supplier_totals AS (\n    SELECT\n        p.supplier AS supplier_name,\n        COUNT(*) AS purchase_line_count,\n        SUM(p.amount) AS total_purchase_value_pkr,\n        MAX(p.amount) AS largest_purchase_line_value_pkr\n    FROM purchases_data p\n    GROUP BY p.supplier\n)\nSELECT\n    st.supplier_name,\n    st.total_purchase_value_pkr,\n    st.purchase_line_count,\n    st.largest_purchase_line_value_pkr,\n    COUNT(*) OVER (PARTITION BY st.total_purchase_value_pkr) AS tie_count\nFROM supplier_totals st\nORDER BY st.total_purchase_value_pkr DESC NULLS LAST, st.supplier_name\nLIMIT 1",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": true,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:47:13",
+    "last_used": "2026-08-12T14:47:13",
+    "hits": 0
+  },
+  {
+    "fingerprint": "aec941dc3ee5824100ab",
+    "question": "show complete details",
+    "normalised": "complete details",
+    "entity_key": "supplier=ayyan traders",
+    "sql": "WITH period_purchases AS (\n    SELECT\n        p.supplier,\n        p.item_code,\n        p.item_name,\n        p.specification,\n        p.po_number,\n        p.po_date,\n        p.ref_no,\n        p.qty,\n        p.branch,\n        p.amount,\n        p.ppc_store,\n        p.required_d,\n        p.purchase,\n        p.mop,\n        p.dc_no,\n        p.bill_no,\n        p.sourcing_o\n    FROM purchases_data p\n    WHERE p.purchase >= date_trunc('month', CURRENT_DATE)::date\n      AND p.purchase <= CURRENT_DATE\n), supplier_totals AS (\n    SELECT\n        pp.supplier,\n        lower(trim(pp.supplier)) AS supplier_key,\n        SUM(pp.amount) AS supplier_purchase_value,\n        RANK() OVER (ORDER BY SUM(pp.amount) DESC) AS supplier_rank\n    FROM period_purchases pp\n    GROUP BY pp.supplier, lower(trim(pp.supplier))\n)\nSELECT\n    pp.supplier,\n    pp.item_code,\n    pp.item_name,\n    pp.specification,\n    pp.po_number,\n    pp.po_date,\n    pp.ref_no,\n    pp.qty,\n    pp.branch,\n    pp.amount,\n    st.supplier_purchase_value,\n    st.supplier_rank,\n    pp.ppc_store,\n    pp.required_d,\n    pp.purchase,\n    pp.mop,\n    pp.dc_no,\n    pp.bill_no,\n    pp.sourcing_o\nFROM period_purchases pp\nJOIN supplier_totals st\n  ON st.supplier = pp.supplier\n AND st.supplier_key = lower(trim(pp.supplier))\nWHERE lower(trim(pp.supplier)) = lower(trim('Ayyan Traders'))\nORDER BY pp.purchase, pp.po_number, pp.item_code",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:49:04",
+    "last_used": "2026-08-12T14:49:04",
+    "hits": 0
+  },
+  {
+    "fingerprint": "84c2cc9a8977fb3d2530",
+    "question": "shafts status",
+    "normalised": "shafts status",
+    "entity_key": "item=shafts",
+    "sql": "SELECT v.item_code, v.item_name, v.rank, v.branch_ranks, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty\nFROM v_item_demand_picture v\nWHERE v.item_name ~* '[[:<:]]shafts?[[:>:]]'",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:49:41",
+    "last_used": "2026-08-12T14:49:41",
+    "hits": 0
+  },
+  {
+    "fingerprint": "6b8b4635e6a838410a2e",
+    "question": "stock of resin",
+    "normalised": "stock resin",
+    "entity_key": "item=resin",
+    "sql": "SELECT v.item_code, v.item_name, v.rank, v.branch_ranks, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.issued_qty_12m, v.issue_lines_12m, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty\nFROM v_item_demand_picture v\nWHERE v.item_name ~* '[[:<:]]resins?[[:>:]]'\nORDER BY v.item_name, v.item_code",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:51:59",
+    "last_used": "2026-08-12T14:51:59",
+    "hits": 0
+  },
+  {
+    "fingerprint": "db0a5b221e1e5adb1345",
+    "question": "how much hard coke do we have",
+    "normalised": "how much hard coke",
+    "entity_key": "item=hard coke",
+    "sql": "SELECT v.item_code, v.item_name, v.rank, v.branch_ranks, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.issued_qty_12m, v.issue_lines_12m, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty FROM v_item_demand_picture v WHERE v.item_name ~* '[[:<:]]hard[[:space:]]+cokes?[[:>:]]'",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:53:09",
+    "last_used": "2026-08-12T14:53:09",
+    "hits": 0
+  },
+  {
+    "fingerprint": "2815fb6c942a31828e46",
+    "question": "should we buy more hardner",
+    "normalised": "should buy more hardner",
+    "entity_key": "item=hardner",
+    "sql": "SELECT dp.*\nFROM v_item_demand_picture AS dp\nWHERE dp.item_name ~* '[[:<:]]hardners?[[:>:]]'",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:53:24",
+    "last_used": "2026-08-12T14:53:24",
+    "hits": 0
+  },
+  {
+    "fingerprint": "c7aa6be21d961d02b4e7",
+    "question": "how many items are out of stock",
+    "normalised": "how many items out stock",
+    "entity_key": "status=out of stock",
+    "sql": "SELECT COUNT(*) AS out_of_stock_item_count\nFROM v_out_of_stock_items v",
+    "tables_used": [
+      "v_out_of_stock_items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:55:20",
+    "last_used": "2026-08-12T14:55:23",
+    "hits": 1
+  },
+  {
+    "fingerprint": "b939e7cdd33753086224",
+    "question": "what is the value of inventory",
+    "normalised": "value inventory",
+    "entity_key": "",
+    "sql": "SELECT SUM(v.stock_amount) AS current_inventory_value_pkr\nFROM v_item_stock_position v",
+    "tables_used": [
+      "v_item_stock_position"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "9e311be0004110bd",
+    "created_at": "2026-08-12T14:55:35",
+    "last_used": "2026-08-12T14:55:35",
     "hits": 0
   }
 ]

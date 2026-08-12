@@ -1,8 +1,8 @@
 {
-  "fingerprint": "items:27747:2026-08-11 12:56:07.109811+05:00|suppliers:65:2026-08-11 12:57:15.987928+05:00|branches:4:2026-08-11 12:57:16.287517+05:00|ports:24:2026-08-11 12:57:17.086895+05:00|clearing_agents:5:2026-08-11 12:57:16.716996+05:00|customers:188:2026-08-11 12:57:21.408830+05:00|stock:6070:|issuance:245094:|store_requisition:7075:|purchases_data:65520:|consignments:178:2026-08-11 12:57:17.486297+05:00|consignment_items:450:2026-08-11 12:57:17.872838+05:00|payments:0:|logistics_consignments:745:2026-08-11 12:57:17.974461+05:00|logistics_items:711:2026-08-11 12:57:19.595634+05:00|logistics_packages:678:2026-08-11 12:57:19.646356+05:00|logistics_containers:54:2026-08-11 12:57:19.721556+05:00|trucking_consignments:1369:2026-08-11 12:57:19.737810+05:00|trucking_vehicles:1467:2026-08-11 12:57:20.471313+05:00",
+  "fingerprint": "items:27774:2026-08-12 14:42:31.858565+05:00|suppliers:65:2026-08-12 14:44:33.109739+05:00|branches:4:2026-08-12 14:44:33.438038+05:00|ports:24:2026-08-12 14:44:34.143580+05:00|clearing_agents:5:2026-08-12 14:44:33.783866+05:00|customers:188:2026-08-11 12:57:21.408830+05:00|stock:6070:|issuance:245094:|store_requisition:7075:|purchases_data:78931:|consignments:178:2026-08-12 14:44:34.458543+05:00|consignment_items:450:2026-08-12 14:44:34.856221+05:00|payments:0:|logistics_consignments:745:2026-08-12 14:44:34.896328+05:00|logistics_items:711:2026-08-12 14:44:36.598089+05:00|logistics_packages:678:2026-08-12 14:44:36.665549+05:00|logistics_containers:54:2026-08-12 14:44:36.721312+05:00|trucking_consignments:1369:2026-08-12 14:44:36.739552+05:00|trucking_vehicles:1467:2026-08-12 14:44:37.372304+05:00",
   "tables": {
     "items": {
-      "rows": 27747,
+      "rows": 27774,
       "vocabularies": {
         "default_unit_of_measurement": [
           {
@@ -749,54 +749,54 @@
       "patchy": {}
     },
     "purchases_data": {
-      "rows": 65520,
+      "rows": 78931,
       "vocabularies": {
         "branch": [
           {
             "value": "QE",
-            "rows": 25067
+            "rows": 29096
           },
           {
             "value": "QEN",
-            "rows": 19148
+            "rows": 23338
           },
           {
             "value": "QCL",
-            "rows": 9514
+            "rows": 11761
           },
           {
             "value": "QB2",
-            "rows": 9218
+            "rows": 11029
           },
           {
             "value": "QBL",
-            "rows": 1463
+            "rows": 1777
           },
           {
             "value": "IOL",
-            "rows": 560
+            "rows": 1187
           },
           {
             "value": "QE-II",
-            "rows": 550
+            "rows": 743
           }
         ],
         "mop": [
           {
             "value": "On Credit",
-            "rows": 44414
+            "rows": 54711
           },
           {
             "value": "By Cash",
-            "rows": 16416
+            "rows": 18424
           },
           {
             "value": "On Advance",
-            "rows": 4643
+            "rows": 5693
           },
           {
             "value": "Payment after Delivery",
-            "rows": 47
+            "rows": 103
           }
         ],
         "sourcing_o": [
@@ -805,40 +805,48 @@
             "rows": 11946
           },
           {
-            "value": "Adnan Shami",
-            "rows": 9390
-          },
-          {
             "value": "Muhammad Adeel Ahmed",
-            "rows": 9107
+            "rows": 11441
           },
           {
             "value": "Nazim Maqbool Butt",
-            "rows": 8293
+            "rows": 11015
+          },
+          {
+            "value": "Adnan Shami",
+            "rows": 10873
           },
           {
             "value": "Muhammad Usman",
-            "rows": 7529
+            "rows": 8893
+          },
+          {
+            "value": "Ghulam Mustafa",
+            "rows": 5524
+          },
+          {
+            "value": "Muhammad Sajawal Khan",
+            "rows": 3893
           },
           {
             "value": "Sumair Fazil",
             "rows": 3590
           },
           {
-            "value": "Ghulam Mustafa",
-            "rows": 3344
-          },
-          {
             "value": "Hamza Ahmad",
-            "rows": 3210
+            "rows": 3399
           },
           {
-            "value": "Muhammad Sajawal Khan",
-            "rows": 2793
+            "value": "Muhammad Moeeb",
+            "rows": 1713
           },
           {
             "value": "Abdul Manan",
             "rows": 1435
+          },
+          {
+            "value": "Muhammad Ahmad Raza",
+            "rows": 1420
           },
           {
             "value": "Rehan Sarwar",
@@ -849,20 +857,16 @@
             "rows": 1024
           },
           {
-            "value": "Muhammad Moeeb",
-            "rows": 937
-          },
-          {
             "value": "Asad Tariq",
-            "rows": 875
-          },
-          {
-            "value": "Muhammad Ahmad Raza",
-            "rows": 308
+            "rows": 885
           },
           {
             "value": "Syed Muhammad Waqas Javed",
-            "rows": 45
+            "rows": 46
+          },
+          {
+            "value": "Abdul Hammad",
+            "rows": 30
           },
           {
             "value": "Muhammad Tariq",
