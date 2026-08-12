@@ -332,11 +332,23 @@ def _norm(text: str) -> str:
 
 
 def _entry_id(entry: Dict[str, Any]) -> str:
-    """Stable id per entry. Taught terms key by term; inferred by question."""
+    """
+    Stable id per entry, PER OWNER. Taught terms key by term; inferred by
+    question; both are qualified by who owns them.
+
+    The owner used to be missing from this key, and that quietly undid per-user
+    scoping one layer below where it was enforced. The store upserts by id, so
+    two people teaching the same word produced the SAME id and the second write
+    overwrote the first - document, meaning and owner together. The first user
+    did not get a wrong answer; their term vanished from retrieval entirely,
+    while the learned file still listed it because that de-duplicates per owner.
+    Disk said two, the store held one, and retrieval reads the store.
+    """
+    owner = int(entry.get("user_id") or COMPANY_WIDE)
     if entry.get("term"):
-        key = "term:" + _norm(entry["term"])
+        key = f"term:{_norm(entry['term'])}|owner:{owner}"
     else:
-        key = "q:" + _norm(entry.get("question", ""))
+        key = f"q:{_norm(entry.get('question', ''))}|owner:{owner}"
     return "learned-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
@@ -405,8 +417,37 @@ def _upsert_learned(entries: List[Dict[str, Any]]) -> int:
 
 
 def sync_learned_to_store() -> int:
-    """Push every learned entry from disk into the vector store (idempotent)."""
-    return _upsert_learned(load_learned())
+    """
+    Push every learned entry from disk into the vector store (idempotent), and
+    DROP any learned document the file no longer accounts for.
+
+    The prune matters because ids are derived from content and ownership: when
+    that derivation changed to include the owner, every document already stored
+    kept its old id, so the same term would have existed twice - once under the
+    stale unowned id, once correctly owned - and the stale copy would still have
+    been retrieved. It also cleans up after an entry removed from the file by
+    hand, which previously stayed in the store and kept answering questions.
+
+    The file is the record; this makes the store agree with it.
+    """
+    entries = load_learned()
+    written = _upsert_learned(entries)
+
+    try:
+        collection = get_collection()
+        if collection is None:
+            return written
+        expected = {_entry_id(e) for e in entries}
+        present = collection.get(where={"kind": "learned"}).get("ids") or []
+        stale = [i for i in present if i not in expected]
+        if stale:
+            collection.delete(ids=stale)
+    except Exception:
+        # A failed prune leaves duplicates, which is worse than tidy but far
+        # better than a sync that raises and leaves the store half-written.
+        pass
+
+    return written
 
 
 def persist_learned_term(
