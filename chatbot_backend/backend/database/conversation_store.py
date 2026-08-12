@@ -190,7 +190,15 @@ def append_turn(
     'deleted' thread leaves it deleted, so asking again in an old thread does
     not undo the delete.
     """
-    if not thread_id or user_id is None or not ensure_table():
+    # ensure_table FIRST, deliberately. Written as
+    # `user_id is None or not ensure_table()` this short-circuits, so on a
+    # machine where nobody can be identified - a mismatched JWT secret, say -
+    # the table was never created at all. That turned one configuration fault
+    # into two symptoms that look unrelated: no conversations AND no table to
+    # put them in, which sends you looking for a schema or migration problem
+    # that does not exist. The schema should not depend on who is asking.
+    ready = ensure_table()
+    if not ready or not thread_id or user_id is None:
         return False
 
     rows = payload.get("rows") or []

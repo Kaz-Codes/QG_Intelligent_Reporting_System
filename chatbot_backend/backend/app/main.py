@@ -111,6 +111,38 @@ def _warm_everything() -> None:
     global _WARM
     started = time.time()
 
+    # The chat tables, created up front rather than on first successful write.
+    #
+    # They used to appear only when somebody was identified and a turn was
+    # stored. On a machine where the JWT secret did not match the ERP's, nobody
+    # ever was - so the tables were never created either, and one configuration
+    # fault presented as two unrelated ones: no conversations, and no table to
+    # look in. Creating them here means the schema is always present and the
+    # only remaining question is whether rows arrive, which is a much shorter
+    # trail to follow.
+    try:
+        from backend.database import chat_log
+        from backend.database import conversation_store
+
+        made = [
+            name
+            for name, ok in (
+                ("chatbot_conversations", conversation_store.ensure_table()),
+                ("chatbot_messages", chat_log.ensure_table()),
+            )
+            if ok
+        ]
+        if len(made) == 2:
+            print("[warmup] chat tables ready", flush=True)
+        else:
+            print(
+                "[warmup] CHAT TABLES NOT READY - conversations will not be "
+                "stored. Check the database user can CREATE tables.",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"[warmup] chat table setup skipped: {exc}", flush=True)
+
     # Keep the vector store in sync with its sources: re-seed curated terms
     # only if business_terms.py changed, and load any learned mappings from
     # disk. Removes the manual re-seed step.
