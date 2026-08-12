@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "fingerprint": "eac20be458de93859391",
+    "question": "how many items are out of stock, all dates",
+    "normalised": "how many items out stock all dates",
+    "entity_key": "status=out of stock",
+    "sql": "SELECT COUNT(*) AS out_of_stock_item_count\nFROM v_out_of_stock_items",
+    "tables_used": [
+      "v_out_of_stock_items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "8c856dd0e3465f43",
+    "created_at": "2026-08-12T09:59:27",
+    "last_used": "2026-08-12T09:59:27",
+    "hits": 0
+  }
+]

@@ -16,7 +16,8 @@
 // the same hook it always was, just mounted somewhere that does not get
 // destroyed.
 
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react'
+import { useAuth } from '@/features/auth/AuthContext'
 import { useChatState } from './useChat'
 
 type ChatValue = ReturnType<typeof useChatState>
@@ -25,6 +26,37 @@ const ChatContext = createContext<ChatValue | null>(null)
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const chat = useChatState()
+  const { user } = useAuth()
+  const lastUserRef = useRef<string | null | undefined>(undefined)
+
+  // THE CONVERSATION BELONGS TO THE PERSON WHO IS SIGNED IN.
+  //
+  // Sitting above the router is what lets an in-flight answer survive
+  // navigation - but it also means logging out does NOT unmount this, so
+  // without the reset below the messages simply stayed on screen and the next
+  // person to sign in on that machine was shown the previous user's
+  // conversation. The thread id in localStorage made it worse: even after a
+  // refresh the client would fetch that thread's history back.
+  //
+  // Watching the identity rather than hooking logout() covers every way the
+  // user can change - signing out, signing in as somebody else, and a session
+  // expiring underneath us.
+  useEffect(() => {
+    const id = user?.username ?? null
+    if (lastUserRef.current === undefined) {
+      // First render. Adopt the current identity without wiping a conversation
+      // that legitimately belongs to it (a page refresh mid-thread).
+      lastUserRef.current = id
+      return
+    }
+    if (lastUserRef.current !== id) {
+      lastUserRef.current = id
+      // Aborts anything in flight, drops the messages and clears the stored
+      // thread id, so nothing of the previous session survives.
+      chat.resetConversation()
+    }
+  }, [user?.username, chat])
+
   return <ChatContext.Provider value={chat}>{children}</ChatContext.Provider>
 }
 

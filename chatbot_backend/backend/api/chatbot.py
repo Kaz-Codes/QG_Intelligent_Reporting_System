@@ -11,12 +11,14 @@ import json
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from pydantic import BaseModel, Field
 
 from backend.graph.memory import get_checkpointer
+from backend.api.identity import current_user_id
+from backend.database import chat_log
 from backend.graph.workflow import build_graph
 from backend.tools.postgres_tools import ping
 
@@ -89,8 +91,16 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     thread_id = request.thread_id or str(uuid.uuid4())
+    user_id = current_user_id(http_request)
+
+    # A thread belongs to whoever started it. Refusing to continue somebody
+    # else's is what stops a thread id left in a shared browser handing the
+    # next person the previous user's conversation.
+    owner = chat_log.thread_owner(thread_id)
+    if owner is not None and user_id is not None and owner != user_id:
+        raise HTTPException(status_code=403, detail="That conversation belongs to another user.")
 
     try:
         result = _graph.invoke(
@@ -110,7 +120,18 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     _maybe_persist_learned(result)
     _maybe_cache_query(result)
-    return _build_response(thread_id, result)
+    response = _build_response(thread_id, result)
+    chat_log.log_turn(
+        thread_id=thread_id,
+        user_id=user_id,
+        question=request.message,
+        answer=response.answer,
+        route=result.get("route", ""),
+        sql_text=result.get("sql", ""),
+        row_count=result.get("row_count"),
+        meta={"intent": result.get("intent", ""), "domain": result.get("domain", "")},
+    )
+    return response
 
 
 def _build_response(thread_id: str, result: Dict[str, Any]) -> ChatResponse:
@@ -165,7 +186,9 @@ def _sse(payload: Dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
 
-async def _event_stream(request: ChatRequest, thread_id: str) -> AsyncIterator[str]:
+async def _event_stream(
+    request: ChatRequest, thread_id: str, user_id: Optional[int] = None
+) -> AsyncIterator[str]:
     """
     Run the graph, emitting progress as it goes.
 
@@ -244,11 +267,25 @@ async def _event_stream(request: ChatRequest, thread_id: str) -> AsyncIterator[s
     # Clarification and teach replies short-circuit the LLM, so no tokens were
     # streamed - the client uses `answer` from here in that case.
     payload["streamed"] = streamed_any_token
+
+    # Logged as the stream closes, so the record carries the answer the user
+    # actually saw rather than a half-written one.
+    chat_log.log_turn(
+        thread_id=thread_id,
+        user_id=user_id,
+        question=request.message,
+        answer=payload.get("answer", ""),
+        route=payload.get("route", ""),
+        sql_text=(result or {}).get("sql", ""),
+        row_count=payload.get("row_count"),
+        meta={"intent": payload.get("intent", ""), "domain": payload.get("domain", "")},
+    )
+
     yield _sse({"type": "done", **payload})
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, http_request: Request):
     """
     Same turn as POST /chat, streamed as Server-Sent Events.
 
@@ -258,8 +295,16 @@ async def chat_stream(request: ChatRequest):
     non-streaming clients.
     """
     thread_id = request.thread_id or str(uuid.uuid4())
+    user_id = current_user_id(http_request)
+
+    # A thread belongs to whoever started it. This is what stops a thread id
+    # left in a shared browser continuing the previous user's conversation.
+    owner = chat_log.thread_owner(thread_id)
+    if owner is not None and user_id is not None and owner != user_id:
+        raise HTTPException(status_code=403, detail="That conversation belongs to another user.")
+
     return StreamingResponse(
-        _event_stream(request, thread_id),
+        _event_stream(request, thread_id, user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -360,8 +405,21 @@ def _maybe_cache_query(result: Dict[str, Any]) -> None:
 
 
 @router.get("/chat/{thread_id}/history")
-def history(thread_id: str) -> Dict[str, Any]:
-    """Replay a conversation from the checkpointer."""
+def history(thread_id: str, http_request: Request) -> Dict[str, Any]:
+    """Replay a conversation - but only for the user it belongs to.
+
+    This used to hand any thread to anyone holding its id, which is how a
+    thread id surviving logout in localStorage showed the next user the
+    previous one's conversation.
+    """
+    user_id = current_user_id(http_request)
+    owner = chat_log.thread_owner(thread_id)
+    if owner is not None and owner != user_id:
+        # Empty, not 403: the client asks for history on every page load, and a
+        # stale id from a previous session is an ordinary event, not an error
+        # worth showing the user.
+        return {"thread_id": thread_id, "messages": []}
+
     snapshot = _graph.get_state({"configurable": {"thread_id": thread_id}})
     messages = snapshot.values.get("messages", []) if snapshot else []
     return {
