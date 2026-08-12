@@ -12,12 +12,10 @@ import type { AssistantMessage } from '@/lib/chatbot/types'
 // of transparent padding baked into its square canvas (top/bottom), which
 // stacked with this page's own spacing read as a large gap before "QG-IRS".
 import logo from '@/assets/qadri_logo_tight.webp'
-// Same crop, but the wordmark + ring outline are recolored from black to the
-// dark theme's ink (#F2EDE4) — flat black disappears against the dark
-// canvas. A dedicated asset instead of a drop-shadow halo: blurring a glow
-// around the whole silhouette also haloed the ring's soft anti-aliased edge,
-// which read as sparkly/glittery rather than a clean outline.
-import logoDark from '@/assets/qadri_logo_tight_dark.webp'
+// Dedicated dark-theme mark — a glowing gold/orange ring on black, which
+// reads correctly against the dark canvas where the flat-black light mark
+// would disappear.
+import logoDark from '@/assets/qadri_logo_tight_dark.png'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/theme/ThemeContext'
 
