@@ -34,6 +34,7 @@ export interface TruckingListVehicle {
   /** Stored whole as JSON, in the FE's own shape. */
   packageRefs: VehiclePackageRef[]
   importConsignmentRefs: VehicleImportRef[]
+  itemAllocations: { itemId: string; quantity?: number }[]
 }
 
 export interface TruckingListRow {
@@ -55,7 +56,7 @@ export interface TruckingListRow {
   shiftingType?: string
   /** Repeatable item lines. Empty when the record predates this feature and
    *  never had any items entered. */
-  items: { itemDetails?: string; weight?: number; pickup?: string; destination?: string; referenceNo?: string }[]
+  items: { itemRef?: string; itemDetails?: string; quantity?: number; uom?: string; pickup?: string; destination?: string; referenceNo?: string }[]
   itemDetails?: string
   pickup?: string
   destination?: string
@@ -120,6 +121,10 @@ function vehicleToRow(v: ApiTruckingVehicle): TruckingListVehicle {
     trackingStatus: (str(v.tracking_status) as VehicleTrackingStatus) ?? undefined,
     packageRefs: jsonArray<VehiclePackageRef>(v.package_refs),
     importConsignmentRefs: jsonArray<VehicleImportRef>(v.import_consignment_refs),
+    itemAllocations: jsonArray<{ item_id?: string; quantity?: number | null }>(v.item_allocations).map((a) => ({
+      itemId: a.item_id ?? '',
+      quantity: a.quantity ?? undefined,
+    })),
   }
 }
 
@@ -141,8 +146,10 @@ export function apiToRow(j: ApiTruckingJob): TruckingListRow {
     transporterName: str(j.transporter_name),
     shiftingType: str(j.shifting_type),
     items: jsonArray<ApiTruckingItem>(j.items).map((it) => ({
+      itemRef: str(it.item_ref),
       itemDetails: str(it.item_details),
-      weight: num(it.weight),
+      quantity: num(it.quantity),
+      uom: str(it.uom),
       pickup: str(it.pickup),
       destination: str(it.destination),
       referenceNo: str(it.reference_no),
@@ -224,11 +231,15 @@ export function draftToPayload(draft: TruckingDraft): TruckingPayload {
     tracking_status: outStr(v.trackingStatus),
     package_refs: v.packageRefs ?? [],
     import_consignment_refs: v.importConsignmentRefs ?? [],
+    item_allocations: (v.itemAllocations ?? []).map((a) => ({ item_id: a.itemId, quantity: a.quantity ?? null })),
   }))
 
   const items = (draft.items ?? []).map((it) => ({
+    // stable id so per-vehicle allocations can reference the item across saves
+    item_ref: it.id,
     item_details: outStr(it.itemDetails),
-    weight: outNum(it.weight),
+    quantity: outNum(it.quantity),
+    uom: outStr(it.uom),
     pickup: outStr(it.pickup),
     destination: outStr(it.destination),
     reference_no: outStr(it.referenceNo),
@@ -284,8 +295,11 @@ export function apiToDraft(j: ApiTruckingJob): TruckingDraft {
     items: row.items.length
       ? row.items.map((it): TruckingItem => ({
           ...emptyTruckItem(),
+          // keep the stored id so per-vehicle allocations still resolve
+          ...(it.itemRef ? { id: it.itemRef } : {}),
           itemDetails: it.itemDetails ?? '',
-          weight: it.weight,
+          quantity: it.quantity,
+          uom: it.uom ?? '',
           pickup: it.pickup ?? '',
           destination: it.destination ?? '',
           referenceNo: it.referenceNo ?? '',
@@ -315,6 +329,7 @@ export function apiToDraft(j: ApiTruckingJob): TruckingDraft {
       trackingStatus: v.trackingStatus,
       packageRefs: v.packageRefs,
       importConsignmentRefs: v.importConsignmentRefs,
+      itemAllocations: v.itemAllocations ?? [],
     })),
 
     quotedFreight: row.quotedFreight,

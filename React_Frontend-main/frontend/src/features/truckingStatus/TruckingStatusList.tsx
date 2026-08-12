@@ -308,6 +308,7 @@ export function TruckingStatusList() {
                 <SortHeader label="Movement" sortKey="movement" sort={sort} onToggle={toggle} />
                 <SortHeader label="Transporter" sortKey="transporter" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2">Route</th>
+                <th className="px-3 py-2">Items</th>
                 <SortHeader label="Vehicles" sortKey="vehicles" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2">Tracking</th>
                 <SortHeader label="Payment" sortKey="payment" sort={sort} onToggle={toggle} />
@@ -347,6 +348,13 @@ export function TruckingStatusList() {
                     <td className="px-3 py-2">{r.movementType || '—'}</td>
                     <td className="px-3 py-2">{r.transporterName ?? '—'}</td>
                     <td className="px-3 py-2 text-muted">{(r.pickup ?? '—')} → {(r.destination ?? '—')}</td>
+                    <td className="px-3 py-2">
+                      {r.items && r.items.length > 0
+                        ? <span title={r.items.map((it) => it.itemDetails).filter(Boolean).join(', ')}>
+                            {r.items[0]?.itemDetails || '—'}{r.items.length > 1 ? ` +${r.items.length - 1}` : ''}
+                          </span>
+                        : (r.itemDetails || '—')}
+                    </td>
                     <td className="px-3 py-2 tabular-nums">{r.vehicles.length || '—'}</td>
                     <td className="px-3 py-2">
                       {r.vehicles.length
@@ -406,7 +414,7 @@ export function TruckingStatusList() {
                   </tr>
                   {isOpen && (
                     <tr className="border-t border-line bg-canvas-alt/60">
-                      <td colSpan={13} className="px-3 py-3">
+                      <td colSpan={14} className="px-3 py-3">
                         <TruckingRowDetails row={r} />
                       </td>
                     </tr>
@@ -416,7 +424,7 @@ export function TruckingStatusList() {
               })}
               {jobs.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="px-3 py-8 text-center text-muted">
+                  <td colSpan={14} className="px-3 py-8 text-center text-muted">
                     {loading ? 'Loading trucking jobs…' : 'No trucking jobs match these filters.'}
                   </td>
                 </tr>
@@ -499,7 +507,8 @@ function TruckingRowDetails({ row }: { row: TruckingListRow }) {
               <tr>
                 <th className="py-1 pr-3 text-left">#</th>
                 <th className="py-1 pr-3 text-left">Item details</th>
-                <th className="py-1 pr-3 text-right">Weight (kg)</th>
+                <th className="py-1 pr-3 text-right">Qty</th>
+                <th className="py-1 pr-3 text-left">Unit</th>
                 <th className="py-1 pr-3 text-left">Pickup</th>
                 <th className="py-1 pr-3 text-left">Destination</th>
                 <th className="py-1 pr-3 text-left">IDM/Ref</th>
@@ -510,7 +519,8 @@ function TruckingRowDetails({ row }: { row: TruckingListRow }) {
                 <tr key={i} className="border-t border-line/60">
                   <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
                   <td className="py-1 pr-3 font-medium">{it.itemDetails || '—'}</td>
-                  <td className="py-1 pr-3 text-right tabular-nums">{it.weight ?? '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{it.quantity ?? '—'}</td>
+                  <td className="py-1 pr-3">{it.uom || '—'}</td>
                   <td className="py-1 pr-3">{it.pickup || '—'}</td>
                   <td className="py-1 pr-3">{it.destination || '—'}</td>
                   <td className="py-1 pr-3">{it.referenceNo || '—'}</td>

@@ -76,6 +76,17 @@ export const vehicleImportRefSchema = z.object({
 })
 export type VehicleImportRef = z.infer<typeof vehicleImportRefSchema>
 
+/**
+ * A quantity of one Step-1 item loaded onto a specific vehicle. This is what
+ * lets the user split an item across trucks — e.g. 30 of item A on vehicle 1
+ * and 20 on vehicle 2. `itemId` points at truckingItemSchema.id.
+ */
+export const vehicleItemAllocationSchema = z.object({
+  itemId: z.string(),
+  quantity: z.number().min(0).optional(),
+})
+export type VehicleItemAllocation = z.infer<typeof vehicleItemAllocationSchema>
+
 export const vehicleSchema = z.object({
   /**
    * Row identity, needed so a save can say "update THIS vehicle" rather than
@@ -103,6 +114,8 @@ export const vehicleSchema = z.object({
   packageRefs: z.array(vehiclePackageRefSchema).default([]),
   /** Import consignment refs — multiple imports can ride one vehicle. */
   importConsignmentRefs: z.array(vehicleImportRefSchema).default([]),
+  /** How much of each Step-1 item is loaded on THIS vehicle. */
+  itemAllocations: z.array(vehicleItemAllocationSchema).default([]),
 })
 export type Vehicle = z.infer<typeof vehicleSchema>
 
@@ -122,6 +135,7 @@ export function emptyVehicle(): Vehicle {
     trackingStatus: 'Going to load',
     packageRefs: [],
     importConsignmentRefs: [],
+    itemAllocations: [],
   }
 }
 
@@ -149,8 +163,10 @@ export type TakenSourceSnapshot = z.infer<typeof takenSourceSnapshotSchema>
 
 /**
  * A trucking job can carry several distinct items, each with its own
- * pickup/destination/weight/IDM (e.g. one truck run picking up from two
+ * pickup/destination/quantity/UoM/IDM (e.g. one truck run picking up from two
  * factories, or one shipment mixing items bound for different destinations).
+ * Weight lives on the vehicle (Step 2), not here — one item's quantity can
+ * split across trucks, so weight has to be per-vehicle too.
  * Mirrors the header + item-lines pattern used by importsStatus/logisticsStatus.
  *
  * Not yet backed by its own backend column — see draftToPayload/apiToDraft in
@@ -158,10 +174,19 @@ export type TakenSourceSnapshot = z.infer<typeof takenSourceSnapshotSchema>
  * fields (itemDetails/pickup/destination/referenceNo) until a real `items`
  * JSON column exists server-side.
  */
+export const TRUCK_UNITS = [
+  'Pcs', 'Set', 'Pair', 'Roll', 'Box', 'Carton', 'Drum', 'Pallet',
+  'Kg', 'Ton', 'Bag', 'Bundle', 'Coil', 'Sheet',
+] as const
+
 export const truckingItemSchema = z.object({
   id: z.string(),
   itemDetails: z.string().optional(),
-  weight: z.number().min(0).optional(),
+  // Quantity + unit of measurement live on the item (weight moved to the
+  // vehicle — it's captured per vehicle in Step 2, since one item's quantity
+  // can split across trucks).
+  quantity: z.number().min(0).optional(),
+  uom: z.string().optional(),
   pickup: z.string().optional(),
   destination: z.string().optional(),
   // Shipment reference / IDM — outbound + inbound only, same rule as the header.
@@ -177,7 +202,8 @@ export function emptyTruckItem(): TruckingItem {
   return {
     id: `item-${Date.now()}-${truckItemSeq}`,
     itemDetails: '',
-    weight: undefined,
+    quantity: undefined,
+    uom: '',
     pickup: '',
     destination: '',
     referenceNo: '',

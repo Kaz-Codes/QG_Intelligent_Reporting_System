@@ -9,6 +9,7 @@ import {
   usesFactoryDropdowns,
   usesReferenceNo,
   emptyTruckItem,
+  TRUCK_UNITS,
   type TruckingDraft,
 } from '../../schema'
 
@@ -80,8 +81,10 @@ export function Step1Movement() {
       </div>
 
       {/* Repeatable item lines — one job can carry several items, each with
-          its own details/weight/pickup/destination/IDM. Item[0] mirrors onto
-          the legacy singular fields at the map layer for backend compatibility. */}
+          its own details/quantity/UoM/pickup/destination/IDM (weight is
+          captured per vehicle in Step 2, since one item can split across
+          trucks). Item[0] mirrors onto the legacy singular fields at the map
+          layer for backend compatibility. */}
       <div className="flex flex-col gap-2 sm:col-span-2">
         <div className="flex items-center justify-between">
           <Label>Items</Label>
@@ -104,16 +107,25 @@ export function Step1Movement() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`items.${i}.weight`}>Weight (kg)</Label>
+              <Label htmlFor={`items.${i}.quantity`}>Quantity</Label>
               <Input
-                id={`items.${i}.weight`}
+                id={`items.${i}.quantity`}
                 type="number"
-                step="0.001"
-                {...register(`items.${i}.weight`, { valueAsNumber: true })}
+                min="0"
+                step="any"
+                {...register(`items.${i}.quantity`, { valueAsNumber: true })}
               />
-              {errors.items?.[i]?.weight && (
-                <p className="text-xs text-risk">{errors.items[i]?.weight?.message}</p>
+              {errors.items?.[i]?.quantity && (
+                <p className="text-xs text-risk">{errors.items[i]?.quantity?.message}</p>
               )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`items.${i}.uom`}>Unit</Label>
+              <select id={`items.${i}.uom`} className={selectClass} {...register(`items.${i}.uom`)}>
+                <option value="">Select…</option>
+                {TRUCK_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
             </div>
 
             <div className="flex flex-col gap-1.5">
