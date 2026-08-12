@@ -29,6 +29,10 @@ def context_agent(state: dict) -> dict:
     # one, so a noisy inferred guess cannot crowd out a documented answer just by
     # sitting closer in embedding space. Falls back to keyword matching over the
     # curated terms when the vector store is unavailable.
-    context = vector_tools.search_context(search_text, top_k=RAG_TOP_K)
+    # Scoped to the asker: curated terms plus company-wide entries plus this
+    # user's own teachings - never somebody else's.
+    context = vector_tools.search_context(
+        search_text, top_k=RAG_TOP_K, user_id=state.get("user_id")
+    )
 
     return {"context": context}

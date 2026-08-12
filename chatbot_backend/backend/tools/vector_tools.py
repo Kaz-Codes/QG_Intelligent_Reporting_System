@@ -195,8 +195,33 @@ def _trust_rank(metadata: Dict[str, Any]) -> int:
     return 2
 
 
+def _visibility_filter(user_id: Optional[int]) -> Dict[str, Any]:
+    """What this user is allowed to retrieve.
+
+    Curated terms (kind='term') are the company glossary and always visible.
+    A learned entry is visible only if it is COMPANY_WIDE - the pre-existing
+    accepted vocabulary - or was taught by THIS user. One person's teaching no
+    longer answers another person's question.
+    """
+    owners = [COMPANY_WIDE]
+    if user_id:
+        owners.append(int(user_id))
+    return {
+        "$or": [
+            {"kind": {"$eq": "term"}},
+            {
+                "$and": [
+                    {"kind": {"$eq": "learned"}},
+                    {"owner_id": {"$in": owners}},
+                ]
+            },
+        ]
+    }
+
+
 def search_context(
-    query: str, top_k: int = RAG_TOP_K, max_distance: float = RAG_MAX_DISTANCE
+    query: str, top_k: int = RAG_TOP_K, max_distance: float = RAG_MAX_DISTANCE,
+    user_id: Optional[int] = None,
 ) -> List[str]:
     """
     Term + learned-mapping retrieval for the context agent, ranked by trust
@@ -222,7 +247,7 @@ def search_context(
         result = collection.query(
             query_embeddings=[vector],
             n_results=pool_size,
-            where={"kind": {"$in": ["term", "learned"]}},
+            where=_visibility_filter(user_id),
         )
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
@@ -330,6 +355,13 @@ def _entry_doc(entry: Dict[str, Any]) -> str:
     )
 
 
+# A learned entry owned by nobody is COMPANY-WIDE: every user sees it. That is
+# reserved for entries which predate per-user scoping and were accepted as
+# vocabulary. Anything taught since carries the real user id and is private to
+# them.
+COMPANY_WIDE = 0
+
+
 def _entry_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "kind": "learned",
@@ -337,6 +369,10 @@ def _entry_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
         "term": entry.get("term", ""),
         "question": entry.get("question", ""),
         "confident": bool(entry.get("confident", True)),
+        # Chroma cannot filter on a key that is absent, so this is always
+        # written - an entry with no owner is stored as COMPANY_WIDE rather
+        # than left blank.
+        "owner_id": int(entry.get("user_id") or COMPANY_WIDE),
     }
 
 
@@ -354,7 +390,10 @@ def sync_learned_to_store() -> int:
     return _upsert_learned(load_learned())
 
 
-def persist_learned_term(question: str, notes: List[str], confident: bool = True) -> bool:
+def persist_learned_term(
+    question: str, notes: List[str], confident: bool = True,
+    user_id: Optional[int] = None,
+) -> bool:
     """
     Save an inferred mapping so future similar questions reuse it.
 
@@ -367,14 +406,24 @@ def persist_learned_term(question: str, notes: List[str], confident: bool = True
     if not PERSIST_LEARNED or not question or not notes:
         return False
 
+    owner = int(user_id or COMPANY_WIDE)
+
     entries = load_learned()
     key = _norm(question)
-    entries = [e for e in entries if _norm(e.get("question", "")) != key]
+    entries = [
+        e
+        for e in entries
+        if not (
+            _norm(e.get("question", "")) == key
+            and int(e.get("user_id") or COMPANY_WIDE) == owner
+        )
+    ]
     entry = {
         "question": question,
         "notes": notes,
         "source": "inferred",
         "confident": bool(confident),
+        "user_id": owner,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     entries.append(entry)
@@ -382,7 +431,8 @@ def persist_learned_term(question: str, notes: List[str], confident: bool = True
 
 
 def persist_taught_term(
-    term: str, meaning: str, maps_to: str = "", notes: str = ""
+    term: str, meaning: str, maps_to: str = "", notes: str = "",
+    user_id: Optional[int] = None,
 ) -> bool:
     """
     Save a term the USER explicitly defined.
@@ -393,9 +443,20 @@ def persist_taught_term(
     if not PERSIST_LEARNED or not term or not meaning:
         return False
 
+    owner = int(user_id or COMPANY_WIDE)
+
     entries = load_learned()
     key = _norm(term)
-    entries = [e for e in entries if _norm(e.get("term", "")) != key]
+    # De-duplicate WITHIN THIS OWNER only. Keyed on the term alone, one person
+    # redefining a word silently replaced everyone else's definition of it.
+    entries = [
+        e
+        for e in entries
+        if not (
+            _norm(e.get("term", "")) == key
+            and int(e.get("user_id") or COMPANY_WIDE) == owner
+        )
+    ]
     entry = {
         "term": term,
         "meaning": meaning,
@@ -403,6 +464,7 @@ def persist_taught_term(
         "notes": notes,
         "source": "taught",
         "confident": True,
+        "user_id": owner,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     entries.append(entry)

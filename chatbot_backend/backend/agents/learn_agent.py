@@ -70,11 +70,15 @@ def learn_agent(state: dict) -> dict:
     if result.aliases:
         meaning += f" (also: {', '.join(result.aliases)})"
 
+    # Attributed to whoever taught it. A teaching applies to that person
+    # only - company-wide vocabulary belongs in business_terms.py, where a
+    # human reviews it.
     saved = vector_tools.persist_taught_term(
         term=result.term.strip(),
         meaning=meaning,
         maps_to=result.maps_to.strip(),
         notes="Defined by the user.",
+        user_id=state.get("user_id"),
     )
 
     if not saved:

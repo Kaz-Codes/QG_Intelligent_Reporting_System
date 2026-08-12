@@ -106,6 +106,8 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         result = _graph.invoke(
             {
                 "user_query": request.message,
+                # Scopes learned-term retrieval to this user.
+                "user_id": user_id,
                 "messages": [HumanMessage(content=request.message)],
                 # Reset per-turn scratch fields so a retry budget or error from
                 # the previous turn does not leak into this one.
@@ -219,6 +221,8 @@ async def _event_stream(
         async for mode, chunk in _graph.astream(
             {
                 "user_query": request.message,
+                # Scopes learned-term retrieval to this user.
+                "user_id": user_id,
                 "messages": [HumanMessage(content=request.message)],
                 "sql_attempts": 0,
                 "sql_error": "",
@@ -343,6 +347,9 @@ def _maybe_persist_learned(result: Dict[str, Any]) -> None:
             result.get("rewritten_query") or result.get("user_query", ""),
             result["knowledge_notes"],
             confident=True,
+            # Scoped to the asker: an inference made while answering one
+            # person's question should not silently answer another's.
+            user_id=result.get("user_id"),
         )
     except Exception:
         # Persistence is best-effort - never fail a good answer over it.

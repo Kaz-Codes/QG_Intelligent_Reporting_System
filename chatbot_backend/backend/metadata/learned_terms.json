@@ -2,12 +2,13 @@
   {
     "question": "How much hardener will be needed over the next 3 months?",
     "notes": [
-      "Item “hardener” (user wrote “hardner”): identify the item by joining v_item_consumption_monthly.item_code to items.item_code and matching items.name with a tolerant case-insensitive search (ILIKE, allowing the spelling variant); use the matched item_code for aggregation.",
+      "Item \u201chardener\u201d (user wrote \u201chardner\u201d): identify the item by joining v_item_consumption_monthly.item_code to items.item_code and matching items.name with a tolerant case-insensitive search (ILIKE, allowing the spelling variant); use the matched item_code for aggregation.",
       "Historical required quantity for the forecast: use v_item_consumption_monthly.quantity by item_code and period. This view is the consumption/demand series and is already restricted to issuance status 'Issue'; sum by month over the historical period, then the downstream forecasting step projects the next 3 months. Do not look for a forecast table."
     ],
     "source": "inferred",
     "confident": true,
-    "created_at": "2026-08-04T10:30:02.670518+00:00"
+    "created_at": "2026-08-04T10:30:02.670518+00:00",
+    "user_id": 0
   },
   {
     "term": "hardner",
@@ -16,17 +17,19 @@
     "notes": "Defined by the user.",
     "source": "taught",
     "confident": true,
-    "created_at": "2026-08-04T11:04:45.702941+00:00"
+    "created_at": "2026-08-04T11:04:45.702941+00:00",
+    "user_id": 0
   },
   {
     "question": "How many purchase orders are associated with sourcing officer Hamza Ahmad across all available dates?",
     "notes": [
-      "“Purchase orders” are represented by purchases_data.po_number; count DISTINCT po_number (not rows), since purchases_data contains one row per purchased item and a PO can have multiple lines. Exclude NULL/blank PO numbers if counting actual orders.",
-      "“Sourcing officer” is purchases_data.sourcing_o, a free-text field; match Hamza Ahmad with a case-insensitive comparison (ILIKE, allowing for surrounding text/spacing if needed). “Across all available dates” requires no date filter; purchases_data has po_date and other dates, but none should restrict the count."
+      "\u201cPurchase orders\u201d are represented by purchases_data.po_number; count DISTINCT po_number (not rows), since purchases_data contains one row per purchased item and a PO can have multiple lines. Exclude NULL/blank PO numbers if counting actual orders.",
+      "\u201cSourcing officer\u201d is purchases_data.sourcing_o, a free-text field; match Hamza Ahmad with a case-insensitive comparison (ILIKE, allowing for surrounding text/spacing if needed). \u201cAcross all available dates\u201d requires no date filter; purchases_data has po_date and other dates, but none should restrict the count."
     ],
     "source": "inferred",
     "confident": true,
-    "created_at": "2026-08-04T11:18:55.653090+00:00"
+    "created_at": "2026-08-04T11:18:55.653090+00:00",
+    "user_id": 0
   },
   {
     "term": "purchase order number",
@@ -35,6 +38,7 @@
     "notes": "Defined by the user.",
     "source": "taught",
     "confident": true,
-    "created_at": "2026-08-04T11:27:00.521201+00:00"
+    "created_at": "2026-08-04T11:27:00.521201+00:00",
+    "user_id": 0
   }
 ]
