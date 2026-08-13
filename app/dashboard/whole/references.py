@@ -28,7 +28,7 @@ from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData
 from app.masters.models import Branch, Supplier
 from app.reports.helpers import SHAFT_ITEMS
 
-from app.dashboard.references import clamp, paginate
+from app.dashboard.references import clamp, paginate, sql_search_clause
 from app.enums import Status
 from app.dashboard.whole.helpers import (
     CONSIGNMENT_VALUE, TERMINAL_STATUSES, shaft_consignment_ids, line_date_column,
@@ -110,7 +110,8 @@ def _consignment_rows(db, query, total, page, page_size, badge_value=True):
 
 
 def imports_value_references(db, date_from, date_to, date_field=None,
-                             shafts_only=False, page=None, page_size=None):
+                             shafts_only=False, page=None, page_size=None,
+                             search=None):
     """The consignments inside the imports window, biggest value first.
 
     `shafts_only` is NOT optional decoration: without it the Shafts tab showed a
@@ -123,11 +124,12 @@ def imports_value_references(db, date_from, date_to, date_field=None,
     if shafts_only:
         conditions.append(Consignment.id.in_(shaft_consignment_ids()))
 
-    return consignment_line_rows(db, conditions, page, page_size)
+    return consignment_line_rows(db, conditions, page, page_size, search)
 
 
 def imports_in_process_references(db, date_from=None, date_to=None, date_field=None,
-                                  shafts_only=False, page=None, page_size=None):
+                                  shafts_only=False, page=None, page_size=None,
+                                  search=None):
     """Everything not yet at a terminal status — the "In Process" tile.
 
     Windowed like the tile it belongs to, so the list and the count it opens
@@ -139,16 +141,18 @@ def imports_in_process_references(db, date_from=None, date_to=None, date_field=N
     if shafts_only:
         conditions.append(Consignment.id.in_(shaft_consignment_ids()))
 
-    return consignment_line_rows(db, conditions, page, page_size)
+    return consignment_line_rows(db, conditions, page, page_size, search)
 
 
-def shaft_references(db, arrived, page=None, page_size=None):
+def shaft_references(db, arrived, page=None, page_size=None, search=None):
     """Shaft consignments, split the same way the two shaft tiles are."""
     ids = shaft_consignment_ids()
     status = (Consignment.current_status.in_(TERMINAL_STATUSES) if arrived
               else Consignment.current_status.notin_(TERMINAL_STATUSES))
 
-    return consignment_line_rows(db, [Consignment.id.in_(ids), status], page, page_size)
+    return consignment_line_rows(
+        db, [Consignment.id.in_(ids), status], page, page_size, search
+    )
 
 
 #-------------------------------------
@@ -159,6 +163,27 @@ def shaft_references(db, arrived, page=None, page_size=None):
 # the raw rows would show one order five times and contradict the count on the
 # tile it opened from.
 #-------------------------------------
+
+def _po_search_ids(search):
+    """PO numbers with at least one line matching `search`, or None.
+
+    A subquery rather than a plain WHERE on the grouped query: `_po_select`
+    aggregates every line of a PO into one row (summed value, joined item
+    list), and filtering the raw LINES before that GROUP BY would silently
+    shrink the aggregate to just the matching lines — the badge would show
+    less than the order is actually worth. Matching the PO number here and
+    filtering the grouped query by membership keeps every matched order whole.
+    """
+    clause = sql_search_clause(
+        search, PurchasesData.po_number, PurchasesData.supplier,
+        PurchasesData.branch, PurchasesData.item_name,
+    )
+    if clause is None:
+        return None
+    return (
+        select(PurchasesData.po_number).where(clause).distinct().scalar_subquery()
+    )
+
 
 def _po_rows(db, query, total, page, page_size):
     page, size = clamp(page, page_size)
@@ -192,26 +217,42 @@ def _po_select(date_column, date_from, date_to):
 
 
 def procurement_value_references(db, date_from, date_to, date_field=None,
-                                 page=None, page_size=None):
+                                 page=None, page_size=None, search=None):
     column = purchases_date_column(date_field)
+    conditions = [column.between(date_from, date_to)]
+    matched = _po_search_ids(search)
+    if matched is not None:
+        conditions.append(PurchasesData.po_number.in_(matched))
+
     total = db.execute(
         select(func.count(func.distinct(PurchasesData.po_number)))
-        .where(column.between(date_from, date_to))
+        .where(*conditions)
     ).scalar()
-    return _po_rows(db, _po_select(column, date_from, date_to), total, page, page_size)
+
+    query = _po_select(column, date_from, date_to)
+    if matched is not None:
+        query = query.where(PurchasesData.po_number.in_(matched))
+    return _po_rows(db, query, total, page, page_size)
 
 
 def procurement_delay_references(db, date_from, date_to, date_field=None,
-                                 page=None, page_size=None):
+                                 page=None, page_size=None, search=None):
     """The POs the delay rate counted as late — purchased after they were needed."""
     column = purchases_date_column(date_field)
     late = PurchasesData.required_d < PurchasesData.purchase
+    matched = _po_search_ids(search)
+
+    total_conditions = [
+        column.between(date_from, date_to),
+        PurchasesData.required_d.isnot(None),
+        late,
+    ]
+    if matched is not None:
+        total_conditions.append(PurchasesData.po_number.in_(matched))
 
     total = db.execute(
         select(func.count(func.distinct(PurchasesData.po_number)))
-        .where(column.between(date_from, date_to))
-        .where(PurchasesData.required_d.isnot(None))
-        .where(late)
+        .where(*total_conditions)
     ).scalar()
 
     query = (
@@ -219,6 +260,8 @@ def procurement_delay_references(db, date_from, date_to, date_field=None,
         .where(PurchasesData.required_d.isnot(None))
         .where(late)
     )
+    if matched is not None:
+        query = query.where(PurchasesData.po_number.in_(matched))
     return _po_rows(db, query, total, page, page_size)
 
 
@@ -227,7 +270,7 @@ def procurement_delay_references(db, date_from, date_to, date_field=None,
 #-------------------------------------
 
 def trucking_cost_references(db, date_from, date_to, date_field=None, movement=None,
-                             page=None, page_size=None):
+                             page=None, page_size=None, search=None):
     """Trucking jobs by freight, optionally one movement type.
 
     `movement=None` means the total tile; a movement string narrows to that
@@ -246,6 +289,14 @@ def trucking_cost_references(db, date_from, date_to, date_field=None, movement=N
         conditions.append(TruckingConsignment.movement_type.is_(None))
     elif movement:
         conditions.append(TruckingConsignment.movement_type == movement)
+
+    clause = sql_search_clause(
+        search, TruckingConsignment.reference_no, TruckingConsignment.source,
+        TruckingConsignment.source_ref, TruckingConsignment.movement_type,
+        TruckingConsignment.transporter_name,
+    )
+    if clause is not None:
+        conditions.append(clause)
 
     total = db.execute(
         select(func.count(TruckingConsignment.id)).where(*conditions)
@@ -280,7 +331,7 @@ def trucking_cost_references(db, date_from, date_to, date_field=None, movement=N
 
 
 def shipments_handled_references(db, date_from, date_to, date_field=None,
-                                 page=None, page_size=None):
+                                 page=None, page_size=None, search=None):
     """The export ORDERS counted as shipments handled.
 
     Only the logistics half: the import half is the same consignments
@@ -295,6 +346,13 @@ def shipments_handled_references(db, date_from, date_to, date_field=None,
     )
     conditions = [LogisticsConsignment.is_deleted.is_(False),
                   column.between(date_from, date_to)]
+
+    clause = sql_search_clause(
+        search, LogisticsConsignment.mo_no, LogisticsConsignment.customer_name,
+        LogisticsConsignment.order_type, LogisticsConsignment.current_status,
+    )
+    if clause is not None:
+        conditions.append(clause)
 
     total = db.execute(
         select(func.count(LogisticsConsignment.id)).where(*conditions)
@@ -334,8 +392,19 @@ def shipments_handled_references(db, date_from, date_to, date_field=None,
 # screens.
 #-------------------------------------
 
-def _stock_rows(db, conditions, total, page, page_size):
+def _stock_rows(db, conditions, total, page, page_size, search=None):
     page, size = clamp(page, page_size)
+
+    clause = sql_search_clause(search, Stock.item_code, Stock.item_name)
+    if clause is not None:
+        conditions = list(conditions) + [clause]
+        # `total` was counted before search narrowed the set — recount rather
+        # than trust the caller's figure, which was computed for the
+        # unfiltered tile.
+        total = db.execute(
+            select(func.count(func.distinct(Stock.item_code))).where(*conditions)
+        ).scalar()
+
     rows = db.execute(
         select(
             Stock.item_code,
@@ -361,15 +430,15 @@ def _stock_rows(db, conditions, total, page, page_size):
     ], page, size)
 
 
-def stock_value_references(db, page=None, page_size=None):
+def stock_value_references(db, page=None, page_size=None, search=None):
     conditions = [Stock.item_code.isnot(None)]
     total = db.execute(
         select(func.count(func.distinct(Stock.item_code))).where(*conditions)
     ).scalar()
-    return _stock_rows(db, conditions, total, page, page_size)
+    return _stock_rows(db, conditions, total, page, page_size, search)
 
 
-def dead_stock_references(db, threshold_days, page=None, page_size=None):
+def dead_stock_references(db, threshold_days, page=None, page_size=None, search=None):
     """The items behind the dead-stock value.
 
     Same definition as helpers.dead_stock — still carrying value, nothing issued
@@ -400,12 +469,12 @@ def dead_stock_references(db, threshold_days, page=None, page_size=None):
     total = db.execute(
         select(func.count(func.distinct(Stock.item_code))).where(*conditions)
     ).scalar()
-    return _stock_rows(db, conditions, total, page, page_size)
+    return _stock_rows(db, conditions, total, page, page_size, search)
 
 
 def imports_status_references(db, bucket, date_from=None, date_to=None,
                               date_field=None, shafts_only=False,
-                              page=None, page_size=None):
+                              page=None, page_size=None, search=None):
     """The consignments in one terminal bucket — "arrived" or "cancelled".
 
     Two buckets rather than one "closed" list, because an arrival is work
@@ -421,11 +490,12 @@ def imports_status_references(db, bucket, date_from=None, date_to=None,
     if shafts_only:
         conditions.append(Consignment.id.in_(shaft_consignment_ids()))
 
-    return consignment_line_rows(db, conditions, page, page_size)
+    return consignment_line_rows(db, conditions, page, page_size, search)
 
 
 def imports_delayed_references(db, date_from=None, date_to=None, date_field=None,
-                               shafts_only=False, page=None, page_size=None):
+                               shafts_only=False, page=None, page_size=None,
+                               search=None):
     """The late consignments, badged with how late — worst first.
 
     Ranked by lateness rather than value, because that is what the tile counts.
@@ -445,8 +515,16 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     if shafts_only:
         conditions.append(Consignment.id.in_(shaft_consignment_ids()))
 
+    clause = sql_search_clause(search, Consignment.instrument_number,
+                               Supplier.name, Branch.name)
+    if clause is not None:
+        conditions.append(clause)
+
     total = db.execute(
         select(func.count(Consignment.id))
+        .select_from(Consignment)
+        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
+        .outerjoin(Branch, Branch.id == Consignment.branch_id)
         .where(_live_consignments()).where(*conditions)
     ).scalar()
 
@@ -476,7 +554,7 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     ], page, size, unit="consignment")
 
 
-def issuance_references(db, date_from, date_to, page=None, page_size=None):
+def issuance_references(db, date_from, date_to, page=None, page_size=None, search=None):
     """What was issued in the window, folded ONTO THE ITEM CODE.
 
     Grouped rather than listed line by line: 1,815 issuance lines this month
@@ -486,6 +564,10 @@ def issuance_references(db, date_from, date_to, page=None, page_size=None):
     """
     conditions = [Issuance.from_date.between(date_from, date_to),
                   Issuance.item_code.isnot(None)]
+
+    clause = sql_search_clause(search, Issuance.item_code, Issuance.item_name)
+    if clause is not None:
+        conditions.append(clause)
 
     total = db.execute(
         select(func.count(func.distinct(Issuance.item_code))).where(*conditions)
@@ -557,22 +639,35 @@ def _line_query(conditions):
     )
 
 
-def consignment_line_rows(db, conditions, page, page_size):
-    """One page of item LINES, with the consignment count alongside."""
+def consignment_line_rows(db, conditions, page, page_size, search=None):
+    """One page of item LINES, with the consignment count alongside.
+
+    Search matches at the LINE, not the consignment: a line is shown because
+    it itself matched, consistent with the rule that a line list never stands
+    in for its parent — see the module docstring.
+    """
     page, size = clamp(page, page_size)
+
+    clause = sql_search_clause(
+        search, Consignment.instrument_number, Supplier.name, Branch.name,
+        ConsignmentItem.item_name, Consignment.current_status,
+    )
+    search_conditions = list(conditions) + ([clause] if clause is not None else [])
 
     total, groups = db.execute(
         select(func.count(ConsignmentItem.id),
                func.count(func.distinct(ConsignmentItem.consignment_id)))
         .select_from(ConsignmentItem)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
+        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
+        .outerjoin(Branch, Branch.id == Consignment.branch_id)
         .where(ConsignmentItem.is_deleted.is_(False))
         .where(_live_consignments())
-        .where(*conditions)
+        .where(*search_conditions)
     ).one()
 
     rows = db.execute(
-        _line_query(conditions)
+        _line_query(search_conditions)
         .order_by(desc("value"), ConsignmentItem.id)
         .offset((page - 1) * size).limit(size)
     ).all()
@@ -603,7 +698,8 @@ def consignment_line_rows(db, conditions, page, page_size):
 
 
 def order_type_references(db, order_type, date_from, date_to, date_field=None,
-                          undated=False, all_time=False, page=None, page_size=None):
+                          undated=False, all_time=False, page=None, page_size=None,
+                          search=None):
     """Logistics orders of one type, in the window — or the undated ones.
 
     `undated=True` returns the orders carrying NO date in the chosen column,
@@ -628,6 +724,13 @@ def order_type_references(db, order_type, date_from, date_to, date_field=None,
     else:
         conditions.append(column.between(date_from, date_to))
         conditions.append(LogisticsConsignment.order_type == order_type)
+
+    clause = sql_search_clause(
+        search, LogisticsConsignment.mo_no, LogisticsConsignment.customer_name,
+        LogisticsConsignment.order_type, LogisticsConsignment.current_status,
+    )
+    if clause is not None:
+        conditions.append(clause)
 
     total = db.execute(
         select(func.count(LogisticsConsignment.id)).where(*conditions)

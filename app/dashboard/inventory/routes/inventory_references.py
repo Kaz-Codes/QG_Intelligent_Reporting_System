@@ -27,23 +27,25 @@ from app.dashboard.inventory.serializers import serialize_rows
 from app.dashboard.inventory import calculations as calc
 from app.dashboard.inventory.routes.router import router
 
+# `q` is the OPEN PANEL's own search term — distinct from the `search` query
+# param below, which narrows which stock rows are fetched at all.
 BUILDERS = {
-    "items":         lambda i, p, s: calc.item_references(i, page=p, page_size=s),
-    "out_of_stock":  lambda i, p, s: calc.item_references(
+    "items":         lambda i, p, s, q: calc.item_references(i, page=p, page_size=s, search=q),
+    "out_of_stock":  lambda i, p, s, q: calc.item_references(
         calc.items_where(i, lambda x: x["stock_status"] == calc.OUT_OF_STOCK),
-        page=p, page_size=s),
-    "below_reorder": lambda i, p, s: calc.item_references(
+        page=p, page_size=s, search=q),
+    "below_reorder": lambda i, p, s, q: calc.item_references(
         calc.items_where(i, lambda x: x["stock_status"] == calc.BELOW_REORDER),
-        page=p, page_size=s),
-    "fast":          lambda i, p, s: calc.item_references(
+        page=p, page_size=s, search=q),
+    "fast":          lambda i, p, s, q: calc.item_references(
         calc.items_where(i, lambda x: x["movement"] == calc.MOVE_FAST),
-        page=p, page_size=s),
-    "slow":          lambda i, p, s: calc.item_references(
+        page=p, page_size=s, search=q),
+    "slow":          lambda i, p, s, q: calc.item_references(
         calc.items_where(i, lambda x: x["movement"] == calc.MOVE_SLOW),
-        page=p, page_size=s),
-    "dead":          lambda i, p, s: calc.item_references(
+        page=p, page_size=s, search=q),
+    "dead":          lambda i, p, s, q: calc.item_references(
         calc.items_where(i, lambda x: x["movement"] == calc.MOVE_DEAD),
-        page=p, page_size=s),
+        page=p, page_size=s, search=q),
 }
 
 # Issuance is not derived from the stock rows — it is its own windowed query —
@@ -64,9 +66,14 @@ def inventory_references(
     category: Optional[list[str]] = Query(None),
     branch: Optional[list[str]] = Query(None),
     item: Optional[list[str]] = Query(None),
+    # Narrows which stock rows are fetched at all — the dashboard's own filter
+    # bar, unrelated to the panel search below.
     search: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    # Narrows the OPEN PANEL to rows whose visible text contains this, without
+    # touching which items were fetched or any other tile on the screen.
+    list_search: Optional[str] = None,
 ):
     if key not in BUILDERS and key != ISSUANCE_KEY:
         raise HTTPException(status_code=400, detail=f"Unknown reference key '{key}'")
@@ -84,7 +91,7 @@ def inventory_references(
                 "status_code": 200,
                 "detail": "Inventory references fetched",
                 "data": issuance_item_references(
-                    db, period_from, period_to, branch, page, page_size
+                    db, period_from, period_to, branch, page, page_size, list_search
                 ),
             }
 
@@ -111,7 +118,7 @@ def inventory_references(
         return {
             "status_code": 200,
             "detail": "Inventory references fetched",
-            "data": BUILDERS[key](items, page, page_size),
+            "data": BUILDERS[key](items, page, page_size, list_search),
         }
 
     except HTTPException:

@@ -66,6 +66,12 @@ def apply_account_access(db, user, is_admin, permission_names):
 
     names = list(dict.fromkeys(permission_names or []))  # de-dupe, keep order
 
+    if not names:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one permission must be assigned to the user"
+        )
+
     unknown = [n for n in names if n not in ALL_PERMISSIONS_SET]
     if unknown:
         raise HTTPException(

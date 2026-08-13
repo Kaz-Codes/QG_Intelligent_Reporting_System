@@ -176,6 +176,11 @@ export function UserManagement() {
     const invalid = credentialError(username, password)
     if (invalid) { setError(invalid); return }
 
+    if (!isAdmin && permissions.length === 0) {
+      setError('At least one permission must be assigned to the user.')
+      return
+    }
+
     setSubmitting(true)
     try {
       // No client-side logging: the backend's request middleware records this
@@ -215,6 +220,11 @@ export function UserManagement() {
 
     const invalid = credentialError(editUsername, editPassword)
     if (invalid) { setEditError(invalid); return }
+
+    if (!editIsAdmin && editPermissions.length === 0) {
+      setEditError('At least one permission must be assigned to the user.')
+      return
+    }
 
     setSavingEdit(true)
     try {
@@ -403,6 +413,7 @@ export function UserManagement() {
               </p>
               <p className="mb-4 text-xs text-muted">
                 Only admins can create accounts. Username and password must be at least {MIN_CREDENTIAL_LENGTH} characters.
+                A normal account needs at least one permission checked.
               </p>
               <form onSubmit={handleCreate} className="flex flex-col gap-3">
                 <div className="flex flex-col gap-1.5">
