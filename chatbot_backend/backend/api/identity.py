@@ -20,16 +20,91 @@ The token is the ERP's: HS256, payload {"id": <user id>, "exp": ...}, issued by
 app/auth/create_token.py and set as an httponly cookie named `access_token`.
 """
 
+import logging
 import os
+from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 load_dotenv()
 
 COOKIE_NAME = "access_token"
 ALGORITHM = "HS256"
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+
+log = logging.getLogger(__name__)
+
+
+def _resolve_secret() -> Optional[str]:
+    """
+    The key the ERP signs its cookies with.
+
+    THE ERP'S VALUE WINS, and that is not a preference - it is the definition.
+    The ERP issues the token; this service only verifies it. If the two .env
+    files disagree, the chatbot's own value is simply the wrong key for the job,
+    and using it means every request is anonymous.
+
+    This is worth resolving automatically because .env is gitignored - correctly,
+    it holds secrets - so nothing carries the value between machines and the two
+    files drift apart on every new checkout. The result is invisible: answers
+    keep working while conversations are never stored or restored, audit rows
+    get no user, and taught terms cannot be attributed. That failure has been
+    hit on more than one machine, each time costing a long hunt for a database
+    or frontend bug that was never there.
+
+    So: read the ERP's .env, which sits at the repo root above this package, and
+    prefer it. Falls back to this service's own value when the ERP's cannot be
+    found, which is what a standalone deployment looks like.
+    """
+    own = os.getenv("JWT_SECRET_KEY")
+
+    erp_env = None
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / ".env"
+        # Skip our own .env; we want the one belonging to the ERP above us.
+        if candidate.exists() and candidate.parent.name != "chatbot_backend":
+            erp_env = candidate
+            break
+
+    if erp_env is None:
+        return own
+
+    try:
+        erp_secret = dotenv_values(erp_env).get("JWT_SECRET_KEY")
+    except Exception:
+        return own
+
+    if not erp_secret:
+        return own
+    if own and own != erp_secret:
+        log.warning(
+            "JWT_SECRET_KEY in chatbot_backend/.env does not match the ERP's "
+            "(%s). Using the ERP's, because it is what signs the session "
+            "cookie - otherwise every user would be anonymous here. Align the "
+            "two files to silence this.",
+            erp_env,
+        )
+    return erp_secret
+
+
+SECRET_KEY = _resolve_secret()
+
+# A token that arrives and FAILS to verify is the single most expensive silent
+# failure in this system, so it is reported - once, not per request, because a
+# broken secret breaks every request and would otherwise bury the log.
+#
+# What it looks like when it happens: nothing. Answers keep working, because a
+# question can be answered anonymously. But user_id is None everywhere, so
+# conversations are never stored, none are ever restored, audit rows land with a
+# null user, and terms taught by one person cannot be attributed. Every one of
+# those reads as a separate bug, and none of them points at the cause.
+#
+# The cause is almost always that JWT_SECRET_KEY here does not match the ERP's.
+# The ERP signs the cookie; this only verifies it. .env is gitignored, so the
+# two drift the moment the app is deployed or copied to another machine.
+_warned_bad_token = False
+_warned_no_secret = False
 
 
 def current_user_id(request) -> Optional[int]:
@@ -41,9 +116,19 @@ def current_user_id(request) -> Optional[int]:
     token is treated exactly like no token, which is what makes the logout leak
     impossible to reproduce from a stale cookie.
     """
+    global _warned_bad_token, _warned_no_secret
+
     if not SECRET_KEY:
         # No shared secret configured. Refusing to guess is the safe failure:
         # returning an id here would let anyone act as a user.
+        if not _warned_no_secret:
+            _warned_no_secret = True
+            log.error(
+                "JWT_SECRET_KEY is not set, so no user can ever be identified. "
+                "Conversations will not be saved or restored and audit rows "
+                "will have no user. Set it in chatbot_backend/.env to the SAME "
+                "value as the ERP's JWT_SECRET_KEY."
+            )
         return None
 
     token = request.cookies.get(COOKIE_NAME)
@@ -54,8 +139,21 @@ def current_user_id(request) -> Optional[int]:
         from jose import jwt
 
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except Exception:
-        # Bad signature, expired, malformed - all mean "not signed in".
+    except Exception as exc:
+        # Bad signature, expired, malformed - all mean "not signed in". But a
+        # token that ARRIVED and failed is worth saying out loud once: the
+        # browser had a session, and this service could not read it.
+        if not _warned_bad_token:
+            _warned_bad_token = True
+            log.error(
+                "An access_token cookie was sent but could not be verified (%s). "
+                "Every request will look anonymous: conversations will not be "
+                "saved or restored. The usual cause is that JWT_SECRET_KEY in "
+                "chatbot_backend/.env differs from the ERP's - the ERP signs "
+                "the cookie, this service only verifies it, and .env is not in "
+                "git so the two drift between machines.",
+                type(exc).__name__,
+            )
         return None
 
     user_id = payload.get("id")

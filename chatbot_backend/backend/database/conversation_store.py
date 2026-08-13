@@ -190,7 +190,15 @@ def append_turn(
     'deleted' thread leaves it deleted, so asking again in an old thread does
     not undo the delete.
     """
-    if not thread_id or user_id is None or not ensure_table():
+    # ensure_table FIRST, deliberately. Written as
+    # `user_id is None or not ensure_table()` this short-circuits, so on a
+    # machine where nobody can be identified - a mismatched JWT secret, say -
+    # the table was never created at all. That turned one configuration fault
+    # into two symptoms that look unrelated: no conversations AND no table to
+    # put them in, which sends you looking for a schema or migration problem
+    # that does not exist. The schema should not depend on who is asking.
+    ready = ensure_table()
+    if not ready or not thread_id or user_id is None:
         return False
 
     rows = payload.get("rows") or []
@@ -268,11 +276,23 @@ def latest(user_id: int) -> Optional[Dict[str, Any]]:
 
 def soft_delete(thread_id: str, user_id: int) -> bool:
     """
-    Hide a conversation from the user without losing it.
+    Hide this user's conversation from them without losing it.
 
-    The row stays, with status='deleted', so the record of what was asked
+    The rows stay, with status='deleted', so the record of what was asked
     survives even though the user has cleared their screen. Scoped by user_id
     so nobody can hide somebody else's conversation.
+
+    RETIRES EVERY ACTIVE THREAD OF THEIRS, not only the named one. The user is
+    shown exactly one conversation - restore serves the most recently updated
+    ACTIVE row - and there is no UI anywhere for reaching an older one. So
+    clearing only the thread on screen left earlier conversations active with
+    nothing to select them, and the next sign-in simply promoted the next one
+    up: the user pressed clear, came back, and found a chat still sitting
+    there. It looked like the delete had not worked, or worse like a deleted
+    conversation had come back.
+
+    "Clear" therefore means what it says - this person's chat history stops
+    being shown - while every row, and the audit log beside it, is kept.
     """
     if not thread_id or user_id is None or not ensure_table():
         return False
@@ -280,8 +300,12 @@ def soft_delete(thread_id: str, user_id: int) -> bool:
         with get_engine().begin() as conn:
             conn.execute(
                 text(
-                    f"UPDATE {_TABLE} SET status = 'deleted', updated_at = now() "
-                    "WHERE thread_id = :t AND user_id = :u"
+                    f"""
+                    UPDATE {_TABLE}
+                       SET status = 'deleted', updated_at = now()
+                     WHERE user_id = :u
+                       AND (thread_id = :t OR status = 'active')
+                    """
                 ),
                 {"t": thread_id, "u": user_id},
             )

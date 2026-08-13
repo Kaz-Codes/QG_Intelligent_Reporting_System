@@ -221,5 +221,52 @@
     "created_at": "2026-08-12T12:55:53",
     "last_used": "2026-08-12T12:55:53",
     "hits": 0
+  },
+  {
+    "fingerprint": "c73baabe17d0eff95a83",
+    "question": "what is the current stock of silica sand in qcl",
+    "normalised": "current stock silica sand qcl",
+    "entity_key": "branch=qcl|item=silica sand",
+    "sql": "SELECT s.item_code, s.item_name, s.branch, s.available_qty, i.default_unit_of_measurement AS uom\nFROM stock s\nLEFT JOIN items i ON i.item_code = s.item_code\nWHERE s.item_code IN ('23556-60', '2951-147')\n  AND s.branch ILIKE '%Qadcast%'",
+    "tables_used": [
+      "stock",
+      "items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "fcafd628f25ab419",
+    "created_at": "2026-08-12T11:48:15",
+    "last_used": "2026-08-12T11:48:15",
+    "hits": 0
+  },
+  {
+    "fingerprint": "d3b650c064861a1861ad",
+    "question": "what is the status of silica sand",
+    "normalised": "status silica sand",
+    "entity_key": "item=silica sand",
+    "sql": "WITH stock_position AS (\n    SELECT\n        s.item_code,\n        COUNT(*) AS branches_held_at,\n        SUM(s.stock_qty) AS stock_qty,\n        SUM(s.hold_qty) AS hold_qty,\n        SUM(s.available_qty) AS available_qty,\n        SUM(s.available_amount) AS available_amount\n    FROM stock s\n    WHERE s.item_code IN ('23556-60', '2951-147')\n    GROUP BY s.item_code\n)\nSELECT\n    i.item_code,\n    i.name AS item_name,\n    i.default_unit_of_measurement AS uom,\n    sp.branches_held_at,\n    sp.stock_qty,\n    sp.hold_qty,\n    sp.available_qty,\n    sp.available_amount,\n    CASE\n        WHEN sp.item_code IS NULL THEN NULL\n        ELSE sp.available_qty <= 0\n    END AS is_out_of_stock\nFROM items i\nLEFT JOIN stock_position sp ON sp.item_code = i.item_code\nWHERE i.item_code IN ('23556-60', '2951-147')\nORDER BY i.item_code",
+    "tables_used": [
+      "items",
+      "stock"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "3d774261df99b47b",
+    "created_at": "2026-08-12T15:39:21",
+    "last_used": "2026-08-12T15:39:21",
+    "hits": 0
+  },
+  {
+    "fingerprint": "2a17a534ce2a4e4d9ce2",
+    "question": "Which purchase orders are delayed?",
+    "normalised": "which purchase orders delayed",
+    "entity_key": "status=delayed",
+    "sql": "SELECT p.po_number AS purchase_order,\n       COUNT(*) AS delayed_line_count,\n       MIN(p.required_d) AS earliest_required_date,\n       MAX(p.purchase) AS latest_purchase_date,\n       MAX(p.purchase - p.required_d) AS maximum_delay_days\nFROM purchases_data p\nWHERE p.po_number IS NOT NULL\n  AND btrim(p.po_number) <> ''\n  AND p.purchase IS NOT NULL\n  AND p.required_d IS NOT NULL\n  AND p.purchase > p.required_d\nGROUP BY p.po_number\nORDER BY maximum_delay_days DESC, purchase_order",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "a2f3323d11a233d3",
+    "created_at": "2026-08-12T16:28:24",
+    "last_used": "2026-08-12T16:28:24",
+    "hits": 0
   }
 ]

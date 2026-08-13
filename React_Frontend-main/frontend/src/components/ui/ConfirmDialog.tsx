@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
  */
 export function ConfirmDialog({
   open, title, description, confirmLabel, confirmingLabel, confirming, danger, onConfirm, onCancel,
+  secondaryLabel, onSecondary,
 }: {
   open: boolean
   title: string
@@ -21,6 +22,10 @@ export function ConfirmDialog({
   danger?: boolean
   onConfirm: () => void
   onCancel: () => void
+  /** Optional middle action (e.g. "Move without saving"). Backward-compatible:
+   *  when omitted, the dialog renders exactly as before. */
+  secondaryLabel?: string
+  onSecondary?: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -65,6 +70,9 @@ export function ConfirmDialog({
           >
             {confirming ? (confirmingLabel ?? 'Working…') : confirmLabel}
           </Button>
+          {secondaryLabel && onSecondary && (
+            <Button variant="outline" onClick={onSecondary} disabled={confirming}>{secondaryLabel}</Button>
+          )}
           <Button variant="ghost" onClick={onCancel} disabled={confirming}>Cancel</Button>
         </div>
       </div>
