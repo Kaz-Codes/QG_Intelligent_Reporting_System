@@ -12,6 +12,7 @@ import {
   CURRENCIES, PORT_TYPES, PORT_USED_AS,
   type MasterKey, type MasterRow,
 } from '@/lib/api/masters'
+import { listTransporters, createTransporter } from '@/lib/mastersTransporters'
 
 /**
  * Masters management — view and add the reference lists the operations screens
@@ -41,13 +42,25 @@ interface FieldDef {
 }
 
 interface MasterDef {
-  key: MasterKey
+  key: MasterKey | 'transporter'
   label: string
   /** Fields for both the add form and (where column=true) the table. */
   fields: FieldDef[]
 }
 
 const MASTER_DEFS: MasterDef[] = [
+  {
+    // Name only — the trucking wizard needs a managed list instead of free
+    // text, but there is no backend transporter master yet (see
+    // lib/mastersTransporters.ts). Mock, in-memory, session-only.
+    key: 'transporter', label: 'Transporters',
+    fields: [
+      { key: 'name', label: 'Name', required: true, column: true },
+      { key: 'contact_name', label: 'Contact name', column: true },
+      { key: 'phone', label: 'Phone', column: true },
+      { key: 'ntn', label: 'NTN', column: true },
+    ],
+  },
   {
     // Name only — the logistics workbooks carry nothing else about a customer,
     // so address/contact fields would just be six empty columns.
@@ -105,7 +118,7 @@ const MASTER_DEFS: MasterDef[] = [
 export function MastersPage() {
   const { user } = useAuth()
   const canAdd = can(user, 'manageMastersFull') || can(user, 'manageMastersInlineCreate')
-  const [activeKey, setActiveKey] = useState<MasterKey>('customer')
+  const [activeKey, setActiveKey] = useState<MasterKey | 'transporter'>('customer')
   const def = MASTER_DEFS.find((d) => d.key === activeKey)!
 
   return (
@@ -136,8 +149,12 @@ function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
     setLoading(true)
     setError(null)
     try {
-      const data = await listMasters(def.key, { includeInactive })
-      setRows(data)
+      if (def.key === 'transporter') {
+        setRows(listTransporters() as unknown as MasterRow[])
+      } else {
+        const data = await listMasters(def.key, { includeInactive })
+        setRows(data)
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not load this list.')
     } finally {
@@ -269,7 +286,11 @@ function AddMasterForm({ def, onCreated, onCancel }: {
       if (v) payload[f.key] = v
     }
     try {
-      await createMaster(def.key, payload)
+      if (def.key === 'transporter') {
+        createTransporter(payload)
+      } else {
+        await createMaster(def.key, payload)
+      }
       onCreated()
     } catch (e) {
       setError(e instanceof ApiError ? (e.message || 'Could not save.') : (e instanceof Error ? e.message : 'Could not save.'))

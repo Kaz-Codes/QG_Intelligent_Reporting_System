@@ -30,3 +30,20 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+## Trucking wizard notes
+
+- **Transporters** (`src/lib/mastersTransporters.ts`) is a mock, in-memory
+  master used by the Masters screen's "Transporters" tab and the trucking
+  wizard's Transporter Name datalist. There is no backend transporter master
+  yet; additions don't persist across a reload. Swap it for
+  `listMasters('transporter')` / `createMaster('transporter')` once the
+  backend has a real registry entry.
+- **Shipment reference / IDM** on a trucking job is optional at submit —
+  it is not required by `truckingSubmitSchema`.
+- **Vehicle Type** (Step 2) and **Shifting Type** (Step 1, now including
+  "Emergency") are fixed dropdowns (`VEHICLE_TYPES` / `SHIFTING_TYPES` in
+  `features/truckingStatus/schema.ts`), not free text.
+- The wizard's step navigation only re-saves when there are unsaved edits —
+  clicking a step with no dirty state jumps straight there; a dirty step
+  prompts to save-and-move or move-without-saving.

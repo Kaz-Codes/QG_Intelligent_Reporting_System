@@ -119,6 +119,7 @@ export function TruckingStatusWizard() {
   const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
   const [justSaved, setJustSaved] = useState(false)
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+  const [pendingStep, setPendingStep] = useState<number | null>(null)
 
   const isNew = !jobId
   const allowed = isNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
@@ -183,17 +184,49 @@ export function TruckingStatusWizard() {
   function goToStep(nextStep: number) {
     const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
     if (clamped === stepDef.step) return
-    void doGoToStep(clamped)
+    // No unsaved edits — jump straight there, no save round-trip. Unsaved edits
+    // — ask whether to save first or move without saving.
+    if (methods.formState.isDirty) {
+      setPendingStep(clamped)
+    } else {
+      navigateToStep(clamped)
+    }
   }
 
-  async function doGoToStep(clamped: number) {
+  /** Navigate to a step WITHOUT saving. For a brand-new unsaved job there's no
+   *  id yet, so we can only move once it's been saved at least once. */
+  function navigateToStep(clamped: number) {
+    if (isNew || id == null) {
+      // Nothing persisted yet — a save is unavoidable to get an id.
+      void doGoToStep(clamped, true)
+      return
+    }
+    navigate(`/trucking-status/${id}/edit/${clamped}`)
+  }
+
+  async function doGoToStep(clamped: number, keepDirtyReset = false) {
     const saved = await saveDraft()
     if (saved === null) return // error is already shown; stay put
+    if (keepDirtyReset) methods.reset(methods.getValues())
     // A save that closed the job leaves nothing further to edit — land on the
     // read-only detail view rather than an edit route that would bounce.
     navigate(saved.isLocked
       ? `/trucking-status/${saved.id}`
       : `/trucking-status/${saved.id}/edit/${clamped}`)
+  }
+
+  async function saveThenMove() {
+    const target = pendingStep
+    setPendingStep(null)
+    if (target != null) await doGoToStep(target)
+  }
+
+  function moveWithoutSaving() {
+    const target = pendingStep
+    setPendingStep(null)
+    // Drop unsaved edits so we don't re-prompt, then navigate.
+    methods.reset(methods.getValues())
+    if (target != null) navigateToStep(target)
   }
 
   async function handleSaveOnly() {
@@ -336,6 +369,24 @@ export function TruckingStatusWizard() {
           </FormProvider>
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={pendingStep != null}
+        title="Unsaved changes"
+        description={
+          <>
+            You have unsaved changes on this step. Save them before moving, or move
+            without saving and lose them?
+          </>
+        }
+        confirmLabel="Save and move"
+        confirmingLabel="Saving…"
+        confirming={busy}
+        onConfirm={() => void saveThenMove()}
+        onCancel={() => setPendingStep(null)}
+        secondaryLabel="Move without saving"
+        onSecondary={moveWithoutSaving}
+      />
 
       <ConfirmDialog
         open={!!pendingAction}

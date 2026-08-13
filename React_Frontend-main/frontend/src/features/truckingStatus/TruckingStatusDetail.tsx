@@ -239,16 +239,34 @@ export function TruckingStatusDetail() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Movement & Item">
+        <Section title="Movement">
           <Row label="Execution date" value={row.executionDate} />
           <Row label="Transporter" value={row.transporterName} />
           <Row label="Shifting type" value={row.shiftingType} />
-          <Row label="Item details" value={row.itemDetails} />
-          <Row label="Pickup" value={row.pickup} />
-          <Row label="Destination" value={row.destination} />
-          {row.movementType !== 'Intrafactory' && <Row label="Reference / IDM" value={row.referenceNo} />}
           <Row label="Dispatch note date" value={row.dispatchNoteDate} />
           <Row label="ETA to works" value={row.etaWorks} />
+          <div className="pt-2">
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">Items</div>
+            {(row.items?.length ?? 0) === 0 ? (
+              <div className="text-sm text-muted">{row.itemDetails || 'No items entered.'}</div>
+            ) : (
+              <ul className="flex flex-col gap-1">
+                {row.items!.map((it, i) => (
+                  <li key={i} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                    <span className="font-medium">{it.itemDetails || <span className="italic text-muted">Unnamed item</span>}</span>
+                    {(it.quantity != null || it.uom) && (
+                      <span className="text-xs text-muted tabular-nums">
+                        {it.quantity ?? '—'}{it.uom ? ` ${it.uom}` : ''}
+                      </span>
+                    )}
+                    {row.movementType !== 'Intrafactory' && it.referenceNo && (
+                      <span className="text-xs text-muted">· IDM {it.referenceNo}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </Section>
 
         <Section title="Freight & Payment">
