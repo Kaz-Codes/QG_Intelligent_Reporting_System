@@ -404,6 +404,34 @@ v_branch_depleted_items(branch, item_code, item_name, branch_rank,
     out_of_stock_company_wide tells you which of them are genuinely out of
     stock as well.
 
+v_dead_stock(item_code, item_name, rank, branch_ranks, branches_held_at,
+             available_qty, idle_value, total_value, last_issued_on,
+             days_since_issue, ever_issued, last_purchased_on,
+             days_since_purchase, data_through)
+    DEAD STOCK - one row per item. The definition, and the only place it
+    lives: holds stock (available_qty > 0), has had NO issuance in the last
+    365 days, and its last purchase was over 365 days ago so it has had a year
+    to move. Do not rebuild this from `issuance` and `stock` by hand, and do
+    not state a count or a value for it without querying - the numbers move
+    every time data is loaded.
+
+    RANK BY idle_value, NOT by count or quantity. 40 kg of one item and 40
+    tonnes of another are not the same problem; the money not moving is the
+    point of the question.
+
+    ever_issued = false means it has NEVER been issued since records began,
+    which is a stronger finding than "not issued lately" and worth saying
+    separately.
+
+    days_since_purchase IS NULL means no purchase record exists. That is NOT
+    recent stock: purchase history only starts in 2023, so these are the OLDEST
+    holdings. Say the age is unknown rather than implying it is new or omitting
+    the item.
+
+    Items bought within the last year are deliberately EXCLUDED - unsold and
+    new is not dead. If the user asks about those, they are asking a different
+    question and it needs its own answer, not this view.
+
 v_item_types(item_type, display_name, item_codes, category)
     One row per distinct item NAME. A "type" is a name, not an item_code -
     each code is a name+spec variant. COUNT(*) here answers "how many types".

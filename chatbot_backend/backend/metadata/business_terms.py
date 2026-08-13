@@ -289,6 +289,40 @@ BUSINESS_TERMS = [
         ),
     },
     {
+        "term": (
+            "dead stock / deadstock / non-moving stock / idle stock / "
+            "stock not moving / stuck inventory / what is not selling"
+        ),
+        "meaning": (
+            "Stock the company is holding that has not moved in a year, and "
+            "has had a year in which it could have. Three conditions together: "
+            "available_qty above zero, no issuance in the last 365 days, and a "
+            "last purchase more than 365 days ago."
+        ),
+        "maps_to": (
+            "SELECT FROM v_dead_stock. It IS the definition; never rebuild it "
+            "from issuance and stock by hand, and never quote a figure for it "
+            "from memory - query it. Rank by idle_value, not by item count or "
+            "quantity: the money standing still is what the question is about."
+        ),
+        "notes": (
+            "WHY A PURCHASE OVER A YEAR OLD IS PART OF IT: without that "
+            "condition, anything bought recently and not yet issued counts as "
+            "dead - and those items are new, not dead.\n"
+            "ever_issued = false means NEVER issued since records began. That "
+            "is a stronger finding than 'not issued lately' - say it "
+            "separately, because it often means the item was bought for a job "
+            "that never ran.\n"
+            "days_since_purchase NULL means no purchase record. Purchase "
+            "history starts in 2023, so those are the OLDEST holdings, not new "
+            "ones. Say the age is unknown; do not imply recent.\n"
+            "Dead stock is a WRITE-OFF, TRANSFER or USE-UP question, never a "
+            "buying one. Prescriptive advice here should name the items with "
+            "the most money idle and what to do with them - never suggest "
+            "purchasing more of something that has not moved in a year."
+        ),
+    },
+    {
         "term": "consumption / issuance / burn rate",
         "meaning": (
             "Material issued out of the store to a department or job. "

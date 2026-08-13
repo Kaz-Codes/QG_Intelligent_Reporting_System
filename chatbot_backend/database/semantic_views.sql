@@ -217,6 +217,7 @@ WHERE lower(trim(i.name)) IN (
 -- Dropped rather than replaced: CREATE OR REPLACE cannot add a column to
 -- an existing view, and the dependent views are rebuilt below anyway.
 DROP VIEW IF EXISTS v_item_demand_picture;
+DROP VIEW IF EXISTS v_dead_stock;
 DROP VIEW IF EXISTS v_branch_depleted_items;
 DROP VIEW IF EXISTS v_out_of_stock_by_branch;
 DROP VIEW IF EXISTS v_out_of_stock_items;
@@ -342,6 +343,82 @@ SELECT s.branch,
 FROM stock AS s
 JOIN v_item_stock_position AS p ON p.item_code = s.item_code
 WHERE COALESCE(s.available_qty, 0) <= 0;
+
+
+-- ---------------------------------------------------------------------------
+-- v_dead_stock - stock that is sitting there, money doing nothing
+--
+-- THE DEFINITION, as given by the business:
+--   * the item HOLDS stock          available_qty > 0 - there is something to
+--                                   act on; an item at zero is an out-of-stock
+--                                   question, not a dead-stock one
+--   * it has NOT MOVED in a year    no issuance with status 'Issue' in the last
+--                                   365 days ('Hold' and 'HoldIssuence' are
+--                                   reservations, not movement)
+--   * it has HAD a year to move     its most recent purchase is more than 365
+--                                   days ago - "365 days since its purchase"
+--
+-- WHY THE PURCHASE CLAUSE MATTERS. Without it, anything bought recently and not
+-- yet issued counts as dead: 344 items are in exactly that position and they
+-- are not dead, they are new. That is the difference between 1,592 items and
+-- 1,248.
+--
+-- AN ITEM WITH NO PURCHASE RECORD IS STILL INCLUDED, deliberately. Purchase
+-- history only reaches back to 2023-01, so 735 items holding stock have no
+-- purchase row at all - they are the OLDEST stock in the building, not the
+-- newest. Requiring a purchase date to prove age would drop precisely the
+-- items most likely to be dead. Age is unknown for them, not recent, and
+-- days_since_purchase is NULL so an answer can say so.
+--
+-- Built on v_item_stock_position rather than re-summing `stock`, so "how much
+-- is available" means the same thing here as everywhere else.
+--
+-- The window is CURRENT_DATE-based, like v_item_demand_picture. data_through is
+-- carried so an answer can say how fresh the issuance data is: after a long gap
+-- with no data load, "no issuance in 365 days" starts to mean "no data for
+-- part of that year", and the reader needs to be able to tell.
+-- ---------------------------------------------------------------------------
+CREATE VIEW v_dead_stock AS
+WITH last_issue AS (
+    SELECT i.item_code, MAX(i.from_date) AS last_issued_on
+    FROM issuance AS i
+    WHERE i.status = 'Issue'
+    GROUP BY i.item_code
+),
+last_purchase AS (
+    -- COALESCE because `purchase` (the date it landed) is the truthful one but
+    -- is not always filled; po_date is the fallback.
+    SELECT p.item_code, MAX(COALESCE(p.purchase, p.po_date)) AS last_purchased_on
+    FROM purchases_data AS p
+    GROUP BY p.item_code
+)
+SELECT pos.item_code,
+       pos.item_name,
+       pos.rank,
+       pos.branch_ranks,
+       pos.branches_held_at,
+
+       pos.available_qty,
+       -- The point of the whole view: money tied up in something that has not
+       -- moved. Lead with this when ranking - 40 kg of one item and 40 tonnes
+       -- of another are not the same problem.
+       pos.available_amount                        AS idle_value,
+       pos.stock_amount                            AS total_value,
+
+       li.last_issued_on,
+       (CURRENT_DATE - li.last_issued_on)          AS days_since_issue,
+       (li.last_issued_on IS NOT NULL)             AS ever_issued,
+
+       lp.last_purchased_on,
+       (CURRENT_DATE - lp.last_purchased_on)       AS days_since_purchase,
+
+       (SELECT MAX(from_date) FROM issuance)       AS data_through
+FROM v_item_stock_position AS pos
+LEFT JOIN last_issue    AS li ON li.item_code = pos.item_code
+LEFT JOIN last_purchase AS lp ON lp.item_code = pos.item_code
+WHERE pos.available_qty > 0
+  AND (li.last_issued_on IS NULL OR li.last_issued_on < CURRENT_DATE - 365)
+  AND (lp.last_purchased_on IS NULL OR lp.last_purchased_on < CURRENT_DATE - 365);
 
 
 -- ---------------------------------------------------------------------------
