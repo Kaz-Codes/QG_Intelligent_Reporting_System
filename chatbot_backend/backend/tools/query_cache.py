@@ -325,6 +325,131 @@ def _index(entry: Dict[str, Any]) -> None:
         pass  # the cache still works on exact matches without this
 
 
+# ---------------------------------------------------------------------------
+#  answer shape - what a near match must agree about
+#
+#  "How many items are out of stock" and "which items are out of stock" are the
+#  same topic, carry the same entities (none), and differ by one word, so they
+#  embed almost identically and near-match each other. But one wants a number
+#  and the other wants 871 rows. The count query answered the list question and
+#  returned a single row saying 871 - no error, just the wrong answer, and with
+#  one aggregate row there was no item left to name so the prescriptive section
+#  fell to N/A and looked broken.
+#
+#  The check compares the question to what the STORED SQL ACTUALLY DOES, not to
+#  the question it was stored under. That is a fact rather than a guess about
+#  how somebody once worded things.
+# ---------------------------------------------------------------------------
+_COUNT_ASK = re.compile(
+    r"\b(how many|how much|number of|count of|total (?:number|count))\b",
+    re.IGNORECASE,
+)
+_LIST_ASK = re.compile(
+    r"\b(which|list|show me|give me|name the|what are the|display|"
+    r"details of|breakdown|each of)\b",
+    re.IGNORECASE,
+)
+_AGGREGATE = re.compile(r"^\s*(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
+
+
+def _asked_shape(question: str) -> str:
+    """'count', 'list', or 'other' - the shape the WORDING asks for."""
+    counts = bool(_COUNT_ASK.search(question or ""))
+    lists = bool(_LIST_ASK.search(question or ""))
+    if counts and not lists:
+        return "count"
+    if lists and not counts:
+        return "list"
+    return "other"
+
+
+def _top_level_split(sql: str) -> list:
+    """Indexes of every SELECT / FROM / GROUP BY outside any parentheses."""
+    up = (sql or "").upper()
+    depth = 0
+    marks = []
+    i = 0
+    while i < len(up):
+        ch = up[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0:
+            for word in ("SELECT", "FROM", "GROUP BY"):
+                if up.startswith(word, i) and (i == 0 or not up[i - 1].isalnum()):
+                    marks.append((word, i))
+                    i += len(word) - 1
+                    break
+        i += 1
+    return marks
+
+
+def _sql_shape(sql: str) -> str:
+    """
+    'count' if the query returns ONE aggregate row, 'list' if it returns
+    records, 'other' when it cannot be told.
+
+    Only the OUTERMOST select decides it: a CTE that counts something feeding a
+    query that lists rows is a list. Anything with a top-level GROUP BY returns
+    a row per group, so it is a list too.
+    """
+    if not sql:
+        return "other"
+    marks = _top_level_split(sql)
+    if any(word == "GROUP BY" for word, _ in marks):
+        return "list"
+
+    selects = [i for word, i in marks if word == "SELECT"]
+    froms = [i for word, i in marks if word == "FROM"]
+    if not selects:
+        return "other"
+
+    start = selects[-1] + len("SELECT")
+    after = [i for i in froms if i > start]
+    projection = sql[start : after[0]] if after else sql[start:]
+    projection = re.sub(r"^\s*DISTINCT\b", "", projection, flags=re.IGNORECASE)
+
+    # Split the projection on commas that are not inside a function call.
+    parts, depth, current = [], 0, ""
+    for ch in projection:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    parts = [p for p in parts if p.strip()]
+    if not parts:
+        return "other"
+
+    return "count" if all(_AGGREGATE.match(p) for p in parts) else "list"
+
+
+def _shapes_agree(question: str, sql: str) -> bool:
+    """
+    Whether a near match may answer this question.
+
+    Permissive by design. A wrongly REJECTED match costs one SQL generation -
+    a few seconds and some tokens. A wrongly ACCEPTED one returns a confidently
+    wrong answer with nothing anywhere reporting a problem, which is how this
+    went unnoticed until the prescriptive section looked empty. So a question
+    that reads as both ("show me how many...") is allowed through, and only a
+    clear conflict blocks.
+    """
+    asked = _asked_shape(question)
+    if asked == "other":
+        return True
+    produced = _sql_shape(sql)
+    if produced == "other":
+        return True
+    return asked == produced
+
+
 def _nearest(question: str) -> Optional[str]:
     """Fingerprint of the closest remembered question, if it is close ENOUGH."""
     try:
@@ -375,8 +500,16 @@ def lookup(question: str, entities: Optional[Dict[str, Any]] = None) -> Optional
         near_fp = _nearest(question)
         candidate = by_fp.get(near_fp) if near_fp else None
         # A near match is only safe when it was resolved against the same
-        # entities - otherwise "stock of resin" would answer "stock of steel".
-        if candidate and candidate.get("entity_key") == _entity_key(entities):
+        # entities - otherwise "stock of resin" would answer "stock of steel" -
+        # AND when it returns the shape of answer being asked for. Entities
+        # alone let a count answer a list question: "how many items are out of
+        # stock" and "which items are out of stock" both carry no entities at
+        # all, so nothing stopped the cached COUNT from serving the list.
+        if (
+            candidate
+            and candidate.get("entity_key") == _entity_key(entities)
+            and _shapes_agree(question, candidate.get("sql", ""))
+        ):
             hit = candidate
 
     if hit is None:
