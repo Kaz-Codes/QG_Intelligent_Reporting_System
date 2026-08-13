@@ -1,5 +1,5 @@
 {
-  "fingerprint": "items:27774:2026-08-11 14:24:05.537218+05:00|suppliers:65:2026-08-11 14:26:50.872387+05:00|branches:4:2026-08-11 14:26:51.444939+05:00|ports:24:2026-08-11 14:26:52.694568+05:00|clearing_agents:5:2026-08-11 14:26:52.035366+05:00|customers:188:2026-08-11 14:26:59.052103+05:00|stock:6070:|issuance:245094:|store_requisition:7075:|purchases_data:78931:|consignments:179:2026-08-11 17:31:50.175866+05:00|consignment_items:451:2026-08-11 17:31:45.080861+05:00|payments:0:|logistics_consignments:747:2026-08-12 11:53:18.069221+05:00|logistics_items:713:2026-08-11 14:56:41.179320+05:00|logistics_packages:679:2026-08-11 14:52:28.437872+05:00|logistics_containers:54:2026-08-11 14:26:56.738951+05:00|trucking_consignments:1371:2026-08-12 12:00:24.883047+05:00|trucking_vehicles:1470:2026-08-12 12:00:24.883047+05:00",
+  "fingerprint": "items:27774:2026-08-12 16:50:56.433034+05:00|suppliers:65:2026-08-12 16:53:56.468387+05:00|branches:4:2026-08-12 16:53:57.041246+05:00|ports:24:2026-08-12 16:53:58.150628+05:00|clearing_agents:5:2026-08-12 16:53:57.574011+05:00|customers:188:2026-08-12 16:54:04.025545+05:00|stock:6070:|issuance:245094:|store_requisition:7075:|purchases_data:78931:|consignments:179:2026-08-13 15:38:36.655711+05:00|consignment_items:451:2026-08-13 15:38:36.655711+05:00|payments:0:|logistics_consignments:745:2026-08-13 15:38:07.821492+05:00|logistics_items:711:2026-08-13 15:38:07.821492+05:00|logistics_packages:678:2026-08-12 16:54:01.946975+05:00|logistics_containers:54:2026-08-12 16:54:01.980281+05:00|trucking_consignments:1370:2026-08-13 12:53:22.067828+05:00|trucking_vehicles:1468:2026-08-13 12:53:08.960491+05:00",
   "tables": {
     "items": {
       "rows": 27774,
@@ -1275,22 +1275,22 @@
       "patchy": {}
     },
     "logistics_consignments": {
-      "rows": 747,
+      "rows": 745,
       "vocabularies": {
         "order_type": [
           {
             "value": "Export",
-            "rows": 347
+            "rows": 346
           },
           {
             "value": "Local",
-            "rows": 8
+            "rows": 7
           }
         ],
         "department": [
           {
             "value": "Sugar",
-            "rows": 77
+            "rows": 76
           },
           {
             "value": "Cement",
@@ -1299,33 +1299,17 @@
           {
             "value": "G.I Floor Mills",
             "rows": 1
-          },
-          {
-            "value": "General",
-            "rows": 1
           }
         ],
         "job_kind": [
           {
             "value": "standard",
-            "rows": 747
+            "rows": 745
           }
         ],
         "shipment_mode": [
           {
             "value": "Regular",
-            "rows": 2
-          }
-        ],
-        "origin_city": [
-          {
-            "value": "Lahore",
-            "rows": 1
-          }
-        ],
-        "origin_province": [
-          {
-            "value": "Punjab",
             "rows": 1
           }
         ],
@@ -1340,7 +1324,7 @@
           },
           {
             "value": "FOB",
-            "rows": 50
+            "rows": 49
           }
         ],
         "clearing_agent": [
@@ -1420,7 +1404,7 @@
           },
           {
             "value": "Under Production",
-            "rows": 135
+            "rows": 133
           },
           {
             "value": "Delivered",
@@ -1438,41 +1422,41 @@
         "record_state": [
           {
             "value": "draft",
-            "rows": 615
+            "rows": 614
           },
           {
             "value": "submitted",
-            "rows": 132
+            "rows": 131
           }
         ]
       },
       "patchy": {
-        "batch_no": 0.2811,
-        "packing_cost": 0.1593,
-        "transportation_charges": 0.0027,
-        "container_detention": 0.0027,
-        "insurance": 0.0187,
-        "trucking_lhr_to_khi": 0.1473,
-        "fumigation_cost": 0.083,
-        "lashing": 0.095,
-        "qfl_charges": 0.1486,
-        "qfl_container_movement": 0.1084,
-        "custom_clearance_charges": 0.1071,
-        "port_charges": 0.1058,
-        "dhl_charges": 0.0241,
-        "sea_air_freight": 0.1191
+        "batch_no": 0.2805,
+        "packing_cost": 0.157,
+        "transportation_charges": 0.0,
+        "container_detention": 0.0,
+        "insurance": 0.0161,
+        "trucking_lhr_to_khi": 0.145,
+        "fumigation_cost": 0.0805,
+        "lashing": 0.0926,
+        "qfl_charges": 0.1463,
+        "qfl_container_movement": 0.106,
+        "custom_clearance_charges": 0.1047,
+        "port_charges": 0.1034,
+        "dhl_charges": 0.0215,
+        "sea_air_freight": 0.1168
       }
     },
     "logistics_items": {
-      "rows": 713,
+      "rows": 711,
       "vocabularies": {},
       "patchy": {
-        "unit_weight": 0.0014,
-        "gross_weight": 0.913
+        "unit_weight": 0.0,
+        "gross_weight": 0.9142
       }
     },
     "logistics_packages": {
-      "rows": 679,
+      "rows": 678,
       "vocabularies": {
         "packing_works": [
           {
@@ -1535,7 +1519,7 @@
           },
           {
             "value": "Packing under manufacturing",
-            "rows": 79
+            "rows": 78
           },
           {
             "value": "Under Packing",
@@ -1544,9 +1528,9 @@
         ]
       },
       "patchy": {
-        "quoted_packing_cost": 0.0427,
+        "quoted_packing_cost": 0.0428,
         "actual_packing_cost": 0.0,
-        "gross_weight": 0.9102
+        "gross_weight": 0.9115
       }
     },
     "logistics_containers": {
@@ -1566,16 +1550,16 @@
       "patchy": {}
     },
     "trucking_consignments": {
-      "rows": 1371,
+      "rows": 1370,
       "vocabularies": {
         "movement_type": [
           {
             "value": "Intrafactory",
-            "rows": 875
+            "rows": 876
           },
           {
             "value": "Outbound",
-            "rows": 216
+            "rows": 214
           },
           {
             "value": "Inbound",
@@ -1585,119 +1569,17 @@
         "source": [
           {
             "value": "manual",
-            "rows": 1251
+            "rows": 1250
           },
           {
             "value": "from-import-fob",
             "rows": 120
           }
         ],
-        "transporter_name": [
-          {
-            "value": "Dream Line",
-            "rows": 895
-          },
-          {
-            "value": "Inland Goods",
-            "rows": 48
-          },
-          {
-            "value": "Naveed Sabir",
-            "rows": 38
-          },
-          {
-            "value": "Ittefaq Shalmani",
-            "rows": 32
-          },
-          {
-            "value": "M Waqas Goods",
-            "rows": 26
-          },
-          {
-            "value": "N. Sulehri Goods",
-            "rows": 21
-          },
-          {
-            "value": "Black Logistics",
-            "rows": 17
-          },
-          {
-            "value": "Sheikh Goods",
-            "rows": 15
-          },
-          {
-            "value": "Manj Goods",
-            "rows": 13
-          },
-          {
-            "value": "Taqwa Goods",
-            "rows": 13
-          },
-          {
-            "value": "Waqas Goods",
-            "rows": 6
-          },
-          {
-            "value": "In Land",
-            "rows": 5
-          },
-          {
-            "value": "Builty",
-            "rows": 3
-          },
-          {
-            "value": "Broco",
-            "rows": 3
-          },
-          {
-            "value": "Imran Taj",
-            "rows": 2
-          },
-          {
-            "value": "Part Load",
-            "rows": 2
-          },
-          {
-            "value": "Dream line",
-            "rows": 2
-          },
-          {
-            "value": "Sheikh Logistics",
-            "rows": 1
-          },
-          {
-            "value": "Imran Trolley",
-            "rows": 1
-          },
-          {
-            "value": "New Karachi Hazara",
-            "rows": 1
-          },
-          {
-            "value": "M.N Sulehri Goods",
-            "rows": 1
-          },
-          {
-            "value": "Broco Logistics",
-            "rows": 1
-          },
-          {
-            "value": "Jeeway Super",
-            "rows": 1
-          },
-          {
-            "value": "N.Sulehri Goods",
-            "rows": 1
-          },
-          {
-            "value": "Imdad Goods",
-            "rows": 1
-          }
-        ],
         "shifting_type": [
           {
             "value": "Regular",
-            "rows": 712
+            "rows": 711
           },
           {
             "value": "Others",
@@ -1719,7 +1601,7 @@
           },
           {
             "value": "QCL",
-            "rows": 244
+            "rows": 242
           },
           {
             "value": "QBL-II",
@@ -1816,12 +1698,12 @@
             "rows": 91
           },
           {
-            "value": "Customer to pay",
+            "value": "Topay",
             "rows": 2
           },
           {
-            "value": "Topay",
-            "rows": 2
+            "value": "Customer to pay",
+            "rows": 1
           }
         ],
         "remarks": [
@@ -1845,19 +1727,19 @@
           },
           {
             "value": "draft",
-            "rows": 232
+            "rows": 231
           }
         ]
       },
       "patchy": {
-        "quoted_freight": 0.1999,
-        "actual_freight": 0.8286,
-        "paid_amount": 0.0015,
-        "detention": 0.0306
+        "quoted_freight": 0.1993,
+        "actual_freight": 0.8285,
+        "paid_amount": 0.0007,
+        "detention": 0.0299
       }
     },
     "trucking_vehicles": {
-      "rows": 1470,
+      "rows": 1468,
       "vocabularies": {
         "container_type": [
           {
@@ -1876,7 +1758,7 @@
           },
           {
             "value": "Going to load",
-            "rows": 227
+            "rows": 226
           },
           {
             "value": "On Road",
@@ -1885,16 +1767,12 @@
           {
             "value": "Planned",
             "rows": 4
-          },
-          {
-            "value": "On road",
-            "rows": 1
           }
         ]
       },
       "patchy": {
-        "no_of_packages": 0.3401,
-        "net_weight": 0.002
+        "no_of_packages": 0.3392,
+        "net_weight": 0.0007
       }
     }
   }

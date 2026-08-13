@@ -135,17 +135,18 @@ app = FastAPI(title="Supply Chain ERP")
 # request carries credentials, and that in turn means the allowed origins
 # have to be named exactly (a wildcard is refused by the browser once
 # credentials are allowed). Add the front end's real address here.
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5179",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+# ALLOWED_ORIGINS = [
+#     "http://localhost:5173",
+#     "http://127.0.0.1:5173",
+#     "http://127.0.0.1:5179",
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+#     "/"
+# ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -268,5 +268,153 @@
     "created_at": "2026-08-12T16:28:24",
     "last_used": "2026-08-12T16:28:24",
     "hits": 0
+  },
+  {
+    "fingerprint": "f70cb1ca38236737bf29",
+    "question": "Local purchases",
+    "normalised": "local purchases",
+    "entity_key": "status=delays",
+    "sql": "WITH delayed_supplier_counts AS (\n    SELECT\n        p.supplier AS supplier_name,\n        COUNT(*) AS delayed_purchase_count\n    FROM purchases_data p\n    WHERE p.purchase IS NOT NULL\n      AND p.required_d IS NOT NULL\n      AND p.purchase > p.required_d\n      AND p.supplier IS NOT NULL\n    GROUP BY p.supplier\n)\nSELECT\n    d.supplier_name,\n    d.delayed_purchase_count,\n    COUNT(*) OVER (PARTITION BY d.delayed_purchase_count) AS tie_count\nFROM delayed_supplier_counts d\nORDER BY d.delayed_purchase_count DESC, d.supplier_name\nLIMIT 1",
+    "tables_used": [
+      "purchases_data"
+    ],
+    "limit_is_user_requested": true,
+    "schema_hash": "a2f3323d11a233d3",
+    "created_at": "2026-08-12T16:47:16",
+    "last_used": "2026-08-12T16:47:16",
+    "hits": 0
+  },
+  {
+    "fingerprint": "a2cd43c161288417aca3",
+    "question": "i meant silica sand",
+    "normalised": "meant silica sand",
+    "entity_key": "item=silica sand",
+    "sql": "SELECT v.item_code, v.item_name, v.rank, v.branch_ranks, v.available_qty, v.stock_qty, v.hold_qty, v.issued_qty_3m, v.issue_lines_3m, v.last_issued_on, v.issued_since, v.data_through, v.daily_burn, v.days_of_cover, v.open_demand_qty, v.open_requisitions, v.earliest_required_date, v.demand_statuses, v.demand_purchased_qty, v.demand_overdue, v.incoming_qty, v.incoming_consignments, v.earliest_eta, v.incoming_statuses, v.suggested_buy_qty\nFROM v_item_demand_picture v\nWHERE v.item_code IN ('23556-60', '2951-147')",
+    "tables_used": [
+      "v_item_demand_picture"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "6d36242c54d57e97",
+    "created_at": "2026-08-13T10:32:15",
+    "last_used": "2026-08-13T10:32:15",
+    "hits": 0
+  },
+  {
+    "fingerprint": "76458814b4b320b4fb14",
+    "question": "current status of silica sand]",
+    "normalised": "current status silica sand",
+    "entity_key": "item=silica sand",
+    "sql": "SELECT i.item_code, i.name AS item_name, i.default_unit_of_measurement AS uom, v.branches_held_at, v.stock_qty, v.hold_qty, v.available_qty, CASE WHEN v.available_qty IS NULL THEN 'No stock record' WHEN v.available_qty <= 0 THEN 'No usable stock' ELSE 'Usable stock available' END AS current_status\nFROM items i\nLEFT JOIN v_item_stock_position v ON v.item_code = i.item_code\nWHERE i.item_code IN ('23556-60', '2951-147')\nORDER BY i.item_code",
+    "tables_used": [
+      "items",
+      "v_item_stock_position"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "58138e051952299d",
+    "created_at": "2026-08-13T11:24:07",
+    "last_used": "2026-08-13T11:24:07",
+    "hits": 0
+  },
+  {
+    "fingerprint": "7a4275408690655ac843",
+    "question": "give me the current status of ss scrap",
+    "normalised": "current status ss scrap",
+    "entity_key": "item=ss scrap",
+    "sql": "SELECT i.name AS item_name,\n       i.item_code,\n       s.branch,\n       s.available_qty,\n       s.stock_qty,\n       s.hold_qty,\n       i.default_unit_of_measurement AS uom,\n       CASE\n           WHEN bd.item_code IS NOT NULL THEN 'Depleted at branch'\n           ELSE 'In stock'\n       END AS current_status\nFROM items i\nJOIN stock s\n  ON s.item_code = i.item_code\nLEFT JOIN v_branch_depleted_items bd\n  ON bd.item_code = s.item_code\n AND bd.branch = s.branch\nWHERE i.name ~* '[[:<:]]SS[[:space:]]+scrap[[:>:]]'\nORDER BY i.name, s.branch",
+    "tables_used": [
+      "items",
+      "stock",
+      "v_branch_depleted_items"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "58138e051952299d",
+    "created_at": "2026-08-13T11:27:10",
+    "last_used": "2026-08-13T11:27:10",
+    "hits": 0
+  },
+  {
+    "fingerprint": "2d463a414c7cc4e9ee7a",
+    "question": "how many items are going critical in qadcast",
+    "normalised": "how many items going critical qadcast",
+    "entity_key": "branch=qadcast|status=going critical",
+    "sql": "SELECT COUNT(DISTINCT s.item_code) AS critical_item_count\nFROM stock s\nWHERE s.branch ILIKE '%qadcast%'\n  AND s.rank IN ('A', 'B')",
+    "tables_used": [
+      "stock"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "58138e051952299d",
+    "created_at": "2026-08-13T11:41:23",
+    "last_used": "2026-08-13T11:41:23",
+    "hits": 0
+  },
+  {
+    "fingerprint": "393986a985f3b7236475",
+    "question": "show details",
+    "normalised": "details",
+    "entity_key": "item=items|status=going critical",
+    "sql": "SELECT s.item_code, COALESCE(i.name, s.item_name) AS item_name, i.default_unit_of_measurement AS uom, s.branch, s.rank, s.available_qty, s.stock_qty, s.hold_qty\nFROM stock s\nLEFT JOIN items i ON i.item_code = s.item_code\nWHERE s.branch ILIKE '%Qadcast%'\n  AND s.rank IN ('A', 'B')\nORDER BY CASE WHEN s.rank = 'A' THEN 1 ELSE 2 END, s.available_qty NULLS FIRST, s.item_code\nLIMIT 99",
+    "tables_used": [
+      "stock",
+      "items"
+    ],
+    "limit_is_user_requested": true,
+    "schema_hash": "58138e051952299d",
+    "created_at": "2026-08-13T11:42:11",
+    "last_used": "2026-08-13T11:42:11",
+    "hits": 0
+  },
+  {
+    "fingerprint": "61644ef7417753e57556",
+    "question": "show me details of resin",
+    "normalised": "details resin",
+    "entity_key": "item=resin",
+    "sql": "SELECT 'item_master' AS source, i.item_code, i.name AS item_name, i.default_specification AS specification, i.default_unit_of_measurement AS uom, NULL::numeric AS quantity, NULL::text AS reference, NULL::text AS status, i.category\nFROM items i\nWHERE i.name ~* '[[:<:]]resins?[[:>:]]'\n   OR i.default_specification ~* '[[:<:]]resins?[[:>:]]'\nUNION ALL\nSELECT 'import_line' AS source, ci.item_code, ci.item_name, ci.specification, ci.unit_of_measurement AS uom, ci.quantity, ci.reference_number AS reference, c.current_status AS status, NULL::text AS category\nFROM consignment_items ci\nLEFT JOIN consignments c ON c.id = ci.consignment_id\n  AND c.is_deleted = false\nWHERE ci.is_deleted = false\n  AND (ci.item_name ~* '[[:<:]]resins?[[:>:]]'\n       OR ci.specification ~* '[[:<:]]resins?[[:>:]]')\nUNION ALL\nSELECT 'export_line' AS source, NULL::character varying AS item_code, li.item_detail AS item_name, NULL::character varying AS specification, NULL::character varying AS uom, li.quantity, lc.mo_no AS reference, lc.current_status AS status, NULL::text AS category\nFROM logistics_items li\nLEFT JOIN logistics_consignments lc ON lc.id = li.consignment_id\n  AND lc.is_deleted = false\nWHERE li.is_deleted = false\n  AND li.item_detail ~* '[[:<:]]resins?[[:>:]]'\nUNION ALL\nSELECT 'trucking_job' AS source, NULL::character varying AS item_code, tc.item_details AS item_name, NULL::character varying AS specification, NULL::character varying AS uom, NULL::numeric AS quantity, tc.reference_no AS reference, NULL::text AS status, NULL::text AS category\nFROM trucking_consignments tc\nWHERE tc.is_deleted = false\n  AND tc.item_details ~* '[[:<:]]resins?[[:>:]]'",
+    "tables_used": [
+      "items",
+      "consignment_items",
+      "consignments",
+      "logistics_items",
+      "logistics_consignments",
+      "trucking_consignments"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "58138e051952299d",
+    "created_at": "2026-08-13T11:57:32",
+    "last_used": "2026-08-13T11:57:32",
+    "hits": 0
+  },
+  {
+    "fingerprint": "285b3ed3ccaa68615b45",
+    "question": "no issuance in the last 12 months",
+    "normalised": "no issuance last 12 months",
+    "entity_key": "branch=qcl|status=deadstock",
+    "sql": "WITH qcl_last_issuance AS (\n    SELECT\n        iss.item_code,\n        MAX(iss.from_date) AS last_issued_date\n    FROM issuance iss\n    WHERE iss.branch = 'Qadcast (Pvt) Ltd.'\n      AND iss.status = 'Issue'\n    GROUP BY iss.item_code\n)\nSELECT\n    s.item_code,\n    s.item_name,\n    i.default_unit_of_measurement AS uom,\n    s.available_qty,\n    qli.last_issued_date\nFROM stock s\nLEFT JOIN items i\n    ON i.item_code = s.item_code\nLEFT JOIN qcl_last_issuance qli\n    ON qli.item_code = s.item_code\nWHERE s.branch = 'Qadcast (Pvt) Ltd.'\n  AND (\n      qli.last_issued_date IS NULL\n      OR qli.last_issued_date < date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'\n  )\nORDER BY qli.last_issued_date NULLS FIRST, s.item_code",
+    "tables_used": [
+      "stock",
+      "items",
+      "issuance"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "31510017a38d16ef",
+    "created_at": "2026-08-13T15:55:35",
+    "last_used": "2026-08-13T15:55:35",
+    "hits": 0
+  },
+  {
+    "fingerprint": "450761078507e5aa393f",
+    "question": "give me the items in qcl which has no issuance in 12 months",
+    "normalised": "items qcl which no issuance 12 months",
+    "entity_key": "branch=qcl",
+    "sql": "SELECT s.item_code AS item_code,\n       s.item_name AS item_name,\n       i.default_unit_of_measurement AS uom,\n       s.branch AS branch\nFROM stock s\nLEFT JOIN items i\n  ON i.item_code = s.item_code\nWHERE s.branch = 'Qadcast (Pvt) Ltd.'\n  AND NOT EXISTS (\n      SELECT 1\n      FROM issuance iss\n      WHERE iss.item_code = s.item_code\n        AND iss.branch = s.branch\n        AND iss.status = 'Issue'\n        AND iss.from_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '12 months')::date\n        AND iss.from_date < date_trunc('month', CURRENT_DATE)::date\n  )\nORDER BY s.item_code",
+    "tables_used": [
+      "stock",
+      "items",
+      "issuance"
+    ],
+    "limit_is_user_requested": false,
+    "schema_hash": "31510017a38d16ef",
+    "created_at": "2026-08-13T16:09:09",
+    "last_used": "2026-08-13T16:09:09",
+    "hits": 0
   }
 ]
