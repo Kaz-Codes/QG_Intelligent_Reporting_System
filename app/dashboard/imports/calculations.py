@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.dashboard.references import paginate
+from app.dashboard.references import paginate, search_filter
 
 from app.dashboard.period import build_trend
 from app.enums import Status
@@ -354,14 +354,13 @@ def consignment_reference(consignment):
     }
 
 
-def references(consignments, page=None, page_size=None):
+def references(consignments, page=None, page_size=None, search=None):
     """The consignments behind a figure, as one page of the complete list."""
-    return paginate(
-        [consignment_reference(c) for c in consignments], page, page_size
-    )
+    items = search_filter([consignment_reference(c) for c in consignments], search)
+    return paginate(items, page, page_size)
 
 
-def late_references(dated_consignments, page=None, page_size=None):
+def late_references(dated_consignments, page=None, page_size=None, search=None):
     """Delayed consignments ranked by how late they are.
 
     Takes (days_late, consignment) pairs rather than plain consignments so the
@@ -374,7 +373,7 @@ def late_references(dated_consignments, page=None, page_size=None):
         row["badge"] = f"{days} days late"
         rows.append(row)
 
-    return paginate(rows, page, page_size)
+    return paginate(search_filter(rows, search), page, page_size)
 
 
 #-------------------------------------
@@ -528,7 +527,7 @@ NOT_STATED = "Not stated"
 EFS_CLASSES = [EFS, REGULAR, NOT_STATED]
 
 
-def efs_split(consignments, page=None, page_size=None):
+def efs_split(consignments, page=None, page_size=None, search=None):
     counts = {c: 0 for c in EFS_CLASSES}
     by_class = {c: [] for c in EFS_CLASSES}
     # Value as well as count, for the same reason every other tile carries both:
@@ -552,7 +551,7 @@ def efs_split(consignments, page=None, page_size=None):
             for name in EFS_CLASSES
         ],
         # The EFS consignments themselves, so the tile can list them.
-        "efs_references": references(by_class[EFS], page, page_size),
+        "efs_references": references(by_class[EFS], page, page_size, search),
         "efs": counts[EFS],
         "efs_value": count_and_value(by_class[EFS])["value"],
         "regular": counts[REGULAR],
@@ -606,7 +605,7 @@ def demand_counts(consignments):
 DELAY_GRACE_DAYS = 7
 
 
-def delivery_delay(consignments, page=None, page_size=None):
+def delivery_delay(consignments, page=None, page_size=None, search=None):
     """Delay = ETA Works - required date, in days, beyond a 7-day grace.
 
     More than 7 days past the required date is delayed. Anything from arriving
@@ -664,7 +663,7 @@ def delivery_delay(consignments, page=None, page_size=None):
         # own lateness — the average is only useful if you can see what pulls
         # it. Serves both the Delivery Delay and Avg Days Late tiles: they are
         # computed over exactly this set.
-        "delayed_references": late_references(late_consignments, page, page_size),
+        "delayed_references": late_references(late_consignments, page, page_size, search),
         # Late, but inside the grace — reported so "on time" is not mistaken
         # for "arrived by the required date".
         "within_grace": within_grace,
@@ -862,12 +861,24 @@ def _money(amount):
     return f"Rs {value:,.0f}"
 
 
-def line_references(rows, page=None, page_size=None):
-    """{total in LINES, groups in CONSIGNMENTS} for a set of item lines."""
+def line_references(rows, page=None, page_size=None, search=None):
+    """{total in LINES, groups in CONSIGNMENTS} for a set of item lines.
+
+    Search is applied to (row, item) PAIRS, not the item dicts alone: `groups`
+    has to be recomputed from whichever rows actually survived the filter, or
+    a search that narrows three lines down to one would still claim "3 lines
+    across 1 consignment" from the original, unfiltered set.
+    """
+    term = (search or "").strip().lower()
+    pairs = [(row, line_reference(row)) for row in rows]
+    if term:
+        from app.dashboard.references import matches_search
+        pairs = [(row, item) for row, item in pairs if matches_search(item, term)]
+
     return paginate(
-        [line_reference(row) for row in rows], page, page_size,
+        [item for _row, item in pairs], page, page_size,
         unit="line",
-        groups=len({row.consignment_id for row in rows}),
+        groups=len({row.consignment_id for row, _item in pairs}),
         group_unit="consignment",
     )
 

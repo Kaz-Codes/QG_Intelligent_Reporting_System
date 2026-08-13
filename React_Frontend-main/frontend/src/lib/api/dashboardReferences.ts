@@ -30,9 +30,13 @@ function toParams(query: Query): URLSearchParams {
 }
 
 function pagerFor(path: string) {
-  /** Build a pager bound to one list and one set of filters. */
-  return (key: string, query: Query = {}): ReferencePager => async (page: number) => {
-    const params = toParams({ ...query, key, page })
+  /** Build a pager bound to one list and one set of filters.
+   *
+   * `list_search` is the OPEN PANEL's own search box — distinct from any
+   * `search` already inside `query`, which is the dashboard's own filter bar
+   * and narrows the KPI's population, not just what the panel shows. */
+  return (key: string, query: Query = {}): ReferencePager => async (page: number, search?: string) => {
+    const params = toParams({ ...query, key, page, list_search: search })
     const { data } = await apiFetch<{ data: ReferenceSet }>(`${path}?${params.toString()}`)
     return data
   }

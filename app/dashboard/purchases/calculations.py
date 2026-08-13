@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.dashboard.references import paginate
+from app.dashboard.references import paginate, search_filter
 
 from app.dashboard.period import build_trend
 
@@ -407,7 +407,7 @@ def _money(amount):
     return f"Rs {value:,.0f}"
 
 
-def order_references(orders, page=None, page_size=None, badge=None):
+def order_references(orders, page=None, page_size=None, badge=None, search=None):
     """The ORDERS behind a figure — PO, what it was for, and what it cost.
 
     `badge` decides what the right-hand figure says; it defaults to the order's
@@ -437,7 +437,7 @@ def order_references(orders, page=None, page_size=None, badge=None):
     for row in rows:
         row.pop("sort")
 
-    return paginate(rows, page, page_size)
+    return paginate(search_filter(rows, search), page, page_size)
 
 
 def orders_with_status(orders, status):
@@ -476,7 +476,7 @@ def _days(value):
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
 
 
-def delayed_references(orders, page=None, page_size=None):
+def delayed_references(orders, page=None, page_size=None, search=None):
     """The delayed ORDERS — one row per order, latest first.
 
     Its total equals `kpis.delayed_orders` by construction: both are
@@ -511,10 +511,10 @@ def delayed_references(orders, page=None, page_size=None):
     for row in rows:
         row.pop("sort")
 
-    return paginate(rows, page, page_size)
+    return paginate(search_filter(rows, search), page, page_size)
 
 
-def delayed_line_references(orders, page=None, page_size=None):
+def delayed_line_references(orders, page=None, page_size=None, search=None):
     """The late LINES inside the delayed orders — the level below the tile."""
     rows = []
 
@@ -538,7 +538,7 @@ def delayed_line_references(orders, page=None, page_size=None):
     for row in rows:
         row.pop("sort")
 
-    return paginate(rows, page, page_size)
+    return paginate(search_filter(rows, search), page, page_size)
 
 
 def procurement_kpis(rows):

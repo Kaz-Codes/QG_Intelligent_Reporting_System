@@ -16,7 +16,7 @@ A packing list therefore reports "678 packages across 745 orders" rather than a
 bare number that would look like it disagreed with the Orders tile.
 """
 
-from app.dashboard.references import paginate
+from app.dashboard.references import paginate, search_filter, matches_search
 
 
 def _money(amount):
@@ -53,11 +53,9 @@ def order_reference(order, badge=None):
     }
 
 
-def order_references(orders, page=None, page_size=None, badge=None):
-    return paginate(
-        [order_reference(o, badge) for o in orders], page, page_size,
-        unit="order",
-    )
+def order_references(orders, page=None, page_size=None, badge=None, search=None):
+    items = search_filter([order_reference(o, badge) for o in orders], search)
+    return paginate(items, page, page_size, unit="order")
 
 
 #=====================================================
@@ -81,12 +79,22 @@ def package_reference(package, badge=None):
     }
 
 
-def package_references(packages, page=None, page_size=None, badge=None):
-    """Packages, with the ORDER count alongside so the two tiles reconcile."""
+def package_references(packages, page=None, page_size=None, badge=None, search=None):
+    """Packages, with the ORDER count alongside so the two tiles reconcile.
+
+    `groups` is recomputed from whichever packages survive the search filter —
+    otherwise narrowing to one order's packages would still claim the
+    unfiltered order count.
+    """
+    term = (search or "").strip().lower()
+    pairs = [(p, package_reference(p, badge)) for p in packages]
+    if term:
+        pairs = [(p, item) for p, item in pairs if matches_search(item, term)]
+
     return paginate(
-        [package_reference(p, badge) for p in packages], page, page_size,
+        [item for _p, item in pairs], page, page_size,
         unit="package",
-        groups=len({p.consignment_id for p in packages if p.consignment_id}),
+        groups=len({p.consignment_id for p, _item in pairs if p.consignment_id}),
         group_unit="order",
     )
 
@@ -109,10 +117,9 @@ def job_reference(job, badge=None):
     }
 
 
-def job_references(jobs, page=None, page_size=None, badge=None):
-    return paginate(
-        [job_reference(j, badge) for j in jobs], page, page_size, unit="job",
-    )
+def job_references(jobs, page=None, page_size=None, badge=None, search=None):
+    items = search_filter([job_reference(j, badge) for j in jobs], search)
+    return paginate(items, page, page_size, unit="job")
 
 
 #=====================================================
@@ -124,7 +131,7 @@ def job_references(jobs, page=None, page_size=None, badge=None):
 #=====================================================
 
 def shipment_sets(orders, delivered_status, page=None, page_size=None,
-                  undated=None):
+                  undated=None, search=None):
     """The lists each shipments tile opens.
 
     `undated` is the orders carrying no date in the chosen column — they are in
@@ -136,32 +143,32 @@ def shipment_sets(orders, delivered_status, page=None, page_size=None,
                          if (o.order_type == t if t else not o.order_type)]
 
     sets = {
-        "orders": order_references(orders, page, page_size),
-        "delivered": order_references(delivered, page, page_size),
-        "export": order_references(by_type("Export"), page, page_size),
-        "local": order_references(by_type("Local"), page, page_size),
-        "not_stated": order_references(by_type(None), page, page_size),
+        "orders": order_references(orders, page, page_size, search=search),
+        "delivered": order_references(delivered, page, page_size, search=search),
+        "export": order_references(by_type("Export"), page, page_size, search=search),
+        "local": order_references(by_type("Local"), page, page_size, search=search),
+        "not_stated": order_references(by_type(None), page, page_size, search=search),
     }
     if undated is not None:
-        sets["undated"] = order_references(undated, page, page_size)
+        sets["undated"] = order_references(undated, page, page_size, search=search)
     return sets
 
 
-def packing_sets(packages, packed_status, page=None, page_size=None):
+def packing_sets(packages, packed_status, page=None, page_size=None, search=None):
     packed = [p for p in packages if p.status == packed_status]
 
     return {
-        "packages": package_references(packages, page, page_size),
-        "packed": package_references(packed, page, page_size),
+        "packages": package_references(packages, page, page_size, search=search),
+        "packed": package_references(packed, page, page_size, search=search),
     }
 
 
 def transport_sets(jobs, status_of, delivered, in_progress,
-                   page=None, page_size=None):
+                   page=None, page_size=None, search=None):
     return {
-        "jobs": job_references(jobs, page, page_size),
+        "jobs": job_references(jobs, page, page_size, search=search),
         "delivered": job_references(
-            [j for j in jobs if status_of(j) == delivered], page, page_size),
+            [j for j in jobs if status_of(j) == delivered], page, page_size, search=search),
         "in_progress": job_references(
-            [j for j in jobs if status_of(j) == in_progress], page, page_size),
+            [j for j in jobs if status_of(j) == in_progress], page, page_size, search=search),
     }

@@ -26,19 +26,22 @@ from app.dashboard.imports.routes.router import router
 #
 # A fixed registry, not a dynamic lookup: an unknown key is a 400 rather than a
 # way to reach a query the screen was never meant to run.
+# Each builder takes (consignments, page, page_size, list_search) — `q` below
+# is the PANEL search term, distinct from the `search` param already on this
+# route (which narrows which consignments are fetched at all).
 BUILDERS = {
-    "total":      lambda cs, p, s: calc.references(cs, p, s),
-    "in_process": lambda cs, p, s: calc.references(
-        [c for c in cs if c.current_status not in calc.TERMINAL_STATUSES], p, s),
-    "arrived":    lambda cs, p, s: calc.references(
-        [c for c in cs if c.current_status == calc.CLOSED_STATUS], p, s),
-    "cancelled":  lambda cs, p, s: calc.references(
+    "total":      lambda cs, p, s, q: calc.references(cs, p, s, q),
+    "in_process": lambda cs, p, s, q: calc.references(
+        [c for c in cs if c.current_status not in calc.TERMINAL_STATUSES], p, s, q),
+    "arrived":    lambda cs, p, s, q: calc.references(
+        [c for c in cs if c.current_status == calc.CLOSED_STATUS], p, s, q),
+    "cancelled":  lambda cs, p, s, q: calc.references(
         [c for c in cs if c.current_status in calc.TERMINAL_STATUSES
-         and c.current_status != calc.CLOSED_STATUS], p, s),
-    "delayed":    lambda cs, p, s: calc.delivery_delay(cs, p, s)["delayed_references"],
+         and c.current_status != calc.CLOSED_STATUS], p, s, q),
+    "delayed":    lambda cs, p, s, q: calc.delivery_delay(cs, p, s, q)["delayed_references"],
     # `shafts` is handled separately below: it is a LINE-level list and is
     # selected from the lines, not from the consignments.
-    "efs":        lambda cs, p, s: calc.efs_split(cs, p, s)["efs_references"],
+    "efs":        lambda cs, p, s, q: calc.efs_split(cs, p, s, q)["efs_references"],
 }
 
 
@@ -62,8 +65,14 @@ def imports_references(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     date_field: Optional[str] = None,
+    # Narrows which consignments are counted AT ALL — the dashboard's own
+    # filter bar, unrelated to the panel search below.
     search: Optional[str] = None,
     shafts_only: bool = False,
+    # Narrows the OPEN PANEL to rows whose visible text contains this. Never
+    # touches which consignments are fetched, so it cannot change the tile's
+    # own value — see the note on the Overview's equivalent parameter.
+    list_search: Optional[str] = None,
 ):
     if key not in BUILDERS and key != "shafts":
         raise HTTPException(status_code=400, detail=f"Unknown reference key '{key}'")
@@ -83,7 +92,7 @@ def imports_references(
                 "data": calc.line_references(
                     fetch_shaft_lines(db, period_from, period_to, date_field,
                                       work, supplier, country),
-                    page, page_size,
+                    page, page_size, list_search,
                 ),
             }
 
@@ -97,7 +106,7 @@ def imports_references(
         return {
             "status_code": 200,
             "detail": "Imports references fetched",
-            "data": BUILDERS[key](consignments, page, page_size),
+            "data": BUILDERS[key](consignments, page, page_size, list_search),
         }
 
     except HTTPException:

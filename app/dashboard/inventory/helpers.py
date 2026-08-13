@@ -9,7 +9,7 @@ from app.loading.schemas.stores_schemas import (
 )
 from app.masters.models import Item
 from app.dashboard.period import coverage
-from app.dashboard.references import clamp, paginate
+from app.dashboard.references import clamp, paginate, sql_search_clause
 
 # How far back the consumption rate for the runway is measured.
 CONSUMPTION_WINDOW_DAYS = 90
@@ -419,7 +419,7 @@ def issuance_in_period(db, date_from, date_to, branch=None, category=None):
 
 
 def issuance_item_references(db, date_from, date_to, branch=None,
-                             page=None, page_size=None):
+                             page=None, page_size=None, search=None):
     """The items issued in the window, biggest value first, with quantities.
 
     Grouped onto the item code rather than listed line by line: the tile counts
@@ -431,6 +431,10 @@ def issuance_item_references(db, date_from, date_to, branch=None,
                   Issuance.item_code.isnot(None)]
     if branch:
         conditions.append(Issuance.branch.in_(branch))
+
+    clause = sql_search_clause(search, Issuance.item_code, Issuance.item_name)
+    if clause is not None:
+        conditions.append(clause)
 
     total = db.execute(
         select(func.count(func.distinct(Issuance.item_code))).where(*conditions)
