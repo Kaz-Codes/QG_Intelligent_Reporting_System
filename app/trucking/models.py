@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 # imports and logistics modules reference accounts.
 if TYPE_CHECKING:
     from app.accounts.models import User
+    from app.masters.models import Transporter
 
 #-----------------------------------------------------
 # THE TRUCKING TABLES
@@ -95,6 +96,21 @@ class TruckingConsignment(Base, TimestampMixin):
     transporter_name: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True
+    )
+
+    # The master link, kept in step with transporter_name by
+    # helpers.resolve_transporter_id on every create, update and revert — the
+    # wizard still sends a typed name, this is derived from it. A name
+    # matching no transporter leaves this NULL rather than minting a master
+    # row from a typo. Mirrors LogisticsConsignment.customer_id.
+    transporter_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("transporters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+
+    transporter: Mapped[Optional["Transporter"]] = relationship(
+        back_populates="trucking_jobs"
     )
 
     shifting_type: Mapped[Optional[str]] = mapped_column(

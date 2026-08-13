@@ -1,9 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { transporterNames } from '@/lib/mastersTransporters'
+import { fetchTransporters, type MasterOption } from '@/lib/api/masters'
 import {
   MOVEMENT_TYPES,
   SHIFTING_TYPES,
@@ -25,7 +25,18 @@ export function Step1Movement() {
   const movementType = useWatch({ control, name: 'movementType' })
   const factoryMode = usesFactoryDropdowns(movementType)
   const showReference = usesReferenceNo(movementType)
-  const transporters = useMemo(() => transporterNames(), [])
+  // Fetched once per mount, not shared context: this is the only field in the
+  // wizard that picks from a master list, so a full MastersProvider (as the
+  // imports wizard uses for branch/supplier/port/agent) would be one context
+  // for one consumer. The backend resolves the typed name to transporter_id
+  // itself on save (helpers.resolve_transporter_id) — this list only powers
+  // the suggestion dropdown.
+  const [transporters, setTransporters] = useState<MasterOption[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetchTransporters().then((rows) => { if (!cancelled) setTransporters(rows) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const sourceRef = useWatch({ control, name: 'sourceRef' })
   const takenAt = useWatch({ control, name: 'takenAt' })
   const { fields: itemFields, append: appendItem, remove: removeItem } = useFieldArray({
@@ -70,7 +81,7 @@ export function Step1Movement() {
         <Label htmlFor="transporterName">Transporter Name</Label>
         <Input id="transporterName" list="dl-transporters" autoComplete="off" {...register('transporterName')} />
         <datalist id="dl-transporters">
-          {transporters.map((t) => <option key={t} value={t} />)}
+          {transporters.map((t) => <option key={t.id} value={t.name} />)}
         </datalist>
         {errors.transporterName && <p className="text-xs text-risk">{errors.transporterName.message}</p>}
       </div>

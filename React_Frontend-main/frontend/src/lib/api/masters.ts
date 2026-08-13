@@ -47,6 +47,7 @@ export const fetchBranches = () => fetchMaster<MasterOption>('branch')
 export const fetchSuppliers = () => fetchMaster<MasterOption>('supplier')
 export const fetchClearingAgents = () => fetchMaster<MasterOption>('agent')
 export const fetchPorts = () => fetchMaster<PortOption>('port')
+export const fetchTransporters = () => fetchMaster<MasterOption>('transporter')
 
 /** Exact, case-insensitive name -> id. A typed value that doesn't match
  *  anything in the master (a typo, or a name not yet in the system) resolves
@@ -69,9 +70,9 @@ export function nameToId(options: MasterOption[], name: string | undefined | nul
  * path — GET to list, POST to create — behind the `{status, message, data}`
  * envelope the masters module uses.
  *
- * The backend registry defines: customer, supplier, port, agent, branch, item.
- * This screen exposes the ones an ops user maintains by hand — items are
- * excluded because item data entry is not done here.
+ * The backend registry defines: customer, supplier, port, agent, transporter,
+ * branch, item. This screen exposes the ones an ops user maintains by hand —
+ * items are excluded because item data entry is not done here.
  *
  * There is no "works" master. Works and Branch are the same thing to the
  * business (the imports sheet's "Works" column is what fills a consignment's
@@ -79,7 +80,7 @@ export function nameToId(options: MasterOption[], name: string | undefined | nul
  * from this screen together.
  * ------------------------------------------------------------------------- */
 
-export type MasterKey = 'customer' | 'supplier' | 'branch' | 'port' | 'agent'
+export type MasterKey = 'customer' | 'supplier' | 'branch' | 'port' | 'agent' | 'transporter'
 
 export interface SupplierRow {
   id: number
@@ -142,7 +143,22 @@ export interface AgentRow {
   used: number
 }
 
-export type MasterRow = SupplierRow | BranchRow | CustomerRow | PortRow | AgentRow
+/** Name + light contact info, plus NTN (the Pakistani tax number — the
+ *  closest existing analog is ClearingAgent.licence_no, but this is a
+ *  distinct concept so it gets its own field). `used` is how many trucking
+ *  jobs point at this transporter. */
+export interface TransporterRow {
+  id: number
+  name: string
+  contact_name: string | null
+  phone: string | null
+  ntn: string | null
+  is_active: boolean
+  is_verified: boolean
+  used: number
+}
+
+export type MasterRow = SupplierRow | BranchRow | CustomerRow | PortRow | AgentRow | TransporterRow
 
 export const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED'] as const
 export const PORT_TYPES = ['Sea', 'Air', 'Dry', 'Land'] as const

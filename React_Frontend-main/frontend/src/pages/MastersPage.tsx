@@ -12,20 +12,15 @@ import {
   CURRENCIES, PORT_TYPES, PORT_USED_AS,
   type MasterKey, type MasterRow,
 } from '@/lib/api/masters'
-import { listTransporters, createTransporter } from '@/lib/mastersTransporters'
 
 /**
  * Masters management — view and add the reference lists the operations screens
- * pick from (suppliers, ports, clearing agents, branches, works). One screen
- * for all of them: a tab per master, a searchable table, and an "Add new"
- * form. Every master has the same shape of work, so the columns and form
- * fields are described once per master in MASTER_DEFS and one list + one form
- * component render them all.
- *
- * There is no "customer" master on the backend — customers currently live only
- * in the logistics module's own data — so this screen covers the five real
- * masters an ops user maintains by hand. (Item is managed inside the imports
- * item flow and isn't duplicated here.)
+ * pick from (customers, suppliers, ports, clearing agents, transporters,
+ * branches). One screen for all of them: a tab per master, a searchable
+ * table, and an "Add new" form. Every master has the same shape of work, so
+ * the columns and form fields are described once per master in MASTER_DEFS
+ * and one list + one form component render them all. (Item is managed inside
+ * the imports item flow and isn't duplicated here.)
  */
 
 type FieldType = 'text' | 'select'
@@ -42,7 +37,7 @@ interface FieldDef {
 }
 
 interface MasterDef {
-  key: MasterKey | 'transporter'
+  key: MasterKey
   label: string
   /** Fields for both the add form and (where column=true) the table. */
   fields: FieldDef[]
@@ -50,9 +45,9 @@ interface MasterDef {
 
 const MASTER_DEFS: MasterDef[] = [
   {
-    // Name only — the trucking wizard needs a managed list instead of free
-    // text, but there is no backend transporter master yet (see
-    // lib/mastersTransporters.ts). Mock, in-memory, session-only.
+    // Who physically moves a trucking job. The trucking wizard resolves a
+    // typed transporter name to this master server-side (transporter_id),
+    // the same pairing Customer uses for logistics orders.
     key: 'transporter', label: 'Transporters',
     fields: [
       { key: 'name', label: 'Name', required: true, column: true },
@@ -118,7 +113,7 @@ const MASTER_DEFS: MasterDef[] = [
 export function MastersPage() {
   const { user } = useAuth()
   const canAdd = can(user, 'manageMastersFull') || can(user, 'manageMastersInlineCreate')
-  const [activeKey, setActiveKey] = useState<MasterKey | 'transporter'>('customer')
+  const [activeKey, setActiveKey] = useState<MasterKey>('customer')
   const def = MASTER_DEFS.find((d) => d.key === activeKey)!
 
   return (
@@ -149,12 +144,8 @@ function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
     setLoading(true)
     setError(null)
     try {
-      if (def.key === 'transporter') {
-        setRows(listTransporters() as unknown as MasterRow[])
-      } else {
-        const data = await listMasters(def.key, { includeInactive })
-        setRows(data)
-      }
+      const data = await listMasters(def.key, { includeInactive })
+      setRows(data)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not load this list.')
     } finally {
@@ -286,11 +277,7 @@ function AddMasterForm({ def, onCreated, onCancel }: {
       if (v) payload[f.key] = v
     }
     try {
-      if (def.key === 'transporter') {
-        createTransporter(payload)
-      } else {
-        await createMaster(def.key, payload)
-      }
+      await createMaster(def.key, payload)
       onCreated()
     } catch (e) {
       setError(e instanceof ApiError ? (e.message || 'Could not save.') : (e instanceof Error ? e.message : 'Could not save.'))

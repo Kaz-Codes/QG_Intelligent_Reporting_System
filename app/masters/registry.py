@@ -1,11 +1,12 @@
 from app.masters.models import (
-    Branch, ClearingAgent, Customer, Item, Port, Supplier,
+    Branch, ClearingAgent, Customer, Item, Port, Supplier, Transporter,
 )
 from app.masters.schemas import (
     BranchCreateSchema, BranchUpdateSchema, ClearingAgentCreateSchema,
     ClearingAgentUpdateSchema, CustomerCreateSchema, CustomerUpdateSchema,
     ItemCreateSchema, ItemUpdateSchema, PortCreateSchema, PortUpdateSchema,
-    SupplierCreateSchema, SupplierUpdateSchema,
+    SupplierCreateSchema, SupplierUpdateSchema, TransporterCreateSchema,
+    TransporterUpdateSchema,
 )
 
 #-----------------------------------------------------
@@ -76,6 +77,17 @@ MASTERS = {
         "inline": True,
         "has_hs": False,
     },
+    "transporter": {
+        "model": Transporter,
+        "create_schema": TransporterCreateSchema,
+        "update_schema": TransporterUpdateSchema,
+        "noun": "transporter",
+        # Inline-creatable, same reason as Customer: the trucking wizard
+        # resolves a typed transporter name to this master, and a name nobody
+        # has entered yet would otherwise block the job from being saved.
+        "inline": True,
+        "has_hs": False,
+    },
     "item": {
         "model": Item,
         "create_schema": ItemCreateSchema,
@@ -87,7 +99,7 @@ MASTERS = {
 }
 
 # The order the tabs appear in on the masters screen.
-MASTER_ORDER = ["customer", "supplier", "port", "agent", "branch", "item"]
+MASTER_ORDER = ["customer", "supplier", "port", "agent", "transporter", "branch", "item"]
 
 
 #--------------------------------

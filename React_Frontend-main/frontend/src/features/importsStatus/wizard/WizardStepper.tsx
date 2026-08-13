@@ -19,7 +19,7 @@ export function WizardStepper({
         const pillClass = cn(
           'rounded-full border px-3 py-1 text-xs font-medium',
           s.step === current
-            ? 'border-brand bg-brand text-black'
+            ? 'border-brand bg-brand text-on-brand'
             : s.step < current
               ? 'border-line bg-canvas-alt text-ink'
               : 'border-line text-muted',

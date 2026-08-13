@@ -259,14 +259,14 @@
     "question": "Which purchase orders are delayed?",
     "normalised": "which purchase orders delayed",
     "entity_key": "status=delayed",
-    "sql": "SELECT p.po_number AS purchase_order,\n       COUNT(*) AS delayed_line_count,\n       MIN(p.required_d) AS earliest_required_date,\n       MAX(p.purchase) AS latest_purchase_date,\n       MAX(p.purchase - p.required_d) AS maximum_delay_days\nFROM purchases_data p\nWHERE p.po_number IS NOT NULL\n  AND btrim(p.po_number) <> ''\n  AND p.purchase IS NOT NULL\n  AND p.required_d IS NOT NULL\n  AND p.purchase > p.required_d\nGROUP BY p.po_number\nORDER BY maximum_delay_days DESC, purchase_order",
+    "sql": "SELECT p.po_number,\n       COUNT(*) AS purchase_lines,\n       COUNT(*) FILTER (WHERE p.purchase IS NOT NULL AND p.required_d IS NOT NULL AND p.purchase > p.required_d) AS delayed_lines,\n       MIN(p.required_d) AS earliest_required_date,\n       MAX(p.purchase) AS latest_purchase_date,\n       MAX(p.purchase - p.required_d) FILTER (WHERE p.purchase IS NOT NULL AND p.required_d IS NOT NULL) AS maximum_delay_days\nFROM purchases_data p\nWHERE p.po_number IS NOT NULL\n  AND btrim(p.po_number) <> ''\nGROUP BY p.po_number\nHAVING COUNT(*) FILTER (WHERE p.purchase IS NOT NULL AND p.required_d IS NOT NULL AND p.purchase > p.required_d) > 0\nORDER BY maximum_delay_days DESC, p.po_number",
     "tables_used": [
       "purchases_data"
     ],
     "limit_is_user_requested": false,
-    "schema_hash": "a2f3323d11a233d3",
-    "created_at": "2026-08-12T16:28:24",
-    "last_used": "2026-08-12T16:28:24",
-    "hits": 0
+    "schema_hash": "e76a8d3de0442724",
+    "created_at": "2026-08-13T14:56:28",
+    "last_used": "2026-08-13T15:33:19",
+    "hits": 5
   }
 ]

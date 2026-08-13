@@ -7,6 +7,7 @@ from app.accounts.permissions import CAN_EDIT_TRUCKING
 from app.trucking.helpers import (
     fetch_consignment, fetch_consignment_history,
     fetch_latest_consignment_history, revert, verify_entry_ownership,
+    resolve_transporter_id,
 )
 from app.trucking.serializers import serialize_consignment
 from datetime import datetime, timezone
@@ -68,6 +69,11 @@ def revert_update(
 
         # Revert updates
         revert(consignment_history, consignment, db)
+
+        # transporter_id is DERIVED from transporter_name and is not itself in
+        # the change history, so reverting the name has to re-derive the id —
+        # or a reverted job would show one transporter and link to another.
+        resolve_transporter_id(consignment, db)
 
         db.commit()
         db.refresh(consignment)

@@ -142,7 +142,7 @@ def group_by_item(rows):
             entry["available_qty"], entry["reorder_level"]
         )
         entry["movement"] = derive_movement(
-            entry["issued_value_3m"], entry["issued_value_12m"]
+            entry["issued_value_3m"], entry["issued_value_12m"], entry["available_qty"]
         )
 
     return list(items.values())
@@ -261,8 +261,14 @@ def kpis(rows):
 # which said an item was in trouble without saying whether anybody actually
 # wants it. Movement answers that directly, from real issuance:
 #
-#   Dead  — nothing issued in the last 12 months. Stock that is not moving at
-#           all, which is the money worth arguing about.
+#   Dead  — nothing issued in the last 12 months AND stock actually AVAILABLE.
+#           Stock that is not moving at all, which is the money worth arguing
+#           about — an item with nothing available (fully on hold, or simply
+#           depleted) has nothing sitting idle, so it is left unclassified
+#           (movement=None) rather than counted as Dead. It shows up in none
+#           of the three classes. Checked against `available_qty`, the same
+#           "do we actually have it" field kpis() uses for out-of-stock, not
+#           the raw `stock_qty` (which counts held/reserved units too).
 #   Slow  — issued in the last 12 months but NOT in the last 3.
 #   Fast  — issued within the last 3 months.
 #
@@ -276,11 +282,21 @@ MOVE_DEAD = "Dead"
 MOVEMENT_CLASSES = [MOVE_FAST, MOVE_SLOW, MOVE_DEAD]
 
 
-def derive_movement(issued_3m, issued_12m):
+def derive_movement(issued_3m, issued_12m, available_qty=None):
     if issued_3m and issued_3m > 0:
         return MOVE_FAST
     if issued_12m and issued_12m > 0:
         return MOVE_SLOW
+
+    # Dead stock is stock sitting unused — an item with nothing AVAILABLE has
+    # no stock to be dead, whether that is because it is fully depleted or
+    # fully on hold. Left unclassified (None) rather than folded into Dead, so
+    # the dead count and value only ever describe money actually sitting on a
+    # shelf. `available_qty` is optional so existing callers that do not have
+    # it yet keep their old behaviour.
+    if available_qty is not None and available_qty <= 0:
+        return None
+
     return MOVE_DEAD
 
 
@@ -295,6 +311,11 @@ def movement_split(rows):
     stats = {c: {"items": 0, "value": Decimal("0")} for c in MOVEMENT_CLASSES}
 
     for row in rows:
+        # Unclassified (see derive_movement) — a never-issued item with nothing
+        # AVAILABLE is neither fast, slow nor dead, so it sits in none of the
+        # three.
+        if row["movement"] is None:
+            continue
         entry = stats[row["movement"]]
         entry["items"] += 1
         entry["value"] += _num(row["stock_qty_amount"])
@@ -377,6 +398,10 @@ def movement_by_branch(rows):
     for row in rows:
         branch = row["branch"]
         if not branch:
+            continue
+        # Unclassified (see derive_movement) — a zero-stock, never-issued item
+        # is neither fast, slow nor dead.
+        if row["movement"] is None:
             continue
         entry = totals.setdefault(
             branch, {c: 0 for c in MOVEMENT_CLASSES} | {"dead_value": Decimal("0")}

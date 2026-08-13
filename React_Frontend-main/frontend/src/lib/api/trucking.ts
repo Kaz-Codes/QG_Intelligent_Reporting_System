@@ -60,6 +60,9 @@ export interface ApiTruckingJob {
 
   execution_date: string | null
   transporter_name: string | null
+  /** The Transporter master row transporter_name resolves to server-side
+   *  (helpers.resolve_transporter_id) — derived, never sent by the wizard. */
+  transporter_id: number | null
   shifting_type: string | null
   /** Repeatable item lines, once the backend has an `items` JSON column;
    *  absent/null on rows saved before this existed. */

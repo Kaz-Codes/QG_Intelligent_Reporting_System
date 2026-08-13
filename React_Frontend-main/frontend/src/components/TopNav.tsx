@@ -47,7 +47,7 @@ function GroupNavItem({ item }: { item: PageDef & { children: NonNullable<PageDe
         onClick={() => setOpen((o) => !o)}
         className={cn(
           'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-          childActive ? 'bg-brand text-black shadow-sm' : 'text-ink hover:bg-canvas-alt',
+          childActive ? 'bg-brand text-on-brand shadow-sm' : 'text-ink hover:bg-canvas-alt',
         )}
       >
         <Icon size={16} />
@@ -64,7 +64,7 @@ function GroupNavItem({ item }: { item: PageDef & { children: NonNullable<PageDe
               className={({ isActive }) =>
                 cn(
                   'rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  isActive ? 'bg-brand text-black' : 'text-ink hover:bg-canvas-alt',
+                  isActive ? 'bg-brand text-on-brand' : 'text-ink hover:bg-canvas-alt',
                 )
               }
             >
@@ -116,7 +116,7 @@ export function TopNav() {
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  isActive ? 'bg-brand text-black shadow-sm' : 'text-ink hover:bg-canvas-alt',
+                  isActive ? 'bg-brand text-on-brand shadow-sm' : 'text-ink hover:bg-canvas-alt',
                 )
               }
             >

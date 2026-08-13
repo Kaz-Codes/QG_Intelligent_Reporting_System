@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 from app.imports.models import Consignment, ConsignmentItem
 from app.logistics.models import LogisticsConsignment
 from app.masters.models import HsCode, Item
+from app.trucking.models import TruckingConsignment
 
 #-----------------------------------------------------
 # SMALL JOBS EVERY MASTERS ROUTE NEEDS
@@ -173,6 +174,25 @@ def used_counts(master, ids, db):
 
     if master == "agent":
         return _grouped_count(Consignment.clearing_agent_id, ids, db, counts)
+
+    if master == "transporter":
+        # Counted against TRUCKING jobs, not import consignments — a
+        # transporter is who moves a trucking job, so _grouped_count (which
+        # is wired to Consignment) does not fit here.
+        rows = db.execute(
+            select(
+                TruckingConsignment.transporter_id,
+                func.count(TruckingConsignment.id),
+            )
+            .where(TruckingConsignment.is_deleted == False)
+            .where(TruckingConsignment.transporter_id.in_(ids))
+            .group_by(TruckingConsignment.transporter_id)
+        ).all()
+
+        for row_id, count in rows:
+            counts[row_id] = count
+
+        return counts
 
     if master == "port":
         rows = db.execute(

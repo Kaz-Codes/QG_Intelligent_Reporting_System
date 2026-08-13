@@ -9,6 +9,7 @@ from app.trucking.models import (
     TruckingConsignment, TruckingVehicle, TruckingChangeHistory,
 )
 from app.trucking.serializers import serialize_many
+from app.masters.models import Transporter
 from app.enums import VehicleTrackingStatus
 
 
@@ -86,6 +87,37 @@ def create_vehicle_object(consignment_data):
         )
 
     return objects
+
+
+#-------------------------------------
+# KEEP transporter_id IN STEP WITH transporter_name
+#
+# The wizard sends a transporter NAME (it always has — this predates the
+# master). The master link is derived from it here, on create, update and
+# revert, so the two can never disagree — there is no second place a
+# transporter can be set. Mirrors logistics.helpers.resolve_customer_id.
+#
+# An unmatched name leaves transporter_id NULL rather than creating a master
+# row: silently minting a transporter from a typo is how a master list
+# becomes the very free-text mess it exists to prevent. The Masters screen
+# (or inline create) is where a genuinely new transporter is added, and the
+# next save picks it up.
+#
+# Matching is case-insensitive and trims, the same reasoning as customers.
+#-------------------------------------
+
+def resolve_transporter_id(consignment, db):
+    name = (consignment.transporter_name or "").strip()
+
+    if not name:
+        consignment.transporter_id = None
+        return
+
+    match = db.execute(
+        select(Transporter).where(func.lower(Transporter.name) == name.lower())
+    ).scalars().first()
+
+    consignment.transporter_id = match.id if match else None
 
 
 #-------------------------------------

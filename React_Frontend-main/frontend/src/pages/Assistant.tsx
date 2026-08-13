@@ -108,10 +108,13 @@ export function Assistant() {
   const { messages, isSending, status, error, send, clearConversation } = useChat()
   const { status: connection } = useChatHealth()
   const [input, setInput] = useState('')
-  const scrollRef = useRef<HTMLDivElement>(null)
+  // An empty sentinel at the end of the message list, scrolled into view
+  // rather than scrolling the container directly — works whichever element
+  // ends up being the actual scroll parent.
+  const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages, status])
 
   function handleSend(question: string) {
@@ -127,7 +130,7 @@ export function Assistant() {
         e.preventDefault()
         if (input.trim()) handleSend(input)
       }}
-      className="flex items-center gap-2 rounded-2xl border border-line bg-surface p-2 shadow-sm focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20"
+      className="flex w-full items-center gap-2 rounded-2xl border border-line bg-surface p-2 shadow-sm focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20"
     >
       <Sparkles size={18} className="ml-2 shrink-0 text-brand-light" />
       <input
@@ -151,7 +154,7 @@ export function Assistant() {
       <button
         type="submit"
         disabled={!input.trim() || isSending}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand text-white transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand text-on-brand transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <ArrowUp size={18} />
       </button>
@@ -164,7 +167,10 @@ export function Assistant() {
   // sent.
   if (empty) {
     return (
-      <div className="flex h-[calc(100vh-4rem)] flex-col items-center justify-center px-4">
+      // min-h-full (see AppLayout): fills the available viewport for
+      // centering without a page-specific height calc, and simply grows —
+      // no clipping, no forced overflow — if it ever needs more than that.
+      <div className="flex min-h-full flex-col items-center justify-center px-4">
         <div className="animate-fade-in-up w-full max-w-xl text-center">
           {/* No drop shadow on the wrapper: with a transparent mark it renders
               as a rectangular glow behind empty space. */}
@@ -193,7 +199,12 @@ export function Assistant() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col">
+    // min-h-full (see AppLayout) — at least the full available viewport, so
+    // the input bar below sits at the bottom of the SCREEN even with only one
+    // or two messages, not right after them. Grows past that for a longer
+    // conversation, scrolling in the app's one shared scroll region — this
+    // page has no scroll container of its own.
+    <div className="flex min-h-full flex-col">
       {/* Header — only shown once a conversation is underway. */}
       <div className="flex items-center justify-between pb-4">
         <div className="flex items-center gap-3">
@@ -226,47 +237,57 @@ export function Assistant() {
         </button>
       </div>
 
-      {/* Conversation */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="flex flex-col gap-5 pb-4">
-          {messages.map((m) => {
-            const isUser = m.role === 'user'
-            // An assistant message exists from the moment the stream starts;
-            // don't render an empty bubble before the first token arrives.
-            if (!isUser && m.streaming && !m.content) return null
-            return (
-              <div key={m.id} className={cn('animate-fade-in-up flex gap-3', isUser ? 'justify-end' : 'justify-start')}>
-                {!isUser && <BotAvatar />}
-                <div
-                  className={cn(
-                    'max-w-[85%] rounded-2xl px-4 py-3',
-                    isUser ? 'bg-brand text-white' : m.failed ? 'border border-risk/40 bg-risk-bg' : 'border border-line bg-surface',
-                  )}
-                >
-                  {isUser ? (
-                    <p className="text-sm leading-relaxed">{m.content}</p>
-                  ) : m.failed ? (
-                    <span className="text-sm text-risk">That message could not be answered. Please try again.</span>
-                  ) : (
-                    <AssistantResult message={m} onOptionClick={handleSend} disabled={isSending} />
-                  )}
-                </div>
-              </div>
-            )
-          })}
-          {isSending && !messages[messages.length - 1]?.content && (
-            <div className="animate-fade-in flex gap-3">
-              <BotAvatar />
-              <div className="rounded-2xl border border-line bg-surface px-4 py-3">
-                {status ? <p className="text-xs text-muted">{status}</p> : <TypingDots />}
+      {/* Conversation — flex-1 so it (not the input bar) absorbs the space
+          between header and input when there are few messages, pushing the
+          input to the bottom of the screen. No overflow/scroll of its own:
+          this page scrolls in the app's one shared scroll region, same as
+          every other page. */}
+      <div className="flex flex-1 flex-col gap-5 pb-4">
+        {messages.map((m) => {
+          const isUser = m.role === 'user'
+          // An assistant message exists from the moment the stream starts;
+          // don't render an empty bubble before the first token arrives.
+          if (!isUser && m.streaming && !m.content) return null
+          return (
+            <div key={m.id} className={cn('animate-fade-in-up flex gap-3', isUser ? 'justify-end' : 'justify-start')}>
+              {!isUser && <BotAvatar />}
+              <div
+                className={cn(
+                  'max-w-[85%] rounded-2xl px-4 py-3',
+                  isUser ? 'bg-brand text-on-brand' : m.failed ? 'border border-risk/40 bg-risk-bg' : 'border border-line bg-surface',
+                )}
+              >
+                {isUser ? (
+                  <p className="text-sm leading-relaxed">{m.content}</p>
+                ) : m.failed ? (
+                  <span className="text-sm text-risk">That message could not be answered. Please try again.</span>
+                ) : (
+                  <AssistantResult message={m} onOptionClick={handleSend} disabled={isSending} />
+                )}
               </div>
             </div>
-          )}
-        </div>
+          )
+        })}
+        {isSending && !messages[messages.length - 1]?.content && (
+          <div className="animate-fade-in flex gap-3">
+            <BotAvatar />
+            <div className="rounded-2xl border border-line bg-surface px-4 py-3">
+              {status ? <p className="text-xs text-muted">{status}</p> : <TypingDots />}
+            </div>
+          </div>
+        )}
+        {/* Scrolled into view on every new message. */}
+        <div ref={bottomRef} />
       </div>
 
-      {error && <p className="mb-2 text-xs text-risk">{error}</p>}
-      <div className="mt-3">{inputBar}</div>
+      {error && <p className="mb-2 mt-2 text-xs text-risk">{error}</p>}
+      {/* Sticky, not fixed: pins to the bottom of the app's one shared scroll
+          region as it scrolls (see AppLayout's min-h-full), rather than to
+          the browser viewport — a `fixed` bar would sit on top of that
+          region regardless of scroll position and ignore its own padding. */}
+      <div className="fixed bottom-0 left-0 right-0 z-50  px-8 pb-4 pt-3 backdrop-blur-sm">
+        {inputBar}
+      </div>
     </div>
   )
 }

@@ -36,6 +36,12 @@
   --brand-light: #E0A50B;
   --violet: #3B4654;
   --gold: #F8D807;
+
+  /* Text sitting directly on a solid --brand fill (selected tab, wizard step,
+     primary button). Not a fixed color: --brand itself flips from a dark
+     gold-brown here to a bright yellow in dark mode (see the .dark block
+     below), so the text that stays readable on it has to flip too. */
+  --on-brand: #FFFFFF;
 }
 
 .dark {
@@ -66,6 +72,10 @@
   --brand-light: #FBD75B;
   --violet: #8FA0B4;
   --gold: #F8D807;
+
+  /* --brand is now a bright yellow, not the dark gold-brown from :root, so
+     white text on it fails contrast — black is what reads here instead. */
+  --on-brand: #0A0806;
 }
 
 @theme inline {
@@ -91,6 +101,7 @@
   --color-brand: var(--brand);
   --color-brand-deep: var(--brand-deep);
   --color-brand-light: var(--brand-light);
+  --color-on-brand: var(--on-brand);
   --color-violet: var(--violet);
   --color-gold: var(--gold);
 

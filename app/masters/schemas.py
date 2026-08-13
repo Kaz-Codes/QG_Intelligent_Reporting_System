@@ -144,6 +144,24 @@ class CustomerUpdateSchema(BaseModel):
 
 
 #--------------------------------
+# TRANSPORTER
+#--------------------------------
+
+class TransporterCreateSchema(BaseModel):
+    name : str = Field(..., max_length=255)
+    contact_name : Optional[str] = Field(None, max_length=255)
+    phone : Optional[str] = Field(None, max_length=50)
+    ntn : Optional[str] = Field(None, max_length=100)
+
+
+class TransporterUpdateSchema(BaseModel):
+    name : Optional[str] = Field(None, max_length=255)
+    contact_name : Optional[str] = Field(None, max_length=255)
+    phone : Optional[str] = Field(None, max_length=50)
+    ntn : Optional[str] = Field(None, max_length=100)
+
+
+#--------------------------------
 # ITEM
 #
 # One item can be cleared under several H.S. codes, so they

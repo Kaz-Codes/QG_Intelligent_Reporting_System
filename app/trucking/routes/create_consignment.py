@@ -7,6 +7,7 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_TRUCKING
 from app.trucking.helpers import (
     create_consignment_object, create_vehicle_object, fetch_consignment,
+    resolve_transporter_id,
 )
 from app.trucking.serializers import serialize_consignment
 
@@ -29,6 +30,11 @@ def create_consignment(
 
         # Create objects to add in database
         consignment = create_consignment_object(consignment_data, user)
+
+        # The wizard sends a transporter name; the master link is derived
+        # from it so the two can never disagree.
+        resolve_transporter_id(consignment, db)
+
         consignment_vehicles = create_vehicle_object(consignment_data)
 
         consignment.vehicles = consignment_vehicles

@@ -96,6 +96,19 @@ def serialize_agent(row, used=0):
     }
 
 
+def serialize_transporter(row, used=0):
+    return {
+        "id": row.id,
+        "name": row.name,
+        "contact_name": row.contact_name,
+        "phone": row.phone,
+        "ntn": row.ntn,
+        "is_active": row.is_active,
+        "is_verified": row.is_verified,
+        "used": used,
+    }
+
+
 def serialize_item(row, used=0):
     return {
         "id": row.id,
@@ -143,6 +156,7 @@ SERIALIZERS = {
     "branch": serialize_branch,
     "port": serialize_port,
     "agent": serialize_agent,
+    "transporter": serialize_transporter,
     "item": serialize_item,
     # "works" is gone: Works and Branch are the same thing to the business (the
     # imports sheet's "Works" column fills branch_id), the table holds no rows

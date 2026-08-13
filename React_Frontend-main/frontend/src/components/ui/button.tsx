@@ -10,7 +10,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-brand text-white hover:bg-brand-deep shadow-sm',
+        default: 'bg-brand text-on-brand hover:bg-brand-deep shadow-sm',
         outline: 'border border-line bg-surface text-ink hover:bg-canvas-alt',
         ghost: 'text-ink hover:bg-canvas-alt',
         link: 'text-brand underline-offset-4 hover:underline',

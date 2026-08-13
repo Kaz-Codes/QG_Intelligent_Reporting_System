@@ -48,7 +48,7 @@ def serialize_row(stock, consumption, reorder_levels, issuance=None):
         # disagree — they are literally the same numbers.
         "issued_value_12m": issued["v12"],
         "issued_value_3m": issued["v3"],
-        "movement": derive_movement(issued["v3"], issued["v12"]),
+        "movement": derive_movement(issued["v3"], issued["v12"], stock.available_qty),
     }
 
 

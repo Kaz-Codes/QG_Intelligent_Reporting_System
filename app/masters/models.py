@@ -14,6 +14,7 @@ from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData, S
 if TYPE_CHECKING:
     from app.imports.models import Consignment, ConsignmentItem
     from app.logistics.models import LogisticsConsignment
+    from app.trucking.models import TruckingConsignment
 
 
 #-----------------------------------------------------
@@ -372,6 +373,65 @@ class ClearingAgent(Base, TimestampMixin):
 
     consignments : Mapped[list["Consignment"]] = relationship(
         back_populates = "clearing_agent"
+    )
+
+
+#--------------------------------
+# TRANSPORTERS TABLE
+#
+# Who physically moves a trucking job's goods. Named freely on the job first
+# (TruckingConsignment.transporter_name, from the sheets and the wizard) —
+# transporter_id is the master link, kept in step with the name by
+# helpers.resolve_transporter_id on every save, the same pairing Customer
+# uses for logistics orders.
+#--------------------------------
+
+class Transporter(Base, TimestampMixin):
+    __tablename__ = "transporters"
+
+    id : Mapped[int] = mapped_column(primary_key = True)
+
+    name : Mapped[str] = mapped_column(
+        String(255),
+        unique = True,
+        nullable = False
+    )
+
+    contact_name : Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable = True
+    )
+
+    phone : Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable = True
+    )
+
+    ntn : Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable = True
+    )
+
+    is_active : Mapped[bool] = mapped_column(
+        Boolean,
+        default = True,
+        server_default = text("true"),
+        nullable = False
+    )
+
+    # Seeded rows (harvested from the free-text transporter names already on
+    # trucking jobs) land unverified, the same as Customer — nobody has
+    # confirmed a name scraped off the sheets is spelled right or is not a
+    # duplicate of another. The review queue is where they get confirmed.
+    is_verified : Mapped[bool] = mapped_column(
+        Boolean,
+        default = True,
+        server_default = text("true"),
+        nullable = False
+    )
+
+    trucking_jobs : Mapped[list["TruckingConsignment"]] = relationship(
+        back_populates = "transporter"
     )
 
 

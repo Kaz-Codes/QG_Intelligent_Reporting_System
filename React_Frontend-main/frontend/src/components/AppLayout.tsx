@@ -48,7 +48,14 @@ function AppLayoutShell() {
           scrolling away with the content. */}
       <main className="relative z-10 flex-1 overflow-hidden">
         <div className="relative z-10 h-full overflow-y-auto p-8">
-          <div key={pathname} className="animate-fade-in-up">
+          {/* min-h-full (not h-full): most pages just size to their content
+              and this is a no-op for them, but it gives a page that wants to
+              pin something to the bottom (Assistant's input bar) a real
+              height to anchor a `sticky` element against — without it, the
+              nearest ancestor with a resolvable height is several levels up
+              and a `sticky bottom-0` here only starts pinning once the box
+              already overflows, not before. */}
+          <div key={pathname} className="animate-fade-in-up min-h-full">
             <Outlet />
           </div>
         </div>

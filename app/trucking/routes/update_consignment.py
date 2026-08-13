@@ -8,7 +8,7 @@ from app.accounts.permissions import CAN_EDIT_TRUCKING
 from app.trucking.helpers import (
     updated_fields, verify_entry_ownership, apply_updates, new_vehicles_to_add,
     updated_vehicles, delete_missing, add_in_consignment_change_history,
-    fetch_consignment,
+    fetch_consignment, resolve_transporter_id,
 )
 from app.trucking.models import TruckingVehicle
 from app.trucking.serializers import serialize_consignment, serialize_many
@@ -77,6 +77,10 @@ def update_consignment(
 
         # Applying updates on the job
         apply_updates(updation_dict, consignment)
+
+        # Re-derive the master link AFTER the header updates, so a changed
+        # transporter name moves transporter_id with it.
+        resolve_transporter_id(consignment, db)
 
         consignment_vehicles_map = {vehicle.id : vehicle for vehicle in consignment.vehicles}
 
