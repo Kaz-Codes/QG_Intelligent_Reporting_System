@@ -1,7 +1,9 @@
+import { useMemo } from 'react'
 import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { transporterNames } from '@/lib/mastersTransporters'
 import {
   MOVEMENT_TYPES,
   SHIFTING_TYPES,
@@ -23,6 +25,7 @@ export function Step1Movement() {
   const movementType = useWatch({ control, name: 'movementType' })
   const factoryMode = usesFactoryDropdowns(movementType)
   const showReference = usesReferenceNo(movementType)
+  const transporters = useMemo(() => transporterNames(), [])
   const sourceRef = useWatch({ control, name: 'sourceRef' })
   const takenAt = useWatch({ control, name: 'takenAt' })
   const { fields: itemFields, append: appendItem, remove: removeItem } = useFieldArray({
@@ -44,7 +47,6 @@ export function Step1Movement() {
           {MOVEMENT_TYPES.map((t) => (
             <option key={t} value={t}>
               {t}
-              {t === 'Inbound' ? ' (Import FOB)' : ''}
             </option>
           ))}
         </select>
@@ -66,7 +68,10 @@ export function Step1Movement() {
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="transporterName">Transporter Name</Label>
-        <Input id="transporterName" {...register('transporterName')} />
+        <Input id="transporterName" list="dl-transporters" autoComplete="off" {...register('transporterName')} />
+        <datalist id="dl-transporters">
+          {transporters.map((t) => <option key={t} value={t} />)}
+        </datalist>
         {errors.transporterName && <p className="text-xs text-risk">{errors.transporterName.message}</p>}
       </div>
 

@@ -10,7 +10,7 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { useAuth } from '@/features/auth/AuthContext'
 import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
 import { can } from '@/lib/roleAccess'
-import { trackingRollup } from './schema'
+import { trackingRollup, outstanding } from './schema'
 import { Pagination, useSort, SortHeader } from '@/components/Pagination'
 import { SegmentedControl } from '@/components/SegmentedControl'
 import { ApiError } from '@/lib/api/client'
@@ -53,6 +53,8 @@ export function TruckingStatusList() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [movementFilter, setMovementFilter] = useState<string[]>([])
   const [sourceFilter, setSourceFilter] = useState<string[]>([])
+  const [deliveryFilter, setDeliveryFilter] = useState<string[]>([])
+  const [paymentFilter, setPaymentFilter] = useState<string[]>([])
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [requestTab, setRequestTab] = useState<'all' | 'from-logistics' | 'from-import-fob'>('all')
@@ -164,7 +166,7 @@ export function TruckingStatusList() {
 
   useEffect(() => { void load() }, [load])
 
-  const { sorted: jobs, sort, toggle } = useSort(jobsRaw, {
+  const { sorted: jobsSorted, sort, toggle } = useSort(jobsRaw, {
     systemId: (r) => r.systemId,
     source: (r) => sourceLabel(r.source),
     movement: (r) => r.movementType,
@@ -175,6 +177,24 @@ export function TruckingStatusList() {
     submitted: (r) => (r.recordState === 'submitted' ? 1 : 0),
     closed: (r) => (r.isLocked ? 1 : 0),
   })
+
+  const jobs = useMemo(() => {
+    return jobsSorted.filter((r) => {
+      if (deliveryFilter.length > 0) {
+        const rollup = trackingRollup(r.vehicles)
+        const isDelivered = rollup.total > 0 && rollup.delivered === rollup.total
+        const key = isDelivered ? 'Delivered' : 'Undelivered'
+        if (!deliveryFilter.includes(key)) return false
+      }
+      if (paymentFilter.length > 0) {
+        const out = outstanding(r.actualFreight, r.paidAmount)
+        // Paid = nothing outstanding (<=0 and known); Unpaid = something outstanding.
+        const key = out != null && out <= 0 ? 'Paid' : 'Unpaid'
+        if (!paymentFilter.includes(key)) return false
+      }
+      return true
+    })
+  }, [jobsSorted, deliveryFilter, paymentFilter])
 
   const visibleRequests = requestTab === 'all'
     ? requests
@@ -240,6 +260,8 @@ export function TruckingStatusList() {
       >
         <MultiSelectFilter label="Movement" options={movementOptions} value={movementFilter} onChange={setMovementFilter} />
         <MultiSelectFilter label="Source" options={sourceOptions} value={sourceFilter} onChange={setSourceFilter} />
+        <MultiSelectFilter label="Delivery" options={['Delivered', 'Undelivered']} value={deliveryFilter} onChange={setDeliveryFilter} />
+        <MultiSelectFilter label="Payment" options={['Paid', 'Unpaid']} value={paymentFilter} onChange={setPaymentFilter} />
       </FilterBar>
 
       {optionsError && (

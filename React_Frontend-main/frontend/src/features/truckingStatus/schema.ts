@@ -26,7 +26,14 @@ export type MovementType = (typeof MOVEMENT_TYPES)[number]
 export const TRUCKING_SOURCES = ['manual', 'from-logistics', 'from-import-fob', 'from-export'] as const
 export type TruckingSource = (typeof TRUCKING_SOURCES)[number]
 
-export const SHIFTING_TYPES = ['Regular', 'Special', 'Others'] as const
+export const SHIFTING_TYPES = ['Regular', 'Special', 'Emergency', 'Others'] as const
+
+// Fixed fleet vehicle types for the Step-2 dropdown.
+export const VEHICLE_TYPES = [
+  'Mazda', 'Shehzore', 'Rickshaw',
+  "20' Flat Bed", "40' Flat Bed",
+  "20' Container Carrier", "40' Container Carrier",
+] as const
 
 // The 5 Qadri Group factories — used as pickup/destination dropdowns for
 // intrafactory movements (free text for outbound/inbound).
@@ -292,27 +299,10 @@ export type TruckingDraft = z.infer<typeof truckingDraftSchema>
  * the conditional requirements that depend on movementType.
  */
 export const truckingSubmitSchema = truckingDraftSchema.superRefine((val, ctx) => {
-  if (val.movementType !== 'Intrafactory' && !val.referenceNo?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['referenceNo'],
-      message: 'Shipment reference / IDM is required for outbound and inbound movements',
-    })
-  }
   if (!val.vehicles?.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vehicles'], message: 'At least one vehicle is required' })
   }
-  if (val.movementType !== 'Intrafactory') {
-    val.items?.forEach((it, i) => {
-      if (!it.referenceNo?.trim()) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['items', i, 'referenceNo'],
-          message: 'Shipment reference / IDM is required for outbound and inbound movements',
-        })
-      }
-    })
-  }
+  // Shipment reference / IDM is OPTIONAL (confirmed) — no required validation.
   if (val.movementType === 'Inbound') {
     val.vehicles?.forEach((v, i) => {
       if (!v.containerNo?.trim()) {

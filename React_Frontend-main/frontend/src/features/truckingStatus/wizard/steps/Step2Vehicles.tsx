@@ -18,6 +18,7 @@ import {
   type VehicleImportRef,
   type VehicleItemAllocation,
   type TruckingItem,
+  VEHICLE_TYPES,
 } from '../../schema'
 
 const selectClass =
@@ -296,7 +297,10 @@ export function Step2Vehicles() {
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`vehicles.${i}.vehicleType`}>Vehicle Type</Label>
-              <Input id={`vehicles.${i}.vehicleType`} placeholder="e.g. Flatbed, Container" {...register(`vehicles.${i}.vehicleType`)} />
+              <select id={`vehicles.${i}.vehicleType`} className={selectClass} {...register(`vehicles.${i}.vehicleType`)}>
+                <option value="">Select…</option>
+                {VEHICLE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
 
             <div className="flex flex-col gap-1.5">
