@@ -10,7 +10,7 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { useAuth } from '@/features/auth/AuthContext'
 import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
 import { can } from '@/lib/roleAccess'
-import { trackingRollup } from './schema'
+import { trackingRollup, outstanding } from './schema'
 import { Pagination, useSort, SortHeader } from '@/components/Pagination'
 import { SegmentedControl } from '@/components/SegmentedControl'
 import { ApiError } from '@/lib/api/client'
@@ -53,6 +53,8 @@ export function TruckingStatusList() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [movementFilter, setMovementFilter] = useState<string[]>([])
   const [sourceFilter, setSourceFilter] = useState<string[]>([])
+  const [deliveryFilter, setDeliveryFilter] = useState<string[]>([])
+  const [paymentFilter, setPaymentFilter] = useState<string[]>([])
   const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [requestTab, setRequestTab] = useState<'all' | 'from-logistics' | 'from-import-fob'>('all')
@@ -164,7 +166,7 @@ export function TruckingStatusList() {
 
   useEffect(() => { void load() }, [load])
 
-  const { sorted: jobs, sort, toggle } = useSort(jobsRaw, {
+  const { sorted: jobsSorted, sort, toggle } = useSort(jobsRaw, {
     systemId: (r) => r.systemId,
     source: (r) => sourceLabel(r.source),
     movement: (r) => r.movementType,
@@ -175,6 +177,24 @@ export function TruckingStatusList() {
     submitted: (r) => (r.recordState === 'submitted' ? 1 : 0),
     closed: (r) => (r.isLocked ? 1 : 0),
   })
+
+  const jobs = useMemo(() => {
+    return jobsSorted.filter((r) => {
+      if (deliveryFilter.length > 0) {
+        const rollup = trackingRollup(r.vehicles)
+        const isDelivered = rollup.total > 0 && rollup.delivered === rollup.total
+        const key = isDelivered ? 'Delivered' : 'Undelivered'
+        if (!deliveryFilter.includes(key)) return false
+      }
+      if (paymentFilter.length > 0) {
+        const out = outstanding(r.actualFreight, r.paidAmount)
+        // Paid = nothing outstanding (<=0 and known); Unpaid = something outstanding.
+        const key = out != null && out <= 0 ? 'Paid' : 'Unpaid'
+        if (!paymentFilter.includes(key)) return false
+      }
+      return true
+    })
+  }, [jobsSorted, deliveryFilter, paymentFilter])
 
   const visibleRequests = requestTab === 'all'
     ? requests
@@ -240,6 +260,8 @@ export function TruckingStatusList() {
       >
         <MultiSelectFilter label="Movement" options={movementOptions} value={movementFilter} onChange={setMovementFilter} />
         <MultiSelectFilter label="Source" options={sourceOptions} value={sourceFilter} onChange={setSourceFilter} />
+        <MultiSelectFilter label="Delivery" options={['Delivered', 'Undelivered']} value={deliveryFilter} onChange={setDeliveryFilter} />
+        <MultiSelectFilter label="Payment" options={['Paid', 'Unpaid']} value={paymentFilter} onChange={setPaymentFilter} />
       </FilterBar>
 
       {optionsError && (
@@ -336,6 +358,7 @@ export function TruckingStatusList() {
                 <SortHeader label="Movement" sortKey="movement" sort={sort} onToggle={toggle} />
                 <SortHeader label="Transporter" sortKey="transporter" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2">Route</th>
+                <th className="px-3 py-2">Items</th>
                 <SortHeader label="Vehicles" sortKey="vehicles" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2">Tracking</th>
                 <SortHeader label="Payment" sortKey="payment" sort={sort} onToggle={toggle} />
@@ -375,6 +398,13 @@ export function TruckingStatusList() {
                     <td className="px-3 py-2">{r.movementType || '—'}</td>
                     <td className="px-3 py-2">{r.transporterName ?? '—'}</td>
                     <td className="px-3 py-2 text-muted">{(r.pickup ?? '—')} → {(r.destination ?? '—')}</td>
+                    <td className="px-3 py-2">
+                      {r.items && r.items.length > 0
+                        ? <span title={r.items.map((it) => it.itemDetails).filter(Boolean).join(', ')}>
+                            {r.items[0]?.itemDetails || '—'}{r.items.length > 1 ? ` +${r.items.length - 1}` : ''}
+                          </span>
+                        : (r.itemDetails || '—')}
+                    </td>
                     <td className="px-3 py-2 tabular-nums">{r.vehicles.length || '—'}</td>
                     <td className="px-3 py-2">
                       {r.vehicles.length
@@ -446,7 +476,7 @@ export function TruckingStatusList() {
                   </tr>
                   {isOpen && (
                     <tr className="border-t border-line bg-canvas-alt/60">
-                      <td colSpan={13} className="px-3 py-3">
+                      <td colSpan={14} className="px-3 py-3">
                         <TruckingRowDetails row={r} />
                       </td>
                     </tr>
@@ -456,7 +486,7 @@ export function TruckingStatusList() {
               })}
               {jobs.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="px-3 py-8 text-center text-muted">
+                  <td colSpan={14} className="px-3 py-8 text-center text-muted">
                     {loading ? 'Loading trucking jobs…' : 'No trucking jobs match these filters.'}
                   </td>
                 </tr>
@@ -539,7 +569,8 @@ function TruckingRowDetails({ row }: { row: TruckingListRow }) {
               <tr>
                 <th className="py-1 pr-3 text-left">#</th>
                 <th className="py-1 pr-3 text-left">Item details</th>
-                <th className="py-1 pr-3 text-right">Weight (kg)</th>
+                <th className="py-1 pr-3 text-right">Qty</th>
+                <th className="py-1 pr-3 text-left">Unit</th>
                 <th className="py-1 pr-3 text-left">Pickup</th>
                 <th className="py-1 pr-3 text-left">Destination</th>
                 <th className="py-1 pr-3 text-left">IDM/Ref</th>
@@ -550,7 +581,8 @@ function TruckingRowDetails({ row }: { row: TruckingListRow }) {
                 <tr key={i} className="border-t border-line/60">
                   <td className="py-1 pr-3 tabular-nums">{i + 1}</td>
                   <td className="py-1 pr-3 font-medium">{it.itemDetails || '—'}</td>
-                  <td className="py-1 pr-3 text-right tabular-nums">{it.weight ?? '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">{it.quantity ?? '—'}</td>
+                  <td className="py-1 pr-3">{it.uom || '—'}</td>
                   <td className="py-1 pr-3">{it.pickup || '—'}</td>
                   <td className="py-1 pr-3">{it.destination || '—'}</td>
                   <td className="py-1 pr-3">{it.referenceNo || '—'}</td>

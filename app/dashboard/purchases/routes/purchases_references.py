@@ -25,17 +25,19 @@ from app.dashboard.purchases.helpers import fetch_filtered_consignments
 from app.dashboard.purchases import calculations as calc
 from app.dashboard.purchases.routes.router import router
 
+# `q` is the OPEN PANEL's own search term — distinct from the `search` query
+# param below, which narrows which purchase LINES are fetched at all.
 BUILDERS = {
     # ORDERS — one row per order, matching every KPI's own unit.
-    "orders":       lambda o, k, p, s: calc.order_references(o, p, s),
-    "on_time":      lambda o, k, p, s: calc.order_references(
-        calc.orders_with_status(o, calc.STATUS_COMPLETED), p, s),
-    "delayed":      lambda o, k, p, s: calc.delayed_references(o, p, s),
-    "top_supplier": lambda o, k, p, s: calc.order_references(
-        calc.supplier_orders(o, k["top_supplier"]), p, s),
+    "orders":       lambda o, k, p, s, q: calc.order_references(o, p, s, search=q),
+    "on_time":      lambda o, k, p, s, q: calc.order_references(
+        calc.orders_with_status(o, calc.STATUS_COMPLETED), p, s, search=q),
+    "delayed":      lambda o, k, p, s, q: calc.delayed_references(o, p, s, q),
+    "top_supplier": lambda o, k, p, s, q: calc.order_references(
+        calc.supplier_orders(o, k["top_supplier"]), p, s, search=q),
 
     # LINES — the breakdown inside the delayed orders.
-    "delayed_lines": lambda o, k, p, s: calc.delayed_line_references(o, p, s),
+    "delayed_lines": lambda o, k, p, s, q: calc.delayed_line_references(o, p, s, q),
 }
 
 
@@ -54,10 +56,15 @@ def purchases_references(
     sourcing_o: Optional[list[str]] = Query(None),
     po_from_date: Optional[date] = None,
     po_to_date: Optional[date] = None,
+    # Narrows which purchase lines are fetched at all — the dashboard's own
+    # filter bar, unrelated to the panel search below.
     search: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     date_field: Optional[str] = None,
+    # Narrows the OPEN PANEL to rows whose visible text contains this, without
+    # touching which orders were fetched or any other tile on the screen.
+    list_search: Optional[str] = None,
 ):
     if key not in BUILDERS:
         raise HTTPException(status_code=400, detail=f"Unknown reference key '{key}'")
@@ -86,7 +93,7 @@ def purchases_references(
         return {
             "status_code": 200,
             "detail": "Purchases references fetched",
-            "data": BUILDERS[key](orders, calc.kpis(rows, orders), page, page_size),
+            "data": BUILDERS[key](orders, calc.kpis(rows, orders), page, page_size, list_search),
         }
 
     except HTTPException:

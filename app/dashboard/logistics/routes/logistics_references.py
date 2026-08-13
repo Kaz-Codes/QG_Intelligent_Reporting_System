@@ -53,7 +53,12 @@ def logistics_references(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     date_field: Optional[str] = None,
+    # Narrows which orders/packages/jobs are fetched at all — the dashboard's
+    # own filter bar, unrelated to the panel search below.
     search: Optional[str] = None,
+    # Narrows the OPEN PANEL to rows whose visible text contains this, without
+    # touching which records were fetched or any other tile on the screen.
+    list_search: Optional[str] = None,
 
     # shipments
     status: Optional[list[str]] = Query(None),
@@ -114,6 +119,7 @@ def logistics_references(
                        if key == "undated" else None)
             data = refs.shipment_sets(
                 orders, DELIVERED, page, page_size, undated=undated,
+                search=list_search,
             )[key]
 
         elif tab == "packing":
@@ -122,7 +128,7 @@ def logistics_references(
                 packing_from, packing_to, search,
                 period_from, period_to, date_field,
             )
-            data = refs.packing_sets(packages, PACKED, page, page_size)[key]
+            data = refs.packing_sets(packages, PACKED, page, page_size, search=list_search)[key]
 
         else:
             jobs = fetch_filtered_trucking(
@@ -132,7 +138,7 @@ def logistics_references(
             )
             data = refs.transport_sets(
                 jobs, transport_status, TRANSPORT_DELIVERED,
-                TRANSPORT_IN_PROGRESS, page, page_size,
+                TRANSPORT_IN_PROGRESS, page, page_size, search=list_search,
             )[key]
 
         return {

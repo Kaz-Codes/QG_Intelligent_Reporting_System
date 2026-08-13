@@ -46,6 +46,72 @@ DEFAULT_PAGE_SIZE = 50
 # ask for the whole 8,731-row list in one request and undo the point of paging.
 MAX_PAGE_SIZE = 500
 
+#-----------------------------------------------------
+# SEARCH, ON WHAT THE READER SEES
+#
+# Every panel searches the RENDERED text — reference, detail, meta, badge —
+# never the raw underlying columns. Two reasons:
+#
+#   1. The visible strings are already the thing a reader is scanning for: a
+#      payment reference, a customer name, an item, a status. Searching
+#      anything else risks a term that matches a row on screen and the box
+#      still saying "no results", which is the one failure mode a search box
+#      cannot be allowed to have.
+#   2. It is the ONE place the rule has to be applied, for every list on every
+#      dashboard, regardless of how many underlying columns feed the row.
+#
+# The trade-off: a value that is IN the record but never rendered (say, an
+# internal id) cannot be searched. That is the correct trade — showing a
+# result the reader cannot see why it matched would be worse.
+#-----------------------------------------------------
+
+
+def matches_search(item, term):
+    """Whether one ReferenceItem's visible text contains the search term.
+
+    `term` must already be lower-cased and stripped — callers loop this over
+    many rows, so the normalisation happens once in `search_filter`, not once
+    per row.
+    """
+    haystack = " ".join(
+        str(item.get(field) or "") for field in ("reference", "detail", "meta", "badge")
+    )
+    return term in haystack.lower()
+
+
+def search_filter(items, term):
+    """The items whose visible text contains `term` — all of them if `term`
+    is empty. Used by every IN-MEMORY reference list (imports, purchases,
+    inventory, logistics); the Overview's SQL-backed lists filter in the
+    query itself instead, since they never materialize the full row set —
+    see `sql_search_clause`.
+    """
+    term = (term or "").strip().lower()
+    if not term:
+        return items
+    return [item for item in items if matches_search(item, term)]
+
+
+def sql_search_clause(term, *columns):
+    """An `OR(col ILIKE '%term%' for col in columns)` clause, or None.
+
+    For the Overview's SQL-paginated lists, which page via `OFFSET`/`LIMIT` in
+    the database and must never pull a whole table into Python just to filter
+    it — see the module docstring in `app.dashboard.whole.references`.
+
+    None (not an always-true clause) when there is no term, so callers can
+    `.where(clause)` only `if clause is not None` and the query is otherwise
+    untouched — an empty search must return exactly what no search returns.
+    """
+    term = (term or "").strip()
+    if not term:
+        return None
+
+    from sqlalchemy import or_
+
+    pattern = f"%{term}%"
+    return or_(*[col.ilike(pattern) for col in columns if col is not None])
+
 
 def clamp(page=None, page_size=None):
     """(page, page_size) — sane values whatever the query string said."""

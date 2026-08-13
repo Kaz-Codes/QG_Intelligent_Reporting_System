@@ -16,6 +16,9 @@ import {
   type Vehicle,
   type VehiclePackageRef,
   type VehicleImportRef,
+  type VehicleItemAllocation,
+  type TruckingItem,
+  VEHICLE_TYPES,
 } from '../../schema'
 
 const selectClass =
@@ -161,6 +164,83 @@ function ImportConsignmentAllocation({
   )
 }
 
+/**
+ * Per-vehicle item allocation. Lists the Step-1 items and lets the user set how
+ * much of each rides on THIS vehicle, so one item's quantity can split across
+ * trucks. Only shows when at least one item exists.
+ */
+function ItemAllocation({
+  vehicleIndex, vehicles, items, setValue,
+}: {
+  vehicleIndex: number
+  vehicles: { itemAllocations?: VehicleItemAllocation[] }[]
+  items: TruckingItem[]
+  setValue: (name: `vehicles.${number}.itemAllocations`, value: VehicleItemAllocation[], opts?: { shouldDirty?: boolean }) => void
+}) {
+  const named = items.filter((it) => (it.itemDetails ?? '').trim() !== '')
+  if (named.length === 0) return null
+
+  const allocations = vehicles[vehicleIndex]?.itemAllocations ?? []
+  const qtyFor = (itemId: string) => allocations.find((a) => a.itemId === itemId)?.quantity
+
+  // Total already allocated to OTHER vehicles, so the user can see what's left.
+  const allocatedElsewhere = (itemId: string) =>
+    vehicles.reduce((sum, v, idx) =>
+      idx === vehicleIndex ? sum : sum + (v.itemAllocations?.find((a) => a.itemId === itemId)?.quantity ?? 0), 0)
+
+  function setQty(itemId: string, quantity: number | undefined) {
+    const rest = allocations.filter((a) => a.itemId !== itemId)
+    const next = quantity === undefined || quantity === 0
+      ? rest
+      : [...rest, { itemId, quantity }]
+    setValue(`vehicles.${vehicleIndex}.itemAllocations`, next, { shouldDirty: true })
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-line bg-canvas-alt/40 p-3 sm:col-span-2">
+      <p className="mb-2 text-xs font-semibold text-muted">Items on this vehicle</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-muted">
+            <tr>
+              <th className="py-1 pr-3">Item</th>
+              <th className="py-1 pr-3">Total qty</th>
+              <th className="py-1 pr-3">On other vehicles</th>
+              <th className="py-1 pr-3">On this vehicle</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink">
+            {named.map((it) => {
+              const total = it.quantity ?? 0
+              const elsewhere = allocatedElsewhere(it.id)
+              const here = qtyFor(it.id) ?? 0
+              const over = total > 0 && elsewhere + here > total
+              return (
+                <tr key={it.id} className="border-t border-line/60">
+                  <td className="py-1 pr-3 font-medium">{it.itemDetails}{it.uom ? <span className="text-muted"> ({it.uom})</span> : null}</td>
+                  <td className="py-1 pr-3 tabular-nums">{total || '—'}</td>
+                  <td className="py-1 pr-3 tabular-nums text-muted">{elsewhere || '—'}</td>
+                  <td className="py-1 pr-3">
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={qtyFor(it.id) ?? ''}
+                      onChange={(e) => setQty(it.id, e.target.value === '' ? undefined : Number(e.target.value))}
+                      className={`h-8 w-24 rounded border bg-surface px-2 text-sm tabular-nums ${over ? 'border-risk' : 'border-line'}`}
+                    />
+                    {over && <span className="ml-1.5 text-[10px] text-risk">over total</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export function Step2Vehicles() {
   const { register, control, setValue } = useFormContext<TruckingDraft>()
   const { fields, append, remove } = useFieldArray({ control, name: 'vehicles' })
@@ -171,6 +251,7 @@ export function Step2Vehicles() {
 
   // Live values for the system-generated summary at the bottom.
   const vehicles = useWatch({ control, name: 'vehicles' })
+  const items = useWatch({ control, name: 'items' }) ?? []
   const grossSum = totalGrossWeight(vehicles)
   const netSum = totalNetWeight(vehicles)
   // Weight coming from checked import consignments (pre-filled from imports,
@@ -216,7 +297,10 @@ export function Step2Vehicles() {
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`vehicles.${i}.vehicleType`}>Vehicle Type</Label>
-              <Input id={`vehicles.${i}.vehicleType`} placeholder="e.g. Flatbed, Container" {...register(`vehicles.${i}.vehicleType`)} />
+              <select id={`vehicles.${i}.vehicleType`} className={selectClass} {...register(`vehicles.${i}.vehicleType`)}>
+                <option value="">Select…</option>
+                {VEHICLE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -269,6 +353,7 @@ export function Step2Vehicles() {
 
             <PackageAllocation vehicleIndex={i} vehicles={vehicles ?? []} setValue={setValue} />
             {isInbound && <ImportConsignmentAllocation vehicleIndex={i} vehicles={vehicles ?? []} setValue={setValue} />}
+            <ItemAllocation vehicleIndex={i} vehicles={vehicles ?? []} items={items} setValue={setValue} />
           </div>
         </div>
       ))}

@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.dashboard.references import paginate
+from app.dashboard.references import paginate, search_filter
 
 from app.dashboard.stock_runway import (
     days_of_stock as value_days_of_stock, BASIS as RUNWAY_BASIS,
@@ -174,7 +174,7 @@ def _money(amount):
     return f"Rs {value:,.0f}"
 
 
-def item_references(items, badge_key="stock_qty_amount", page=None, page_size=None):
+def item_references(items, badge_key="stock_qty_amount", page=None, page_size=None, search=None):
     """The items behind a figure, biggest first."""
     rows = []
 
@@ -197,7 +197,7 @@ def item_references(items, badge_key="stock_qty_amount", page=None, page_size=No
     for row in rows:
         row.pop("sort")
 
-    return paginate(rows, page, page_size)
+    return paginate(search_filter(rows, search), page, page_size)
 
 
 def items_where(items, predicate):

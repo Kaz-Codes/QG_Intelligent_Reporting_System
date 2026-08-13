@@ -30,14 +30,18 @@ export interface ApiTruckingVehicle {
   package_refs: unknown
   /** FE-driven JSON: which import consignments this truck carries. */
   import_consignment_refs: unknown
+  /** FE-driven JSON: how much of each item rides this truck. */
+  item_allocations: unknown
   is_deleted: boolean
 }
 
 /** One item line on a trucking job. Not yet its own table server-side — see
  *  the `items` JSON column note on ApiTruckingJob. */
 export interface ApiTruckingItem {
+  item_ref?: string | null
   item_details: string | null
-  weight: string | number | null
+  quantity: string | number | null
+  uom: string | null
   pickup: string | null
   destination: string | null
   reference_no: string | null
@@ -195,6 +199,7 @@ export interface TruckingVehiclePayload {
   tracking_status?: string
   package_refs?: unknown[]
   import_consignment_refs?: unknown[]
+  item_allocations?: { item_id: string; quantity: number | null }[]
 }
 
 /**
@@ -219,8 +224,10 @@ export interface TruckingPayload {
    *  item_details/pickup/destination/reference_no fields below, so a backend
    *  without the `items` column yet still gets the first item's data. */
   items?: {
+    item_ref?: string
     item_details?: string
-    weight?: number
+    quantity?: number
+    uom?: string
     pickup?: string
     destination?: string
     reference_no?: string

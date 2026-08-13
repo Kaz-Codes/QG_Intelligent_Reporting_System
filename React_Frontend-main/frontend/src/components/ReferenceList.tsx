@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { List, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { List, ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react'
 
 /**
  * "Which records is this number about?"
@@ -82,8 +82,24 @@ function countOf(n: number, noun = 'record'): string {
   return `${n.toLocaleString()} ${noun}${n === 1 ? '' : 's'}`
 }
 
-/** Fetches another page of the same list. Omit for lists that fit in one. */
-export type ReferencePager = (page: number) => Promise<ReferenceSet>
+/** The same "search the rendered text" rule as the backend's `matches_search`
+ *  (app/dashboard/references.py) — used only as a fallback for a list with no
+ *  `fetchPage`, where there is no server round trip to filter on instead. */
+function matchesLocally(item: ReferenceItem, term: string): boolean {
+  const haystack = [item.reference, item.detail, item.meta, item.badge]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  return haystack.includes(term)
+}
+
+const SEARCH_DEBOUNCE_MS = 300
+
+/** Fetches another page of the same list, optionally narrowed to rows whose
+ *  visible text contains `search`. Omit `search` (or pass '') for the
+ *  unfiltered list. Pagers that can't page still take the search box's
+ *  input, they just never see a `page` above 1. */
+export type ReferencePager = (page: number, search?: string) => Promise<ReferenceSet>
 
 const PANEL_WIDTH = 360
 const GAP = 8
@@ -100,14 +116,45 @@ export function ReferenceList({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const [current, setCurrent] = useState<ReferenceSet | undefined>(refs)
   const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const id = useId()
 
-  // A filter change replaces the figure, so it replaces the list under it too —
-  // otherwise the panel would keep showing page 4 of the previous query.
-  useEffect(() => { setCurrent(refs) }, [refs])
+  // Always the latest `fetchPage`, read from inside the debounce timer below —
+  // a ref so the effect can key off `search` alone and not re-fire every time
+  // a parent re-render hands this component a new pager closure for the same
+  // list (Inventory's `pager(key)` builds one fresh on every render).
+  const fetchPageRef = useRef(fetchPage)
+  useEffect(() => { fetchPageRef.current = fetchPage })
+
+  // A filter change replaces the figure, so it replaces the list under it too
+  // — otherwise the panel would keep showing page 4, or a stale search term,
+  // from a completely different query.
+  useEffect(() => { setCurrent(refs); setSearch('') }, [refs])
+
+  // Skips the debounce fetch that would otherwise fire once on mount (and once
+  // after every filter-driven reset above) even though `search` is still ''.
+  const searchMounted = useRef(false)
+  useEffect(() => {
+    const pager = fetchPageRef.current
+    if (!pager) return
+    if (!searchMounted.current) { searchMounted.current = true; return }
+
+    const timer = setTimeout(async () => {
+      setLoading(true)
+      try {
+        setCurrent(await pager(1, search))
+        listRef.current?.scrollTo({ top: 0 })
+      } finally {
+        setLoading(false)
+      }
+    }, SEARCH_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+  }, [search])
 
   const place = useCallback(() => {
     const trigger = triggerRef.current
@@ -159,18 +206,18 @@ export function ReferenceList({
     if (!fetchPage || !current || page < 1 || page > current.pages) return
     setLoading(true)
     try {
-      setCurrent(await fetchPage(page))
+      setCurrent(await fetchPage(page, search))
       // Back to the top: page 5 opened halfway down reads as a broken scroll.
       listRef.current?.scrollTo({ top: 0 })
     } finally {
       setLoading(false)
     }
-  }, [fetchPage, current])
+  }, [fetchPage, current, search])
 
   // Nothing behind the number means nothing to show.
   if (!current || current.total === 0) return null
 
-  const { page, pages, total, items } = current
+  const { page, pages, total } = current
   const unit = current.unit ?? 'record'
   const groups = current.groups
   const groupUnit = current.group_unit
@@ -178,6 +225,14 @@ export function ReferenceList({
   const canPage = Boolean(fetchPage) && pages > 1
   const first = (page - 1) * current.page_size + 1
   const last = Math.min(page * current.page_size, total)
+
+  // With a pager, every search term is already resolved server-side — `items`
+  // IS the matching set. Without one, there is no round trip to filter with,
+  // so the search box narrows what was already loaded instead; `total`/`page`
+  // keep describing the loaded set, not the (unknowable from here) full one.
+  const term = search.trim().toLowerCase()
+  const localFilter = !fetchPage && term.length > 0
+  const items = localFilter ? current.items.filter((it) => matchesLocally(it, term)) : current.items
 
   return (
     <span className="relative inline-flex">
@@ -218,18 +273,48 @@ export function ReferenceList({
 
           {/* Says plainly that the rows are LINES and how many parents they
               belong to, so the tile's own count stays reconcilable with the
-              list instead of merely differing from it. */}
-          {groups != null && groupUnit && (
+              list instead of merely differing from it. Skipped while
+              local-filtering: `groups` still describes the loaded set, not
+              the narrowed one, and restating it here would misquote it. */}
+          {!localFilter && groups != null && groupUnit && (
             <p className="border-b border-line bg-brand-soft/40 px-3 py-1.5 text-[11px] text-muted">
               {countOf(total, unit)} across {countOf(groups, groupUnit)}
             </p>
           )}
+
+          <div className="relative border-b border-line px-2 py-1.5">
+            <Search size={12} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={`Search ${unit}s…`}
+              aria-label={`Search the ${label} list`}
+              className="w-full rounded border border-line bg-canvas py-1 pl-6 pr-6 text-[11px] text-ink outline-none placeholder:text-muted focus:border-brand/60"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                aria-label="Clear search"
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted hover:text-ink"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
 
           <div ref={listRef} className="relative max-h-72 overflow-y-auto">
             {loading && (
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface/70">
                 <Loader2 size={16} className="animate-spin text-muted" />
               </div>
+            )}
+            {items.length === 0 && (
+              <p className="px-3 py-4 text-center text-[11px] text-muted">
+                No {unit}s match "{search.trim()}".
+              </p>
             )}
             {items.map((r) => (
               <div key={r.id} className="border-b border-line px-3 py-2 last:border-b-0">
@@ -244,6 +329,14 @@ export function ReferenceList({
               </div>
             ))}
           </div>
+
+          {localFilter && (
+            <p className="border-t border-line px-3 py-1.5 text-[11px] text-muted">
+              {items.length.toLocaleString()} match{items.length === 1 ? '' : 'es'} in the{' '}
+              {total.toLocaleString()} loaded {unit}{total === 1 ? '' : 's'} — this list can't
+              fetch further pages to search.
+            </p>
+          )}
 
           {canPage && (
             <div className="flex items-center justify-between border-t border-line px-2 py-1.5">
@@ -269,8 +362,10 @@ export function ReferenceList({
             </div>
           )}
 
-          {/* A list we cannot page through says so, rather than looking complete. */}
-          {!canPage && pages > 1 && (
+          {/* A list we cannot page through says so, rather than looking complete.
+              Suppressed while local-filtering — the paragraph above already
+              covers it, and both at once would say the same thing twice. */}
+          {!canPage && !localFilter && pages > 1 && (
             <p className="border-t border-line px-3 py-1.5 text-[11px] text-muted">
               Showing the first {items.length} of {total.toLocaleString()}.
             </p>
