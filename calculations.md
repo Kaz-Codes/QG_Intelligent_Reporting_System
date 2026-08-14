@@ -91,7 +91,7 @@ so they move the job count and not the cost.
 | `stock_value` | Σ `stock_qty_amount`, Σ `available_amount`, line count |
 | `value_by_store` | the same grouped by `branch`, with `share_pct` |
 | `stock_days` | per branch **and** total: stock value ÷ (value issued over the window ÷ window days) |
-| `dead_stock` | lines with `stock_qty_amount > 0` and **no issuance** for that `(item_code, branch)` within `dead_stock_days` |
+| `dead_stock` | items (folded across every branch) that are `available_qty > 0`, **no issuance** within `dead_stock_days`, **and not purchased** within `dead_stock_days` either — see below |
 
 **Days of stock is measured in rupees, not units** — a store holds many units of
 incomparable things; summing bolts and shafts is meaningless, summing their
@@ -117,6 +117,17 @@ currently ~350) and **`exceeds_history`**. Once the threshold reaches back past
 the first issuance, the figure is really "never issued in the data we hold" and
 raising the threshold further cannot change it — the flag tells the front end to
 say so.
+
+**This is the SAME definition the Inventory dashboard's Dead bucket uses** —
+see `derive_movement` under Inventory below, and "One dead-stock definition
+too" in `CLAUDE.md`. The two used to be computed independently and disagreed
+(different window, different qty field, no purchase check on either); now
+both build on `app.dashboard.whole.helpers.dead_item_ids` /
+`app.dashboard.inventory.calculations.derive_movement`, which encode the
+identical rule, so the two screens' figures cannot drift apart again.
+`dead_stock_days` (default **365**, shared with Inventory's fixed window via
+`app.dashboard.period.DEAD_STOCK_WINDOW_DAYS`) stays adjustable here; only the
+default had to stop disagreeing.
 
 ---
 
@@ -309,22 +320,78 @@ planner's manual value).
   They are already counted as Out of Stock.
 
 ### KPIs
+Counted over ITEMS (`group_by_item` — stock folded onto `item_code`, summed
+across the branches that hold it), not stock lines: the question is how many
+items the business holds, not how many `(item, branch)` records it keeps.
+
 | KPI | Formula |
 |---|---|
-| `available_units` | Σ `available_qty` |
-| `total_stock_qty` | Σ `stock_qty` |
-| `on_hold` | Σ `hold_qty` |
-| `items_shown` | count of rows with `available_qty > 0` (items you actually have — out-of-stock lines are excluded) |
-| `out_of_stock` / `below_reorder` | counts by derived status |
-| `at_risk_pct` | `(out_of_stock + below_reorder) / total rows × 100` (denominator is the **full** row count, not the available-only `items_shown`) |
+| `items_total` | count of items |
+| `items_shown` | count of items with `available_qty > 0` (items you actually have — out-of-stock ones are excluded) |
+| `out_of_stock` / `below_reorder` | counts by derived `stock_status` |
 | `total_stock_value` | Σ `stock_qty_amount` |
 | `available_value` | Σ `available_amount` |
+
+**Removed** (see `CLAUDE.md`'s "Figures deliberately removed"): `available_units`
+/ `total_stock_qty` / `on_hold` (quantity summed across incomparable units —
+kg + pcs + litres — meaningless; value is the comparable measure), `at_risk_pct`
+/ `top_items` (replaced by the movement split below, which says the same thing
+with a reason attached).
+
+### Movement: Fast / Slow / Dead (`derive_movement`)
+
+Replaces "at risk", which was derived from the reorder level alone — it said
+an item was in trouble without saying whether anybody actually wants it.
+Movement answers that from real issuance, checked in this order:
+
+1. **Fast** — issued within the last `MONTHS_3_DAYS` (92 days).
+2. **Slow** — issued within the last `MONTHS_12_DAYS` (365 days) but not the last 92.
+3. **Dead** — nothing issued in `MONTHS_12_DAYS`, `available_qty > 0` (not
+   `stock_qty` — nothing available is nothing sitting idle, whether depleted
+   or fully on hold), **and** not purchased in `MONTHS_12_DAYS` either — an
+   item bought last week has not had the chance to be issued yet, which is
+   not the same thing as stock nobody wants.
+4. Anything that fails the Dead gate on `available_qty` or the purchase check
+   is **unclassified** (`movement: null`) — it shows up in none of the three
+   buckets, rather than being folded into Dead.
+
+Both windows end at the **latest issuance in the data**, not today (the data
+is historical). `MONTHS_12_DAYS` is shared with the Overview's `dead_stock`
+figure via `app.dashboard.period.DEAD_STOCK_WINDOW_DAYS` — see `CLAUDE.md`'s
+"One dead-stock definition too".
+
+**Purchase recency is matched by branch**, via `PURCHASES_BRANCH_TO_STOCK_BRANCH`
+(`QCL`→Qadcast, `QE`→Qadbros Engineering, `QEN`→Qadri Engineering,
+`QB2`→Qadri Brothers Unit-II — a mapping given by the business, not derived;
+`QBL`/`QE-II`/`IOL` are deliberately unmapped and filtered out of the check
+entirely). The per-branch view (`serialize_row`, feeding `movement_by_branch`)
+matches the exact `(item_code, branch)` pair; the folded, company-wide view
+(`group_by_item`, feeding everything below) checks every KNOWN branch, not
+just the ones the item's current stock snapshot happens to list — restricting
+it to the snapshot's own branches undercounted for the same reason the
+issuance fold below once did.
+
+**Issuance is also folded per item_code, not derived from the stock rows.**
+`group_by_item` used to sum each stock ROW's own attached issuance value —
+which only ever covers branches the Stock table still has a row for. An item
+issued at a branch with no remaining stock row (903 item codes) was invisible
+to that fold, silently understating the item's issuance and sometimes calling
+it dead despite having moved. `issuance_totals_by_item` (grouped by item_code
+alone, across every branch that issued it) is the authoritative source now,
+overriding the per-row fold when available.
+
+| Figure | Formula |
+|---|---|
+| `movement_split` | items + value per class (Fast / Slow / Dead), each with `items_pct` / `value_pct` |
+| `movement_kpis.dead_items` / `dead_value` | count / Σ `stock_qty_amount` of Dead items |
+| `movement_kpis.dead_value_pct` | `dead_value / total_stock_value × 100` (denominator is every item's stock value, not just Dead's) |
+| `movement_kpis.issued_value_12m` / `issued_value_3m` | Σ issued value over the two windows, folded per item — the same numbers `movement` is derived from, so they cannot disagree |
+| `movement_by_branch` | Fast / Slow / Dead counts + Σ dead value, **per branch** — uses the per-branch (not folded) classification |
 
 ### Charts
 - **stock_health** — OK / Below Reorder / Out of Stock counts (donut).
 - **items_by_branch** — row count per branch.
-- **at_risk_by_branch** — `(out_of_stock + below_reorder) / total × 100` per branch.
-- **top_items** — Σ `stock_qty` per item, top 8.
+- **movement_by_branch** — see table above; replaces `at_risk_by_branch`.
 - **lowest_days_of_stock** — rows with a runway, ascending, top 8.
 
 ### Option lists
@@ -336,7 +403,9 @@ rows are still built internally, only to feed the aggregates).
 
 ### Tunable constants (`app/dashboard/inventory/helpers.py`)
 `CONSUMPTION_WINDOW_DAYS = 90`, `DEMAND_WINDOW_DAYS = 180`,
-`DEFAULT_LEAD_TIME_DAYS = 30`, `SAFETY_FACTOR = 0.2`.
+`DEFAULT_LEAD_TIME_DAYS = 30`, `SAFETY_FACTOR = 0.2`,
+`MONTHS_12_DAYS = 365` (= `app.dashboard.period.DEAD_STOCK_WINDOW_DAYS`,
+shared with the Overview's `dead_stock_days` default), `MONTHS_3_DAYS = 92`.
 
 ### Notes
 - `stock_status`/`reorder_status` are derived, so they're filtered in Python.
@@ -366,9 +435,15 @@ fixed:
   `QE-II`, `IOL`); `issuance.branch` and `stock.branch` hold full company names.
   The vocabularies share no values, so a branch filter matches the issuance side
   and **nothing** on the purchases side, reporting a category as pure consumption
-  with zero spend. Company-wide and honest beats filtered and wrong. Mapping the
-  codes to names belongs in the loader, agreed with the business — `QE` vs `QEN`
-  vs `QE-II` is not something to guess at.
+  with zero spend. Company-wide and honest beats filtered and wrong.
+
+  A mapping for four of the seven codes now exists and IS confirmed by the
+  business — `QCL`→Qadcast, `QE`→Qadbros Engineering, `QEN`→Qadri Engineering,
+  `QB2`→Qadri Brothers Unit-II (`QBL`/`QE-II`/`IOL` deliberately left unmapped;
+  see Inventory's Movement section above) — but it is used only where dead
+  stock needs it. This chart stays unfiltered on purpose even so: three of the
+  seven codes still have no branch, and silently dropping their spend would be
+  worse than not filtering at all.
 
 A category present on one side and absent on the other still appears with zero
 on the missing side; rows rank by the **larger** of the two sides, so a category

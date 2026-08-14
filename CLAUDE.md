@@ -429,7 +429,10 @@ keeping payloads in KBs).
   - **Params:** `date_from` / `date_to` — **both omitted → month to date**,
     either given → that custom range; the resolved window is echoed back under
     `period` so the front end labels tiles with what was actually computed, not
-    what it asked for. Plus `dead_stock_days` (default **180**).
+    what it asked for. Plus `dead_stock_days` (default **365** — shared with
+    the Inventory dashboard's own fixed dead-stock window, see
+    `app.dashboard.period.DEAD_STOCK_WINDOW_DAYS` and "One dead-stock
+    definition too" below; the param itself stays adjustable).
   - **Period vs lifetime is stated per figure**, not inferred from its name:
     imports/procurement figures are windowed, logistics counts and stores are
     running totals or snapshots.
@@ -458,8 +461,13 @@ keeping payloads in KBs).
     comes back false).
   - **`purchases_data.branch` holds short codes (`QEN`, `QCL`, `QB2`…) while
     `issuance`/`stock` hold full company names.** They share no values, so the
-    purchase-vs-issuance chart is deliberately **not** branch-filtered. Mapping
-    them belongs in the loader, agreed with the business.
+    purchase-vs-issuance chart is deliberately **not** branch-filtered.
+    A confirmed mapping for four of the seven codes now exists
+    (`app.dashboard.inventory.helpers.PURCHASES_BRANCH_TO_STOCK_BRANCH`), given
+    by the business rather than derived — see "One dead-stock definition too"
+    below — but it is used only where dead stock needs it. This chart's own
+    company-wide, unfiltered design is unchanged: filtering it would silently
+    drop the three unmapped codes' spend rather than show it honestly.
 ### Imports money is counted in the month it ARRIVED
 
 A consignment groups every sheet row sharing a payment reference, and **those
@@ -557,6 +565,59 @@ bug expensive: both screens looked right.
   single population difference was the whole 81-against-58 gap once the formulas
   were unified.
 - No consumption in the window → **`None`**, never 0 and never "infinite".
+
+### One dead-stock definition too (`app/dashboard/inventory/calculations.py::derive_movement`)
+
+The same class of bug as stock runway, in the same two screens. The Inventory
+dashboard's Dead bucket and the Overview's `stores.dead_stock` were computed
+independently and disagreed — a different window length (Inventory's fixed
+12 months vs. Overview's `dead_stock_days`, defaulting to 180), a different
+gate (`stock_qty_amount > 0` vs `available_qty > 0`), and no purchase-recency
+check on either. Overview's own tile and its drill-down reference list even
+disagreed with **each other** — a bug found only while unifying the other one.
+
+Dead now means, identically on both screens: no issuance in the trailing
+**12 months** (shared default, `app.dashboard.period.DEAD_STOCK_WINDOW_DAYS`
+— Overview's `dead_stock_days` param stays adjustable, only the DEFAULT had
+to stop disagreeing), `available_qty > 0` (not `stock_qty` — nothing
+available is nothing sitting idle, whether depleted or fully on hold),
+**and** not purchased in that same trailing 12 months either — an item
+bought last week has not had the chance to be issued yet, which is not the
+same thing as stock nobody wants.
+
+Two real bugs surfaced while unifying this, not just a definitional gap:
+
+- **Issuance at a branch with no remaining stock row was invisible to the
+  fold.** The Inventory dashboard folds stock onto item_code across every
+  branch that holds it (an item still moving at one factory is not dead
+  because it sat still at another), but the fold only ever summed a stock
+  ROW's own attached issuance — 903 item codes had genuine issuance in the
+  window at a branch with no stock row left, silently understating the
+  item's issuance and sometimes calling it dead despite having moved. Fixed
+  with `issuance_totals_by_item`, grouped by item_code alone rather than
+  derived from the stock rows.
+- **The purchase check had the identical bug in miniature.** Scoped first to
+  only the branches the item's CURRENT stock snapshot lists, it undercounted
+  for the same reason — a purchase can land before the next snapshot
+  reflects it there. Checked against every branch purchases_data can be
+  matched to at all, not just the ones this particular snapshot happens to
+  show stock at.
+
+**Purchases ARE matched by branch**, via a mapping confirmed by the business,
+not derived: `QCL`→Qadcast, `QE`→Qadbros Engineering, `QEN`→Qadri Engineering,
+`QB2`→Qadri Brothers (Unit-II). Cross-matching item codes the way the
+AB-items branch map is (`load_05_stock.py`) does not work here — that
+technique found ~100% agreement because AB items and stock are the same kind
+of snapshot; purchases accumulate for years across items no longer in a
+stock snapshot, a different population, and the best match found that way
+was 41.7%. `QBL`, `QE-II` and `IOL` stay unmapped on purpose: `QBL` may be a
+different Qadri Brothers site than the Unit-II we hold stock data for,
+`QE-II` has no confirmed match, and `IOL` is not a branch at all. **A
+purchase row under an unmapped code is filtered out of every cross-sheet
+calculation against it, always** — a general rule for future work here, not
+only for dead stock. The purchase-vs-issuance-by-category KPI chart is a
+different calculation and stays deliberately branch-unfiltered by its own
+design (see above) — the two should not be conflated.
 
 ### The records behind a figure (`app/dashboard/references.py`)
 
