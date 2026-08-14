@@ -44,7 +44,7 @@ export function PackingView() {
 
   const debouncedSearch = useDebounced(search)
 
-  const { data, isLoading, isError, error } = usePackingDashboard({
+  const { data, isLoading, isFetching, isError, error } = usePackingDashboard({
     status, works, product_category: productCategory, business_type: businessType, customer,
     packing_from: dateFrom || undefined, packing_to: dateTo || undefined,
     search: debouncedSearch.trim() || undefined,
@@ -110,9 +110,9 @@ export function PackingView() {
         </div>
       </Disclosure>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && refs && (
+      {!isFetching && data && kpis && refs && (
         <>
           {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
 

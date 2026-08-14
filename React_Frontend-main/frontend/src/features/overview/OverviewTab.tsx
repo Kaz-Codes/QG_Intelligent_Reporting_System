@@ -187,7 +187,7 @@ export function OverviewTab() {
   // sitting beside figures that count a different population.
   const [shaftsOnly, setShaftsOnly] = useState(false)
 
-  const { data, isLoading, isError, error } = useOverviewDashboard({
+  const { data, isLoading, isFetching, isError, error } = useOverviewDashboard({
     imports_date_from: importsPeriod.from || undefined,
     imports_date_to: importsPeriod.to || undefined,
     imports_date_field: importsField,
@@ -245,9 +245,9 @@ export function OverviewTab() {
 
       </Card>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && (
+      {!isFetching && data && (
         <>
           {/* ---------------------------------------------------- imports */}
           <section className="flex flex-col gap-3">
@@ -260,7 +260,7 @@ export function OverviewTab() {
             >
               <ShaftsTab active={shaftsOnly} onChange={setShaftsOnly} />
             </SectionHeader>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
               {/* Value first, count underneath — the SAME layout on all five,
                   so the row can be read across. In Process used to show a bare
                   count, which said 30 consignments were moving without saying
@@ -318,7 +318,7 @@ export function OverviewTab() {
             />
             {/* Categories is gone: it counted the bars in the chart directly
                 below it, which is not a KPI. */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
               <KpiCard label="Procurement Value" value={money(data.procurement.period_value.value)}
                 sub={countLine(data.procurement.period_value.orders, 'order')}
                 icon={Wallet} refs={data.procurement.references.period_value}
@@ -445,7 +445,7 @@ export function OverviewTab() {
               meta={data.stores}
               snapshotLabel="stock is today's position; the period applies to issuance"
             />
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
               <KpiCard label="Stock Value" value={money(data.stores.stock_value.stock_value)}
                 sub={`${data.stores.stock_value.items.toLocaleString()} items`}
                 icon={Warehouse} refs={data.stores.references.stock_value}

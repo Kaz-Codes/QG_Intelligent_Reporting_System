@@ -124,69 +124,82 @@ CONSIGNMENT_VALUE = func.coalesce(
 
 
 #-----------------------------------------------------
-# MONEY IS COUNTED IN THE MONTH IT ARRIVED
+# MONEY USED TO BE COUNTED BY LINE — NOT ANYMORE, HERE
 #
-# A consignment groups every sheet row sharing a payment reference, and those
-# rows do not all arrive together — 19 of 175 consignments carry lines with
-# different ETAs. Valuing the whole consignment against its HEADER date credits
-# the entire amount to one month: payment ref 65704 reported Rs 10.64m in
-# August, when Rs 8.98m arrived on 6 August and Rs 1.25m had landed on 27 July.
+# `imports_period_value` below used to sum value over LINES, each dated by its
+# own ETA, because a consignment groups every sheet row sharing a payment
+# reference and those rows do not all arrive together (19 of 175 consignments
+# carry lines with different ETAs — payment ref 65704 spans two months). That
+# is still the more ACCURATE basis, and CLAUDE.md's "Imports money is counted
+# in the month it ARRIVED" documents it in full for anyone who needs it again.
 #
-# So period value is summed over LINES, each dated by its own ETA (falling back
-# to its consignment's where the sheet gave the line none). A consignment whose
-# lines span two months now contributes to both, in the right proportion.
+# By instruction, this section's period-value figure now VALUES each
+# qualifying consignment at its full header amount instead of summing
+# in-window lines — matching the Imports module's own "Total Value" hero and
+# trend chart, which have always been header-valued. `CONSIGNMENT_VALUE` above
+# (the header basis) is what both now use for VALUE; the line-VALUING helpers
+# this replaced (`LINE_VALUE_PKR`'s use here, `_line_select`, ...) are gone
+# from this file — see git history or calculations.md if that basis is ever
+# needed here again.
 #
-# WHY NOT THE STORED `pkr_total`. It is the booked figure and imports rule 4
-# says never to restate it — but it is a figure for the WHOLE consignment, and
-# there is no stored per-line PKR to split it with. For the 89% of consignments
-# that sit wholly inside one window the two agree to within sheet rounding
-# (Rs 10,643,562 booked against Rs 10,638,670 from the lines, 0.05%); for the
-# rest, a correct month beats a stored total attributed to the wrong one. The
-# consignment-level `CONSIGNMENT_VALUE` above still prefers the booked total and
-# is what the un-windowed figures use.
+# MEMBERSHIP is a different question from valuation, and was NOT part of that
+# reversal: which consignments even qualify for a window is still decided by
+# line, via `_imports_window_membership` below — the same "any line counts,
+# falling back to the header where a line has none" test
+# `app.dashboard.imports.helpers.fetch_filtered_consigments` applies. Filtering
+# membership on the header column alone (what this section did briefly) undid
+# that: a consignment with no header eta_works but a dated line dropped out of
+# every Overview window while the Imports module still counted it — 10
+# consignments on the module screen against 9 here for the same month, with
+# the "arrived" bucket splitting 5-vs-4. `imports_population`/
+# `imports_in_process_by_stage`/`imports_delay` share the same membership
+# helper for the same reason.
 #-----------------------------------------------------
 
-LINE_ETA = func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 
-LINE_VALUE_PKR = (
-    ConsignmentItem.quantity * ConsignmentItem.unit_price * Consignment.exchange_rate
-)
-
-
-def line_date_column(date_field):
-    """Which date a LINE is filtered on.
-
-    Only ETA at works exists per line; `required_date` is a header attribute
-    with no line equivalent, so that choice keeps using the header rather than
-    silently filtering on a different column.
+def _imports_line_column(date_field):
+    """The date a LINE is matched on for window membership — its own
+    eta_works, falling back to its consignment's where the line has none.
+    `required_date` has no line equivalent so it always falls back. Kept in
+    lockstep with `app.dashboard.imports.helpers.line_date_column`.
     """
     if (date_field or IMPORTS_DATE_DEFAULT) == "required_date":
         return Consignment.required_date
-    return LINE_ETA
+    return func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 
 
-def line_scope(shafts_only=False):
-    """The WHERE clauses every line-level imports figure shares."""
-    scope = [
-        ConsignmentItem.is_deleted.is_(False),
-        Consignment.is_deleted.is_(False),
-    ]
-    if shafts_only:
-        scope.append(Consignment.id.in_(shaft_consignment_ids()))
-    return scope
-
-
-def _line_select(date_from, date_to, date_field, shafts_only):
-    return (
-        select(
-            func.coalesce(func.sum(LINE_VALUE_PKR), 0),
-            func.count(func.distinct(ConsignmentItem.consignment_id)),
-            func.count(ConsignmentItem.id),
-        )
-        .select_from(ConsignmentItem)
+def _imports_window_membership(date_field, date_from, date_to):
+    """Consignment ids with at least one LINE dated inside the window — the
+    same "any line qualifies" test
+    `app.dashboard.imports.helpers.fetch_filtered_consigments` applies, so a
+    consignment's membership in a period agrees between this screen and the
+    Imports module. Each qualifying consignment is still VALUED at its full
+    header amount here (see the reversal above) — only which consignments
+    qualify is shared, not how much each is worth.
+    """
+    return Consignment.id.in_(
+        select(ConsignmentItem.consignment_id)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
-        .where(*line_scope(shafts_only))
-        .where(line_date_column(date_field).between(date_from, date_to))
+        .where(ConsignmentItem.is_deleted.is_(False))
+        .where(_imports_line_column(date_field).between(date_from, date_to))
+        .distinct()
+        .scalar_subquery()
+    )
+
+
+def _imports_dated_ids(date_field):
+    """Consignment ids that could EVER qualify for some window — i.e. have at
+    least one line with a non-null date. `imports_value_undated` reports the
+    complement: consignments carrying money that no window, however sliced,
+    will ever include.
+    """
+    return (
+        select(ConsignmentItem.consignment_id)
+        .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
+        .where(ConsignmentItem.is_deleted.is_(False))
+        .where(_imports_line_column(date_field).isnot(None))
+        .distinct()
+        .scalar_subquery()
     )
 
 
@@ -223,36 +236,62 @@ def _imports_scope(shafts_only):
 
 
 def imports_period_value(db, date_from, date_to, date_field=None, shafts_only=False):
-    """(value, consignments, lines) for the window, summed over LINES.
+    """(value, consignments, lines) for the window, summed over the WHOLE
+    consignment and dated by its HEADER field — by instruction, so this
+    figure reads the same as the Imports module's own "Total Value" hero and
+    its trend chart (`app.dashboard.imports.calculations.kpis` /
+    `value_trend`), which have always been header-dated.
 
-    Dated by each line's own ETA, so money lands in the month it arrived rather
-    than in whichever month its consignment header happened to name. The
-    consignment count is DISTINCT consignments having a line in the window — a
-    consignment straddling two months is counted in both, because it genuinely
-    delivered in both.
+    This is a deliberate reversal of the per-LINE VALUING this figure used to
+    use (see the comment above and CLAUDE.md's "Imports money is counted in
+    the month it ARRIVED" for why line-dating exists at all): a consignment
+    whose lines span two months now credits its FULL value to whichever month
+    qualified it, the same over- or mis-attribution that rule was written to
+    avoid. Accepted anyway, so the Overview's headline import value and the
+    module screen's headline agree at a glance — `lines` below counts every
+    line of a QUALIFYING consignment, not just the ones that individually
+    arrived in the window. MEMBERSHIP itself (which consignments qualify) is
+    still per-line, via `_imports_window_membership` — see the comment above.
     """
-    total, consignments, lines = db.execute(
-        _line_select(date_from, date_to, date_field, shafts_only)
+    scope = [*_imports_scope(shafts_only),
+             _imports_window_membership(date_field, date_from, date_to)]
+
+    value, consignments = db.execute(
+        select(
+            func.coalesce(func.sum(CONSIGNMENT_VALUE), 0),
+            func.count(Consignment.id),
+        )
+        .where(*scope)
     ).one()
 
-    return total, consignments, lines
+    lines = db.execute(
+        select(func.count(ConsignmentItem.id))
+        .select_from(ConsignmentItem)
+        .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
+        .where(ConsignmentItem.is_deleted.is_(False))
+        .where(*scope)
+    ).scalar()
+
+    return value, consignments, lines
 
 
 def imports_value_undated(db, date_field=None, shafts_only=False):
-    # Consignments carrying a value but no date in the column being filtered on.
-    # They cannot fall inside ANY window, so every period figure silently
-    # excludes them. Returned so the front end can say so, rather than letting
-    # the money disappear between periods — and recomputed per chosen field,
-    # since required_date is sparser than eta_works.
-    column = imports_date_column(date_field)
-
+    # Consignments carrying a value but no date ANYWHERE the membership test
+    # would find one — no line (or header fallback) dated at all. They cannot
+    # fall inside ANY window, so every period figure silently excludes them.
+    # Returned so the front end can say so, rather than letting the money
+    # disappear between periods — and recomputed per chosen field, since
+    # required_date is sparser than eta_works. Checking the header column
+    # alone (this used to) overcounted "undated": a consignment with no header
+    # eta_works but a dated line IS reachable by some window, via the same
+    # line-membership test `imports_period_value` uses.
     return db.execute(
         select(
             func.count(Consignment.id),
             func.coalesce(func.sum(CONSIGNMENT_VALUE), 0),
         )
         .where(*_imports_scope(shafts_only))
-        .where(column.is_(None))
+        .where(~Consignment.id.in_(_imports_dated_ids(date_field)))
     ).one()
 
 
@@ -291,7 +330,7 @@ def imports_in_process_by_stage(db, date_from=None, date_to=None,
         db.execute(
             select(Consignment.current_status, func.count(Consignment.id))
             .where(*_imports_scope(shafts_only))
-            .where(*([imports_date_column(date_field).between(date_from, date_to)]
+            .where(*([_imports_window_membership(date_field, date_from, date_to)]
                      if date_from is not None and date_to is not None else []))
             .where(Consignment.current_status.notin_(TERMINAL_STATUSES))
             .group_by(Consignment.current_status)
@@ -703,14 +742,21 @@ def dead_stock(db, threshold_days):
 # windows the same three figures, so the two screens reported 142 arrived and
 # 141 for what a reader took to be one number. A tile that cannot be reconciled
 # with the same tile on the module screen is worse than one whose window is
-# debatable, so the window wins and both screens now agree exactly.
+# debatable, so the window wins.
+#
+# Membership uses `_imports_window_membership` (any LINE dated inside the
+# window), not the header column directly — filtering on the header alone
+# reintroduced the same disagreement one level up: a consignment with no
+# header eta_works but a dated line dropped out here while the module still
+# counted it (5 arrived / 5 in process there against 4 / 5 here for the same
+# month).
 #-----------------------------------------------------
 
 def imports_population(db, date_from=None, date_to=None, date_field=None,
                        shafts_only=False):
     scope = _imports_scope(shafts_only)
     if date_from is not None and date_to is not None:
-        scope.append(imports_date_column(date_field).between(date_from, date_to))
+        scope.append(_imports_window_membership(date_field, date_from, date_to))
 
     in_process = Consignment.current_status.notin_(TERMINAL_STATUSES)
     arrived = Consignment.current_status == Status.ARRIVED_AT_WORKS.value
@@ -752,7 +798,7 @@ def imports_delay(db, date_from=None, date_to=None, date_field=None,
 
     scope = _imports_scope(shafts_only)
     if date_from is not None and date_to is not None:
-        scope.append(imports_date_column(date_field).between(date_from, date_to))
+        scope.append(_imports_window_membership(date_field, date_from, date_to))
     measurable = and_(Consignment.required_date.isnot(None),
                       Consignment.eta_works.isnot(None))
     late = Consignment.eta_works > Consignment.required_date + DELAY_GRACE_DAYS

@@ -75,7 +75,7 @@ export function Imports() {
   // beside them as tiles counting a different population.
   const [shaftsOnly, setShaftsOnly] = useState(false)
 
-  const { data, isLoading, isError, error } = useImportsDashboard({
+  const { data, isLoading, isFetching, isError, error } = useImportsDashboard({
     work: works || undefined,
     supplier: supplier || undefined,
     country: country || undefined,
@@ -152,9 +152,9 @@ export function Imports() {
         <SingleSelectFilter label="Status" options={data?.status ?? []} value={status} onChange={setStatus} />
       </FilterBar>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && c && (
+      {!isFetching && data && c && (
         <>
           {c.data_notes?.length > 0 && <DataNotes notes={c.data_notes} />}
 
@@ -171,22 +171,19 @@ export function Imports() {
             fetchRefs={refs('total')}
           />
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
-            {/* The count tile is gone; this is the Overview's Total Import
-                Value on the same basis and the same population (all statuses),
-                so the two screens report one number. In Process and Arrived
-                are now tiles of their own rather than a hidden status filter. */}
-            {/* Summed over the LINES arriving in the window, dated by each
-                line's own ETA — the same rows the Overview totals, and the same
-                rows its list shows. */}
-            <KpiCard label="Total Import Value" value={money(c.period_value.value)}
-              sub={`${c.period_value.consignments.toLocaleString()} consignment${c.period_value.consignments === 1 ? '' : 's'} · ${c.period_value.lines.toLocaleString()} lines`}
-              refs={c.period_value.references}
-              fetchRefs={refs('period_value')}
-              help={withBasis(IMPORTS_HELP.totalValue,
-                c.period_value.unpriced_lines
-                  ? `${c.period_value.unpriced_lines} line(s) carry no price or no booked rate, so the total is short by that much.`
-                  : undefined)} />
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
+            {/* The count tile is gone; In Process and Arrived are tiles of
+                their own rather than a hidden status filter.
+
+                No separate "Total Import Value" tile here on purpose: it
+                duplicated the HeroStat's "Total Value" above (which carries
+                the trend chart) on a DIFFERENT basis — this tile summed value
+                per LINE, dated by each line's own ETA, while the hero sums
+                per CONSIGNMENT, dated by the header — so the two could show
+                different numbers under two labels that looked like they
+                should agree. Removed instead of unified; see calculations.md
+                if that basis is needed again (still served by the API as
+                `period_value`, just not rendered here). */}
             <KpiCard label="In Process" value={money(c.population.in_process.value)}
               sub={countLine(c.population.in_process.count, c.population.in_process.value_pct)}
               refs={c.population.references.in_process}

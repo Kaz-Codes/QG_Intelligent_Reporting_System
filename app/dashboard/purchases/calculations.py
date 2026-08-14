@@ -341,7 +341,7 @@ def overdue_buckets(orders):
     ]
 
 
-def value_trend(orders, period_from, period_to):
+def value_trend(orders, period_from, period_to, date_field=None):
     """Spend over the window, bucketed to fit it.
 
     The bucket size comes from the window, not the calendar: a month-long
@@ -349,15 +349,32 @@ def value_trend(orders, period_from, period_to):
     instead (see period.build_trend). Empty buckets are kept, so the line never
     draws straight across a gap it has no data for.
 
-    One point per ORDER, dated on its earliest purchase (falling back to the PO
-    date), so an order spanning several deliveries lands once rather than once
-    per line.
+    One point per ORDER, dated on its earliest date **on the field the window
+    itself is filtered on** (falling back to the other field only when the
+    primary is missing on a line), so an order spanning several deliveries
+    lands once rather than once per line.
+
+    `date_field` matters: `fetch_filtered_consignments` includes a LINE only
+    when ITS OWN value of that field falls in the window — so every line
+    reaching here already has a non-null, in-window value there. Hardcoding
+    "purchase, falling back to po_date" regardless of which field the caller
+    actually filtered on used to silently drop an order from the trend
+    whenever its (different, real, but not the field being windowed on)
+    purchase date happened to fall outside the window — `kpis.orders_count`
+    still counted it, since it never applied that filter at all.
     """
     dated = []
     undated = 0
 
+    if date_field == "po_date":
+        primary = lambda line: line.po_date
+        fallback = lambda line: line.purchase
+    else:
+        primary = lambda line: line.purchase
+        fallback = lambda line: line.po_date
+
     for lines in orders:
-        days = [line.purchase or line.po_date for line in lines]
+        days = [primary(line) or fallback(line) for line in lines]
         days = [d for d in days if d is not None]
 
         if not days:

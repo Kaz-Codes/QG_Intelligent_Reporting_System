@@ -72,7 +72,7 @@ export function Inventory() {
   // per keystroke.
   const debouncedSearch = useDebounced(search)
 
-  const { data, isLoading, isError, error } = useInventoryDashboard({
+  const { data, isLoading, isFetching, isError, error } = useInventoryDashboard({
     status, reorder_status: reorderStatus, movement, category, branch, item,
     search: debouncedSearch.trim() || undefined,
     date_from: period.from || undefined,
@@ -134,9 +134,9 @@ export function Inventory() {
         <MultiSelectFilter label="Movement" options={data?.movementClasses ?? []} value={movement} onChange={setMovement} />
       </FilterBar>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && mov && refs && issuance && (
+      {!isFetching && data && kpis && mov && refs && issuance && (
         <>
           {/* Spotlight: stock days, the single number that says how long the
               money on the shelf lasts. Inventory is a snapshot, not a series,
@@ -182,9 +182,10 @@ export function Inventory() {
             </CardContent>
           </Card>
 
-          {/* Three tiles, three columns — the row fills rather than leaving a
-              half-empty stretch where the removed tiles used to be. */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {/* auto-fit rather than a fixed 3 columns — on a wide screen three
+              fixed columns leave a stretch of empty space instead of the row
+              filling it, the same problem the other dashboards' KPI rows had. */}
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
             <KpiCard label="Stock Value" value={money(kpis.total_stock_value)}
               sub={`${kpis.items_shown.toLocaleString()} of ${kpis.items_total.toLocaleString()} items`}
               refs={refs.items}

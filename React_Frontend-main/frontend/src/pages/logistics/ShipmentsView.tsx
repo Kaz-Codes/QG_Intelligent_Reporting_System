@@ -54,7 +54,7 @@ export function ShipmentsView() {
 
   const debouncedSearch = useDebounced(search)
 
-  const { data, isLoading, isError, error } = useShipmentsDashboard({
+  const { data, isLoading, isFetching, isError, error } = useShipmentsDashboard({
     status, stage, shipping_line: shippingLine, country, customer,
     etd_from: dateFrom || undefined, etd_to: dateTo || undefined,
     search: debouncedSearch.trim() || undefined,
@@ -113,9 +113,9 @@ export function ShipmentsView() {
         <MultiSelectFilter label="Country" options={data?.countries ?? []} value={country} onChange={setCountry} />
       </FilterBar>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && refs && (
+      {!isFetching && data && kpis && refs && (
         <>
           {/* Where these figures rest on a partly-filled column, said here
               rather than left to be discovered. */}

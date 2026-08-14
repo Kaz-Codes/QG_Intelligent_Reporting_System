@@ -495,6 +495,39 @@ database), and:
   in-window lines the headline does; they used to sum consignment-level totals,
   putting Rs 29.27bn beside Rs 29.07bn on one page.
 
+**The Overview's `imports.period_value` no longer follows this rule, by
+instruction.** It used to (line-summed, same as this module), but the Imports
+module screen's own "Total Value" hero and trend chart were ALWAYS
+header-dated (`app.dashboard.imports.calculations.kpis` / `value_trend`,
+never migrated to the line basis above), so the two screens' headline import
+value disagreed. Rather than move the module's hero onto the line basis, the
+Overview's `period_value` (`app/dashboard/whole/helpers.py`) was moved onto
+the module's header basis instead — full `CONSIGNMENT_VALUE` per consignment,
+dated by the consignment's own header field. The line-based helpers this
+replaced there (`LINE_ETA`, `line_date_column`, `_line_select`) are deleted
+from that file; this module's OWN `period_value` tile (line-based, per the
+rule above) is unaffected — it was removed from the Imports screen entirely
+instead, since showing it beside the header-based hero was what surfaced the
+disagreement in the first place. Two different bases for "imports value" now
+exist across the app on purpose: the Overview's headline (header) and this
+module's `population`/`in_process`/`arrived` split (line, unchanged).
+
+**Valuation basis and window MEMBERSHIP are two separate questions, and only
+the first one moved.** Switching `period_value` onto header valuation also
+briefly filtered its window on the header column alone — which changed which
+consignments qualify, not just what they're worth. A consignment with no
+header `eta_works` but a dated line dropped out of every Overview figure
+(`period_value`, `population`, `in_process_by_stage`, `delay`, and their
+`references` drill-downs) while the module still counted it: 10 consignments
+on the module screen against 9 on the Overview for the same month, the
+"arrived" bucket splitting 5-vs-4. Membership is now `_imports_window_membership`
+in `app/dashboard/whole/helpers.py` — the same "any LINE dated inside the
+window, falling back to the header where a line has none" test
+`app.dashboard.imports.helpers.fetch_filtered_consigments` applies — so both
+screens count the same consignments; only the per-consignment VALUE (and, by
+construction, the arrived/in-process split of it) still differs by the header
+-vs-line basis described above.
+
 ### A ZERO needs a reason beside it
 
 The logistics Shipments tab and the Overview both split orders into export and
@@ -538,6 +571,20 @@ than when it was promised.
 
 The consistency suite now asserts the shared default, not only that the two
 agree once you force them onto the same field.
+
+**A related bug, on the same `po_date`/`purchase` choice, but WITHIN one
+screen**: the Purchases dashboard's own trend chart could show fewer orders
+than its `Orders` KPI, on the SAME page at the SAME `date_field`. The window
+filter (`fetch_filtered_consignments`) already respects `date_field` — a
+purchase LINE only qualifies if ITS OWN value of that field falls in the
+window. But `value_trend` (`app/dashboard/purchases/calculations.py`) dated
+each order by `line.purchase`, hardcoded, regardless of which field actually
+let that order's lines through. Under `date_field='po_date'` an order's real
+`purchase` date can sit outside the window even though its `po_date`
+correctly put it inside — `build_trend` silently dropped that order from the
+chart while `kpis.orders_count` kept counting it. `value_trend` now takes
+`date_field` and dates on whichever field the filter used, falling back to
+the other only when the primary is missing on a line.
 
 ### One metric, one definition (`app/dashboard/stock_runway.py`)
 

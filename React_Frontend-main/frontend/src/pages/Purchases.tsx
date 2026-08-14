@@ -47,7 +47,7 @@ export function Purchases() {
   // Every filter here is applied server-side, so the KPIs and charts below can
   // be rendered straight from the endpoint's own figures. Search is a server
   // param here, so it narrows the KPIs and charts too, not just a row table.
-  const { data, isLoading, isError, error } = usePurchasesDashboard({
+  const { data, isLoading, isFetching, isError, error } = usePurchasesDashboard({
     status, supplier, branch, item_category: category, mop, sourcing_o: sourcingOfficer,
     po_from_date: dateFrom || undefined, po_to_date: dateTo || undefined,
     // Both omitted = the backend's own default, the current month.
@@ -125,9 +125,9 @@ export function Purchases() {
         </div>
       </Disclosure>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && (
+      {!isFetching && data && kpis && (
         <>
           <HeroStat
             label="Total Value"
@@ -143,7 +143,7 @@ export function Purchases() {
             fetchRefs={refs('orders')}
           />
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
             <KpiCard label="Orders" value={kpis.orders_count.toLocaleString()}
               refs={data.references.orders}
               fetchRefs={refs('orders')}

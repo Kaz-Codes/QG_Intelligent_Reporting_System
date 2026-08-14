@@ -285,7 +285,7 @@ export function Assistant() {
           region as it scrolls (see AppLayout's min-h-full), rather than to
           the browser viewport — a `fixed` bar would sit on top of that
           region regardless of scroll position and ignore its own padding. */}
-      <div className="fixed bottom-0 left-0 right-0 z-50  px-8 pb-4 pt-3 backdrop-blur-sm">
+      <div className="fixed bottom-0 left-0 right-0 z-50  px-8 pb-4 pt-3">
         {inputBar}
       </div>
     </div>

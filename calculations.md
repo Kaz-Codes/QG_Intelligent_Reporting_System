@@ -42,14 +42,33 @@ Two conventions run through the whole endpoint:
 
 | Figure | Formula |
 |---|---|
-| `period_value.value` | Σ stored `pkr_total` where `etd` ∈ window |
-| `period_value.undated` | consignments with a `pkr_total` but **no ETD** — they fall in *no* window, so they are reported separately rather than vanishing from every period at once |
+| `period_value.value` | Σ `CONSIGNMENT_VALUE` (booked `pkr_total`, or the item lines × exchange rate where none was booked) for every consignment with **at least one LINE** dated inside the window on `date_field` (a line's own `eta_works`, falling back to its header's where the line has none; `required_date` has no line equivalent so it always falls back) |
+| `period_value.consignments` / `.lines` | consignment count, and every item line belonging to one of them (not only lines individually dated inside the window) |
+| `period_value.undated` | consignments with a value but **no date reachable by any window** — no line (or header fallback) is ever dated, so they are reported separately rather than vanishing from every period at once |
 | `in_process` | count where status ∉ {Arrived at Works, Order Cancelled}, split across the **six-stage pipeline** the imports list uses (`STAGE_GROUPS`, minus Closed) |
 | `shafts` | consignments carrying a shaft line, split in-process vs arrived, + `arrived_pct` |
 
-**ETD is the activity date**, not gate-out: gate-out is populated on well under
-half the book and stops months earlier, so windowing on it would under-report a
-period rather than measure it.
+**`period_value` is HEADER-VALUED, by instruction** (`app/dashboard/whole/helpers.py::imports_period_value`)
+— it deliberately matches the Imports module's own "Total Value" hero and
+trend chart, which have always summed the WHOLE consignment under its header
+value rather than splitting it by line. This is a reversal of the per-line
+VALUING this figure used to use (see `app/dashboard/imports/calculations.py`'s
+own `kpis`/`value_trend`, and CLAUDE.md's "Imports money is counted in the
+month it ARRIVED" for the fuller history) — a consignment whose lines span
+two months once again credits its full value to whichever month qualified it,
+but the Overview and the Imports module screen now agree on the headline
+number at a glance, which they did not before.
+
+**Window MEMBERSHIP did not move with it — it is still by LINE**
+(`_imports_window_membership`), the same "any line qualifies" test
+`app.dashboard.imports.helpers.fetch_filtered_consigments` applies. Filtering
+membership on the header column too (briefly, while the valuation reversal
+above was made) undid the agreement one level up: a consignment with no header
+`eta_works` but a dated line dropped out of every Overview imports figure while
+the module still counted it, splitting "arrived" 5-vs-4 for the same month
+even after the headline totals matched. `imports_population`,
+`imports_in_process_by_stage`, `imports_delay` and their `references`
+drill-downs all share the one membership helper for this reason.
 
 **Shafts are matched on `consignment_items.item_name`** against the curated
 `SHAFT_ITEMS` list (reused from `app/reports/helpers.py`) — *not* through the
@@ -241,7 +260,18 @@ orders currently contain 454 late lines. A tile reading 247 over a list reading
 - **overdue_buckets** — Delayed rows bucketed by `days_overdue` into the four
   standard aging tiers (`0-30` / `31-60` / `61-90` / `90+ days`), in that fixed
   order (empty tiers kept). Feeds the "Delayed Orders — Days Overdue" bar chart.
-- **monthly_value_trend** — Σ `amount` by month of `purchase` (falling back to `po_date`).
+- **monthly_value_trend** — Σ order value, one point per ORDER dated on its
+  earliest date **on whichever field the window itself is filtered on**
+  (`date_field` — `purchase` or `po_date`), falling back to the other field
+  only when the primary is missing on a line.
+
+  This has to track `date_field`, not hardcode `purchase`: `fetch_filtered_consignments`
+  only ever includes a LINE whose own `date_field` value falls in the window,
+  so when `date_field='po_date'` an order's (different, real) `purchase` date
+  can legitimately sit outside it. Bucketing by a hardcoded `purchase` first
+  regardless of `date_field` used to silently drop such orders from the trend
+  while `kpis.orders_count` kept counting them — the trend and the KPI
+  reporting a different number of orders for the same window.
 
 ### Option lists
 Returns the aggregates above plus dynamic filter option lists: `statuses`,

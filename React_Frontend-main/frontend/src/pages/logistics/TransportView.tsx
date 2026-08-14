@@ -54,7 +54,7 @@ export function TransportView() {
 
   const debouncedSearch = useDebounced(search)
 
-  const { data, isLoading, isError, error } = useTransportDashboard({
+  const { data, isLoading, isFetching, isError, error } = useTransportDashboard({
     status, movement_type: movementType, payment_status: paymentStatus,
     customer, province, transporter, source,
     exec_from: dateFrom || undefined, exec_to: dateTo || undefined,
@@ -129,9 +129,9 @@ export function TransportView() {
         </div>
       </Disclosure>
 
-      <LiveDataState isLoading={isLoading} isError={isError} error={error} skeleton="dashboard" />
+      <LiveDataState isLoading={isLoading} isFetching={isFetching} isError={isError} error={error} skeleton="dashboard" />
 
-      {data && kpis && refs && (
+      {!isFetching && data && kpis && refs && (
         <>
           {data.dataNotes.length > 0 && <DataNotes notes={data.dataNotes} />}
 

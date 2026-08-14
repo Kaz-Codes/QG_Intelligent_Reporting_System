@@ -47,7 +47,7 @@ def serialize_rows(rows):
 # THE AGGREGATES
 #-------------------------------------
 
-def serialize_purchases_dashboard(rows, period_from, period_to):
+def serialize_purchases_dashboard(rows, period_from, period_to, date_field=None):
     """Every count on this screen is an ORDER, not an item line.
 
     The rows are grouped ONCE here and the grouping passed down, so each figure
@@ -81,5 +81,5 @@ def serialize_purchases_dashboard(rows, period_from, period_to):
             ),
         },
         # Bucketed to fit the window — 3-day steps inside a month, not one bar.
-        "value_trend": value_trend(orders, period_from, period_to),
+        "value_trend": value_trend(orders, period_from, period_to, date_field=date_field),
     }

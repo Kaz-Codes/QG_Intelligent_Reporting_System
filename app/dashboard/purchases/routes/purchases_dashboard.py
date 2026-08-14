@@ -77,7 +77,7 @@ def purchases_dashboard(
             # The "view data" table is being removed from the dashboard, so
             # only the aggregates + filter option lists are returned (keeping
             # the payload in KBs, like the imports dashboard).
-            **serialize_purchases_dashboard(rows, period_from, period_to),
+            **serialize_purchases_dashboard(rows, period_from, period_to, date_field=field),
             # The window actually used, and what the table holds — so an empty
             # month reads as "no purchases in Aug 2026, latest is 23 Jan 2026"
             # rather than as a confident zero.

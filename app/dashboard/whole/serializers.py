@@ -61,7 +61,7 @@ def serialize_imports(db, date_from, date_to, date_field, period_kind,
         "shafts_only": shafts_only,
         # Period
         "period_value": calc.imports_period_value(
-            total, rows, undated_rows, undated_value, lines
+            total, rows, undated_rows, undated_value, lines, date_field
         ),
         # Lifetime (a pipeline is a snapshot, not a window). Each of the three
         # carries count AND value, in the same shape, so the tiles in one row

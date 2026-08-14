@@ -32,7 +32,7 @@ function DashboardSkeleton() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-4">
         {Array.from({ length: 5 }).map((_, i) => (
           <Card key={i}>
             <CardContent className="p-5">
@@ -61,8 +61,17 @@ function DashboardSkeleton() {
   )
 }
 
-export function LiveDataState({ isLoading, isError, error, skeleton = 'panel' }: {
+export function LiveDataState({ isLoading, isFetching = false, isError, error, skeleton = 'panel' }: {
   isLoading: boolean
+  /** True while a background refetch is in flight — a filter or period change,
+   *  with the PREVIOUS result still cached (`keepPreviousData`) and technically
+   *  renderable. Treated the same as isLoading: the point of changing a filter
+   *  is that the old numbers are now describing the wrong set, so leaving them
+   *  on screen unmarked while new ones load is worse than a skeleton. The page
+   *  itself must also stop rendering its own `{data && (...)}` block while this
+   *  is true, or the stale content renders underneath the skeleton at the same
+   *  time — this component only owns the loading/error state, not the content. */
+  isFetching?: boolean
   isError: boolean
   error: unknown
   /** 'dashboard' reserves a full dashboard's worth of layout so nothing jumps
@@ -70,7 +79,7 @@ export function LiveDataState({ isLoading, isError, error, skeleton = 'panel' }:
    *  real content isn't dashboard-shaped (e.g. the Reports table). */
   skeleton?: 'dashboard' | 'panel'
 }) {
-  if (isLoading) {
+  if (isLoading || isFetching) {
     if (skeleton === 'dashboard') return <DashboardSkeleton />
     return (
       <Card>

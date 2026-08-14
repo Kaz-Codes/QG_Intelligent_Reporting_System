@@ -67,14 +67,17 @@ def resolve_period(date_from, date_to, today=None):
 # IMPORTS
 #-------------------------------------
 
-def imports_period_value(total, rows, undated_rows=0, undated_value=None, lines=None):
-    """Value of the import LINES arriving in the window.
+def imports_period_value(total, rows, undated_rows=0, undated_value=None,
+                         lines=None, date_field=None):
+    """Value of the WHOLE consignments dated inside the window.
 
-    Summed over lines, each dated by its OWN ETA, so a consignment whose rows
-    land in two months contributes to both instead of crediting everything to
-    the month its header names. `consignments` is the distinct consignments
-    having a line in the window, and `lines` is how many rows that is — the
-    reference list shows exactly those lines, so the two reconcile.
+    Dated and valued exactly as the Imports module's own "Total Value" hero
+    and trend chart are (header field, full consignment value) — see
+    helpers.imports_period_value for why this is no longer per-line.
+    `consignments` is every consignment whose header date falls in the
+    window; `lines` is every item line belonging to one of them (not only the
+    ones individually dated inside it) — the reference list shows exactly
+    those lines, so the two reconcile.
 
     `undated` is the money no window can reach: consignments carrying a value
     but no date at all. Reported beside the period figure so the gap is visible
@@ -84,7 +87,8 @@ def imports_period_value(total, rows, undated_rows=0, undated_value=None, lines=
         "value": _num(total),
         "consignments": rows,
         "lines": lines,
-        "basis": "line ETA at works",
+        "basis": "consignment required date" if date_field == "required_date"
+                 else "consignment ETA at works",
         "undated": {
             "consignments": undated_rows,
             "value": _num(undated_value),
