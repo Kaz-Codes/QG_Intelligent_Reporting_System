@@ -17,6 +17,7 @@ from app.dashboard.stock_runway import RUNWAY_WINDOW_DAYS, runway_window
 from app.dashboard.period import (
     coverage, PURCHASES_DATE_DEFAULT as SHARED_PURCHASES_DATE_DEFAULT,
 )
+from app.dashboard.inventory.helpers import PURCHASES_BRANCH_TO_STOCK_BRANCH
 
 #-----------------------------------------------------
 # OVERVIEW DASHBOARD QUERIES
@@ -589,11 +590,79 @@ def consumption_by_branch(db, window_days=CONSUMPTION_WINDOW_DAYS):
     return {branch: value for branch, value in rows}, window_days
 
 
+def dead_item_ids(db, cutoff):
+    """The item codes that are DEAD as of `cutoff`, each with its available
+    qty and stock value FOLDED ACROSS EVERY BRANCH — the same subquery shape
+    `dead_stock` and `dead_stock_references` both build on, so the tile and
+    its drill-down list can never disagree.
+
+    Mirrors app.dashboard.inventory.calculations.derive_movement exactly (the
+    two dashboards' dead-stock figures used to be computed independently and
+    disagreed):
+      * no issuance value for the item, on ANY branch, since `cutoff`
+      * still AVAILABLE (summed across branches) — nothing available is
+        nothing sitting idle, whether depleted or fully on hold
+      * NOT purchased since `cutoff` either — an item bought last week has
+        not had the chance to be issued yet, which is not the same thing as
+        stock nobody wants
+
+    Folded per item_code rather than per (item, branch): an item still moving
+    at one factory is not dead because it sat still at another, the same
+    reasoning the Inventory dashboard already applies.
+    """
+    issued_since = (
+        select(
+            Issuance.item_code.label("item_code"),
+            func.coalesce(func.sum(Issuance.total_price), 0).label("issued"),
+        )
+        .where(Issuance.item_code.isnot(None))
+        .where(Issuance.from_date >= cutoff)
+        .group_by(Issuance.item_code)
+        .subquery()
+    )
+
+    # Filtered to only the branch codes with a confirmed stock/issuance branch
+    # (see PURCHASES_BRANCH_TO_STOCK_BRANCH) — a purchase under an unmapped
+    # code (QBL, QE-II, IOL) is invisible here, by instruction. Folded item_code
+    # only, not matched to a specific branch: this whole function already folds
+    # stock across every branch per item, so "purchased recently at a branch we
+    # hold stock data for" is the right-grained check for it.
+    purchased_since = (
+        select(PurchasesData.item_code.label("item_code"))
+        .where(PurchasesData.item_code.isnot(None))
+        .where(PurchasesData.purchase >= cutoff)
+        .where(PurchasesData.branch.in_(PURCHASES_BRANCH_TO_STOCK_BRANCH))
+        .group_by(PurchasesData.item_code)
+        .subquery()
+    )
+
+    folded = (
+        select(
+            Stock.item_code.label("item_code"),
+            func.sum(Stock.available_qty).label("available_qty"),
+            func.sum(Stock.stock_qty_amount).label("stock_qty_amount"),
+        )
+        .where(Stock.item_code.isnot(None))
+        .group_by(Stock.item_code)
+        .subquery()
+    )
+
+    return (
+        select(
+            folded.c.item_code,
+            folded.c.available_qty,
+            folded.c.stock_qty_amount,
+        )
+        .outerjoin(issued_since, issued_since.c.item_code == folded.c.item_code)
+        .outerjoin(purchased_since, purchased_since.c.item_code == folded.c.item_code)
+        .where(folded.c.available_qty > 0)
+        .where(func.coalesce(issued_since.c.issued, 0) <= 0)
+        .where(purchased_since.c.item_code.is_(None))
+        .subquery()
+    )
+
+
 def dead_stock(db, threshold_days):
-    # A stock line is dead when it still carries value but nothing has been
-    # issued against that (item, branch) within the threshold. Measured back
-    # from the latest issuance in the data, for the same reason as above.
-    #
     # history_days is returned alongside because the issuance table only spans
     # about a year: once the threshold reaches back past the first issuance
     # there is nothing left to distinguish "not issued lately" from "never
@@ -609,28 +678,13 @@ def dead_stock(db, threshold_days):
     history_days = (latest - earliest).days if earliest else 0
     cutoff = latest - timedelta(days=threshold_days)
 
-    recently_issued = (
-        select(Issuance.item_code, Issuance.branch)
-        .where(Issuance.from_date > cutoff)
-        .where(Issuance.item_code.isnot(None))
-        .distinct()
-        .subquery()
-    )
+    dead = dead_item_ids(db, cutoff)
 
     lines, value = db.execute(
         select(
-            func.count(func.distinct(Stock.item_code)),
-            func.coalesce(func.sum(Stock.stock_qty_amount), 0),
+            func.count(dead.c.item_code),
+            func.coalesce(func.sum(dead.c.stock_qty_amount), 0),
         )
-        .outerjoin(
-            recently_issued,
-            and_(
-                Stock.item_code == recently_issued.c.item_code,
-                Stock.branch == recently_issued.c.branch,
-            ),
-        )
-        .where(recently_issued.c.item_code.is_(None))
-        .where(Stock.stock_qty_amount > 0)
     ).one()
 
     return lines, value, history_days

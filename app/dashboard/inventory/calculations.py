@@ -5,6 +5,7 @@ from app.dashboard.references import paginate, search_filter
 from app.dashboard.stock_runway import (
     days_of_stock as value_days_of_stock, BASIS as RUNWAY_BASIS,
 )
+from app.dashboard.inventory.helpers import PURCHASES_BRANCH_TO_STOCK_BRANCH
 
 #-----------------------------------------------------
 # INVENTORY (STOCKS) DASHBOARD CALCULATIONS
@@ -99,8 +100,21 @@ def days_of_stock(available_qty, avg_daily_issue):
 # identity so two unrelated ones never merge.
 #-----------------------------------------------------
 
-def group_by_item(rows):
-    """One row per item, summed across the branches that stock it."""
+def group_by_item(rows, purchase_map=None, from_12m=None, item_issuance=None):
+    """One row per item, summed across the branches that stock it.
+
+    `purchase_map` ({item_code: most recent purchase date}) and `from_12m`
+    (the same 365-day boundary the issuance windows use) are optional so
+    existing callers that do not have them yet keep their old behaviour —
+    see derive_movement.
+
+    `item_issuance` ({item_code: {"v12", "v3"}}, from
+    helpers.issuance_totals_by_item) OVERRIDES the issued_value_12m/3m folded
+    from `rows` below when given. The per-row fold only ever sums issuance
+    for branches present in the STOCK table — an item issued at a branch with
+    no remaining stock row is invisible to it — so the authoritative,
+    whole-company total is substituted in once it's available.
+    """
     items = {}
 
     for row in rows:
@@ -141,8 +155,33 @@ def group_by_item(rows):
         entry["stock_status"] = derive_stock_status(
             entry["available_qty"], entry["reorder_level"]
         )
+
+        if item_issuance is not None:
+            totals = item_issuance.get(entry["item_code"])
+            if totals is not None:
+                entry["issued_value_12m"] = totals["v12"]
+                entry["issued_value_3m"] = totals["v3"]
+
+        # purchase_map is keyed (item_code, branch) — checked against every
+        # branch purchases_data can be matched to at all (not just the ones
+        # THIS stock snapshot happens to list for the item): the same "an item
+        # still moving at one factory is not dead because it sat still at
+        # another" reasoning applies to a recent purchase, and restricting
+        # this to entry["branches"] undercounted it the same way the
+        # issued_value fold above once did — a purchase can arrive before the
+        # next stock snapshot reflects it there.
+        last_purchases = [
+            (purchase_map or {}).get((entry["item_code"], b))
+            for b in PURCHASES_BRANCH_TO_STOCK_BRANCH.values()
+        ]
+        recently_purchased = (
+            from_12m is not None
+            and any(lp is not None and lp >= from_12m for lp in last_purchases)
+        )
+
         entry["movement"] = derive_movement(
-            entry["issued_value_3m"], entry["issued_value_12m"], entry["available_qty"]
+            entry["issued_value_3m"], entry["issued_value_12m"],
+            entry["available_qty"], recently_purchased,
         )
 
     return list(items.values())
@@ -261,14 +300,20 @@ def kpis(rows):
 # which said an item was in trouble without saying whether anybody actually
 # wants it. Movement answers that directly, from real issuance:
 #
-#   Dead  — nothing issued in the last 12 months AND stock actually AVAILABLE.
-#           Stock that is not moving at all, which is the money worth arguing
-#           about — an item with nothing available (fully on hold, or simply
-#           depleted) has nothing sitting idle, so it is left unclassified
-#           (movement=None) rather than counted as Dead. It shows up in none
-#           of the three classes. Checked against `available_qty`, the same
-#           "do we actually have it" field kpis() uses for out-of-stock, not
-#           the raw `stock_qty` (which counts held/reserved units too).
+#   Dead  — nothing issued in the last 12 months, stock actually AVAILABLE, AND
+#           more than 12 months since it was last PURCHASED. Stock that is not
+#           moving at all, which is the money worth arguing about — an item
+#           with nothing available (fully on hold, or simply depleted) has
+#           nothing sitting idle, and an item bought recently has not been
+#           issued yet for the obvious reason that nobody has had the chance —
+#           neither is the same thing as stock nobody wants. Both are left
+#           unclassified (movement=None) rather than counted as Dead. It shows
+#           up in none of the three classes.
+#             * Checked against `available_qty`, the same "do we actually have
+#               it" field kpis() uses for out-of-stock, not the raw
+#               `stock_qty` (which counts held/reserved units too).
+#             * The purchase-recency check uses the SAME 365-day boundary as
+#               the issuance windows below (see helpers.latest_purchase_map).
 #   Slow  — issued in the last 12 months but NOT in the last 3.
 #   Fast  — issued within the last 3 months.
 #
@@ -282,7 +327,7 @@ MOVE_DEAD = "Dead"
 MOVEMENT_CLASSES = [MOVE_FAST, MOVE_SLOW, MOVE_DEAD]
 
 
-def derive_movement(issued_3m, issued_12m, available_qty=None):
+def derive_movement(issued_3m, issued_12m, available_qty=None, recently_purchased=False):
     if issued_3m and issued_3m > 0:
         return MOVE_FAST
     if issued_12m and issued_12m > 0:
@@ -295,6 +340,12 @@ def derive_movement(issued_3m, issued_12m, available_qty=None):
     # shelf. `available_qty` is optional so existing callers that do not have
     # it yet keep their old behaviour.
     if available_qty is not None and available_qty <= 0:
+        return None
+
+    # Same reasoning, for stock that simply has not had TIME to move yet — an
+    # item purchased within the last 12 months gets the same benefit of the
+    # doubt as one with a legitimate reason to be sitting still.
+    if recently_purchased:
         return None
 
     return MOVE_DEAD

@@ -15,7 +15,8 @@ from app.dashboard.inventory.calculations import (
 # `consumption` is the {(item_code, branch): avg daily issued} map.
 #-------------------------------------
 
-def serialize_row(stock, consumption, reorder_levels, issuance=None):
+def serialize_row(stock, consumption, reorder_levels, issuance=None,
+                  purchase_map=None, from_12m=None):
     item = stock.item
     key = (stock.item_code, stock.branch)
     avg_daily = consumption.get(key)
@@ -26,6 +27,19 @@ def serialize_row(stock, consumption, reorder_levels, issuance=None):
     reorder_level = reorder_levels.get(key)
     if reorder_level is None:
         reorder_level = stock.reorder_level
+
+    # See derive_movement / helpers.latest_purchase_map: an item bought within
+    # the last 12 months has not necessarily had the chance to be issued yet,
+    # so it is not held to the same "nothing moved" standard as older stock.
+    # Same (item_code, branch) key as consumption/reorder_level above —
+    # purchase_map only ever holds entries for branches purchases_data's own
+    # codes could be confidently matched to stock/issuance's branch names.
+    last_purchase = (purchase_map or {}).get(key)
+    recently_purchased = (
+        from_12m is not None
+        and last_purchase is not None
+        and last_purchase >= from_12m
+    )
 
     return {
         "item_code": stock.item_code,
@@ -48,14 +62,18 @@ def serialize_row(stock, consumption, reorder_levels, issuance=None):
         # disagree — they are literally the same numbers.
         "issued_value_12m": issued["v12"],
         "issued_value_3m": issued["v3"],
-        "movement": derive_movement(issued["v3"], issued["v12"], stock.available_qty),
+        "movement": derive_movement(
+            issued["v3"], issued["v12"], stock.available_qty, recently_purchased
+        ),
     }
 
 
-def serialize_rows(stocks, consumption, reorder_levels, issuance=None):
+def serialize_rows(stocks, consumption, reorder_levels, issuance=None,
+                   purchase_map=None, from_12m=None):
     issuance = issuance or {}
     return [
-        serialize_row(stock, consumption, reorder_levels, issuance)
+        serialize_row(stock, consumption, reorder_levels, issuance,
+                      purchase_map, from_12m)
         for stock in stocks
     ]
 
@@ -65,7 +83,8 @@ def serialize_rows(stocks, consumption, reorder_levels, issuance=None):
 #-------------------------------------
 
 def serialize_inventory_dashboard(rows, windows, issuance=None,
-                                  issuance_references=None):
+                                  issuance_references=None, purchase_map=None,
+                                  item_issuance=None):
     """One screen, one set of numbers.
 
     TWO groupings, each used where it belongs:
@@ -82,7 +101,7 @@ def serialize_inventory_dashboard(rows, windows, issuance=None,
     measure. `lowest_days_of_stock` stays — it is per item, where the runway is
     actionable, while `stock_days` is the branch/overall roll-up.
     """
-    items = group_by_item(rows)
+    items = group_by_item(rows, purchase_map, windows["from_12m"], item_issuance)
 
     return {
         "kpis": kpis(items),

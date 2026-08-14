@@ -48,6 +48,24 @@ CUSTOM = "custom"
 
 PURCHASES_DATE_DEFAULT = "purchase"
 
+#-----------------------------------------------------
+# HOW LONG "NOT MOVING" HAS TO LAST BEFORE STOCK COUNTS AS DEAD
+#
+# Was two. The Inventory dashboard's Fast/Slow/Dead split has always used a
+# fixed 12-month (365-day) issuance window baked into the movement
+# classification. The Overview's own dead-stock figure was computed
+# separately and defaulted to a 180-day threshold — so the same warehouse
+# could read as, say, 700 dead items on one screen and a different count on
+# the other, both "correct" for windows nobody had told the reader disagreed.
+#
+# The Overview's threshold stays a real, user-adjustable query parameter
+# (`dead_stock_days`) — that flexibility is worth keeping. What cannot be two
+# values is the DEFAULT, so both screens land on the same figure until
+# somebody deliberately widens or narrows the Overview's window.
+#-----------------------------------------------------
+
+DEAD_STOCK_WINDOW_DAYS = 365
+
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",

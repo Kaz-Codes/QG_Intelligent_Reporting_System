@@ -7,7 +7,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_OVERVIEW_DASHBOARD
-from app.dashboard.period import resolve_period
+from app.dashboard.period import resolve_period, DEAD_STOCK_WINDOW_DAYS
 from app.dashboard.whole.helpers import (
     IMPORTS_DATE_FIELDS, IMPORTS_DATE_DEFAULT,
     PURCHASES_DATE_FIELDS, PURCHASES_DATE_DEFAULT,
@@ -19,8 +19,9 @@ from app.dashboard.whole.routes.router import router
 # Default cut-off for a stock line to count as dead. Exposed as a query param
 # rather than fixed: how long stock must sit unissued before it is written off
 # is a business judgement, so the caller states it and the backend does not
-# quietly decide on their behalf.
-DEFAULT_DEAD_STOCK_DAYS = 180
+# quietly decide on their behalf. The DEFAULT is shared with the Inventory
+# dashboard's own (fixed) dead-stock window — see period.DEAD_STOCK_WINDOW_DAYS.
+DEFAULT_DEAD_STOCK_DAYS = DEAD_STOCK_WINDOW_DAYS
 
 
 def _section(date_from, date_to, field, allowed, default):

@@ -21,7 +21,7 @@ from app.dashboard.period import resolve_period
 from app.dashboard.references import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.dashboard.inventory.helpers import (
     fetch_filtered_stock, consumption_map, reorder_level_map, issuance_windows,
-    issuance_item_references,
+    issuance_item_references, latest_purchase_map, issuance_totals_by_item,
 )
 from app.dashboard.inventory.serializers import serialize_rows
 from app.dashboard.inventory import calculations as calc
@@ -97,11 +97,14 @@ def inventory_references(
 
         consumption = consumption_map(db)
         reorder_levels = reorder_level_map(db)
-        issuance, _windows = issuance_windows(db)
+        issuance, windows = issuance_windows(db)
+        purchase_map = latest_purchase_map(db)
+        item_issuance = issuance_totals_by_item(db, branch)
 
         rows = serialize_rows(
             fetch_filtered_stock(db, branch, item, category, search),
             consumption, reorder_levels, issuance,
+            purchase_map, windows["from_12m"],
         )
 
         # The three derived filters, applied exactly as the dashboard applies
@@ -113,7 +116,7 @@ def inventory_references(
         if movement:
             rows = [r for r in rows if r["movement"] in set(movement)]
 
-        items = calc.group_by_item(rows)
+        items = calc.group_by_item(rows, purchase_map, windows["from_12m"], item_issuance)
 
         return {
             "status_code": 200,

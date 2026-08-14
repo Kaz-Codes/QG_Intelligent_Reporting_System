@@ -20,7 +20,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_OVERVIEW_DASHBOARD
-from app.dashboard.period import resolve_period
+from app.dashboard.period import resolve_period, DEAD_STOCK_WINDOW_DAYS
 from app.dashboard.references import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.dashboard.whole import references as refs
 from app.dashboard.whole.helpers import (
@@ -30,7 +30,9 @@ from app.dashboard.whole.helpers import (
 )
 from app.dashboard.whole.routes.router import router
 
-DEFAULT_DEAD_STOCK_DAYS = 180
+# Shared with the Inventory dashboard's own (fixed) dead-stock window — see
+# period.DEAD_STOCK_WINDOW_DAYS and overview_dashboard.py's identical constant.
+DEFAULT_DEAD_STOCK_DAYS = DEAD_STOCK_WINDOW_DAYS
 
 # key -> (which section's window it uses, the builder)
 #

@@ -8,7 +8,7 @@ from app.loading.schemas.stores_schemas import (
     Stock, Issuance, StoreRequisition, PurchasesData,
 )
 from app.masters.models import Item
-from app.dashboard.period import coverage
+from app.dashboard.period import coverage, DEAD_STOCK_WINDOW_DAYS
 from app.dashboard.references import clamp, paginate, sql_search_clause
 
 # How far back the consumption rate for the runway is measured.
@@ -231,7 +231,10 @@ def purchase_vs_issuance_by_category(db, item_category=None, limit=10):
 # can state the dates it actually used.
 #-------------------------------------
 
-MONTHS_12_DAYS = 365
+# Shared with the Overview dashboard's dead-stock default (see
+# app.dashboard.period.DEAD_STOCK_WINDOW_DAYS) — the two screens' definitions
+# used to disagree on this number, so it now lives in one place for both.
+MONTHS_12_DAYS = DEAD_STOCK_WINDOW_DAYS
 MONTHS_3_DAYS = 92
 
 
@@ -277,6 +280,135 @@ def issuance_windows(db):
         "days_12m": MONTHS_12_DAYS,
         "days_3m": MONTHS_3_DAYS,
     }
+
+
+#-------------------------------------
+# ISSUANCE PER ITEM, FOLDED ACROSS EVERY BRANCH — NOT JUST STOCKED ONES
+#
+# issuance_windows() keys by (item_code, branch), and group_by_item only ever
+# looks a key up for branches that appear in the STOCK table. An item issued
+# at a branch with no remaining stock row for it (912 item codes, as of this
+# writing) was therefore invisible to the company-wide fold entirely — its
+# issuance silently understated, and for the fast/slow/dead split specifically,
+# sometimes called dead despite having genuinely moved within the window.
+#
+# This is the item-level twin, grouped by item_code alone, used for every
+# figure that counts ITEMS rather than (item, branch) stock lines — which is
+# every company-wide figure on the screen (movement_split, movement_kpis, the
+# dead/fast/slow reference lists, the issued_12m/issued_3m badges). The
+# per-branch view (serialize_row, movement_by_branch) correctly keeps using
+# issuance_windows' narrower map instead — "is THIS branch's stock moving"
+# should only count what THIS branch issued.
+#-------------------------------------
+
+def issuance_totals_by_item(db, branch=None):
+    """{item_code: {"v12", "v3"}} — issuance value over the two windows,
+    folded across every branch that issued the item, not just the ones the
+    Stock table still has a row for.
+
+    `branch` scopes this to match whatever the caller already filtered the
+    stock rows to (the same list `fetch_filtered_stock` takes) — omitted, it
+    folds across the whole company, which is correct for the unfiltered
+    screen but WRONG once a branch filter is active: without this, an item
+    would read as "moving" here because of activity at a branch the current
+    view has filtered out entirely.
+    """
+    latest = db.execute(select(func.max(Issuance.from_date))).scalar()
+    if latest is None:
+        return {}
+
+    from_12m = latest - timedelta(days=MONTHS_12_DAYS)
+    from_3m = latest - timedelta(days=MONTHS_3_DAYS)
+
+    query = (
+        select(
+            Issuance.item_code,
+            func.coalesce(
+                func.sum(func.coalesce(Issuance.total_price, 0)), 0
+            ).label("v12"),
+            func.coalesce(
+                func.sum(
+                    case((Issuance.from_date >= from_3m,
+                          func.coalesce(Issuance.total_price, 0)), else_=0)
+                ), 0
+            ).label("v3"),
+        )
+        .where(Issuance.item_code.isnot(None))
+        .where(Issuance.from_date.between(from_12m, latest))
+    )
+
+    if branch:
+        query = query.where(Issuance.branch.in_(branch))
+
+    rows = db.execute(query.group_by(Issuance.item_code)).all()
+
+    return {
+        item_code: {"v12": v12 or Decimal("0"), "v3": v3 or Decimal("0")}
+        for item_code, v12, v3 in rows
+    }
+
+
+#-------------------------------------
+# PURCHASES BRANCH CODE -> STOCK/ISSUANCE BRANCH NAME
+#
+# purchases_data.branch holds short codes; stock/issuance.branch holds full
+# company names, and the two vocabularies do not otherwise line up (see
+# purchase_vs_issuance_by_category's identical note). Confirmed by the
+# business, not derived — cross-matching item codes the way the AB-items
+# branch map is (etl_common / load_05_stock.py) does not work here, because
+# purchases and stock cover different populations of items (stock is a
+# snapshot; purchases accumulate for years). The best match found that way
+# was 41.7%, nowhere near the ~100% that made the AB mapping trustworthy.
+#
+# Only the four codes with a confirmed branch are here. QBL, QE-II and IOL
+# are deliberately absent: QBL may be a different Qadri Brothers site than
+# the Unit-II we hold stock data for, QE-II has no confirmed match, and IOL
+# is not a branch at all. By instruction, ANY cross-sheet calculation against
+# purchases_data must filter to ONLY the branches below — a purchase row
+# under an unmapped code is invisible to it, the same as if it did not exist.
+#-------------------------------------
+
+PURCHASES_BRANCH_TO_STOCK_BRANCH = {
+    "QCL": "Qadcast (Pvt) Ltd.",
+    "QE": "Qadbros Engineering (Pvt) Ltd.",
+    "QEN": "Qadri Engineering (Pvt) Ltd.",
+    "QB2": "Qadri Brothers (Pvt.) Ltd. (Unit-II)",
+}
+
+
+#-------------------------------------
+# MOST RECENT PURCHASE DATE, PER (ITEM, BRANCH)
+#
+# An item bought yesterday has not been issued yet for the obvious reason that
+# nobody has had the chance — that is not the same thing as dead stock, which
+# is about stock nobody WANTS. derive_movement uses this to hold off calling an
+# item dead until more than a year has passed since it was last purchased, the
+# same 365-day boundary issuance already uses (see MONTHS_12_DAYS).
+#-------------------------------------
+
+def latest_purchase_map(db):
+    """{(item_code, branch): most recent purchase date} — branch is the
+    STOCK/ISSUANCE name, translated via PURCHASES_BRANCH_TO_STOCK_BRANCH. Rows
+    under an unmapped code are excluded outright, per that mapping's docstring."""
+    rows = db.execute(
+        select(
+            PurchasesData.item_code, PurchasesData.branch,
+            func.max(PurchasesData.purchase),
+        )
+        .where(PurchasesData.item_code.isnot(None))
+        .where(PurchasesData.branch.in_(PURCHASES_BRANCH_TO_STOCK_BRANCH))
+        .group_by(PurchasesData.item_code, PurchasesData.branch)
+    ).all()
+
+    result = {}
+    for item_code, code, purchased in rows:
+        if not purchased:
+            continue
+        key = (item_code, PURCHASES_BRANCH_TO_STOCK_BRANCH[code])
+        if key not in result or purchased > result[key]:
+            result[key] = purchased
+
+    return result
 
 
 #-------------------------------------

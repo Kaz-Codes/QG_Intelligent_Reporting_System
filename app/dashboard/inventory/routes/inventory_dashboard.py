@@ -6,8 +6,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_INVENTORY_DASHBOARD
 from app.dashboard.inventory.helpers import (
     fetch_filtered_stock, consumption_map, reorder_level_map, option_lists,
-    purchase_vs_issuance_by_category, issuance_windows,
-    issuance_in_period, issuance_item_references, issuance_coverage,
+    purchase_vs_issuance_by_category, issuance_windows, latest_purchase_map,
+    issuance_totals_by_item, issuance_in_period, issuance_item_references,
+    issuance_coverage,
 )
 from app.dashboard.period import resolve_period, serialize_period
 from app.dashboard.inventory.serializers import serialize_rows, serialize_inventory_dashboard
@@ -50,9 +51,14 @@ def inventory_dashboard(
         consumption = consumption_map(db)
         reorder_levels = reorder_level_map(db)
         issuance, windows = issuance_windows(db)
+        purchase_map = latest_purchase_map(db)
+        item_issuance = issuance_totals_by_item(db, branch)
 
         stocks = fetch_filtered_stock(db, branch, item, category, search)
-        rows = serialize_rows(stocks, consumption, reorder_levels, issuance)
+        rows = serialize_rows(
+            stocks, consumption, reorder_levels, issuance,
+            purchase_map, windows["from_12m"],
+        )
 
         # Stock status and reorder status are derived, so they are filtered here.
         if status:
@@ -80,6 +86,8 @@ def inventory_dashboard(
                 issuance_references=issuance_item_references(
                     db, period_from, period_to, branch
                 ),
+                purchase_map=purchase_map,
+                item_issuance=item_issuance,
             ),
             # The issuance window actually used, and what the issuance table
             # holds — so an empty month says "latest data is ..." rather than
