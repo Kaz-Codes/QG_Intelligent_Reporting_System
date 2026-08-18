@@ -19,3 +19,5 @@ __pycache__/
 chatbot_backend/backend/metadata/query_cache.json
 chatbot_backend/backend/metadata/data_profile.json
 chatbot_backend/backend/metadata/learned_terms.json
+
+chatbot_backend/backend/metadata/query_cache.json
