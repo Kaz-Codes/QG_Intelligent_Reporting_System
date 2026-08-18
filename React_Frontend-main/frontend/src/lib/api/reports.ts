@@ -30,25 +30,88 @@ export interface ReportRow {
   status: string | null
   value: number | null
   date: string | null
+  // purchases
   po_number: string | null
   bill_no: string | null
+  dc_no: string | null
   mop: string | null
   sourcing_officer: string | null
   quantity: number | null
   required_date: string | null
   ppc_store: string | null
+  item_code: string | null
+  specification: string | null
+  po_date: string | null
+  // imports (line) — one row per consignment ITEM, not per consignment
   country: string | null
   mode_of_shipment: string | null
+  hs_code: string | null
+  unit_of_measurement: string | null
+  unit_price: number | null
+  batch_no: string | null
+  requisition_type: string | null
+  reference_number: string | null
+  job_number: string | null
+  mo_number: string | null
+  elc: number | null
+  alc: number | null
+  eta_works: string | null
+  // imports (header) — repeats on every line of the same consignment
+  clearing_agent: string | null
+  loading_port: string | null
+  delivery_port: string | null
+  incoterm: string | null
+  currency: string | null
+  consignment_type: string | null
+  works: string | null
+  etd: string | null
+  gd_number: string | null
+  gd_filing_date: string | null
+  gate_out_date: string | null
+  exchange_rate: number | null
+  payment_instrument: string | null
+  gross_weight: number | null
+  // inventory
   specs: string | null
   stock_qty: number | null
   hold_qty: number | null
   reorder_level: number | null
   reorder_status: string | null
+  rank: string | null
+  // logistics (line) — one row per order ITEM, not per order
+  unit_weight: number | null
+  planned_rfd_date: string | null
+  actual_rfd_date: string | null
+  // logistics (header) — repeats on every line of the same order
   customer: string | null
   pod: string | null
   stage: string | null
   shipping_line: string | null
   cost_per_kg: number | null
+  order_type: string | null
+  department: string | null
+  shipment_mode: string | null
+  origin_city: string | null
+  origin_province: string | null
+  batch_label: string | null
+  pol: string | null
+  booking_no: string | null
+  etd_sailing_date: string | null
+  cro_arrival_date: string | null
+  actual_arrival_date: string | null
+  packing_cost: number | null
+  transportation_charges: number | null
+  container_detention: number | null
+  insurance: number | null
+  trucking_lhr_to_khi: number | null
+  fumigation_cost: number | null
+  lashing: number | null
+  qfl_charges: number | null
+  qfl_container_movement: number | null
+  custom_clearance_charges: number | null
+  port_charges: number | null
+  dhl_charges: number | null
+  sea_air_freight: number | null
 }
 
 export interface ReportOptions {

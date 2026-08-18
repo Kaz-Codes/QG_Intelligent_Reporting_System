@@ -768,13 +768,39 @@ Rs 0 that reads as a collapse in spend.
 The **cross-module report builder**: pick one or more of four data types
 (**purchases, imports, inventory, logistics**), filter them, and get one flat
 table back — the four sources normalised into a single row shape (shared keys
-`ref/item/supplier/branch/category/status/value/date` + type-specific keys; a
-key a type has no value for is null, and every row carries its `type`). Unlike
-the dashboards this **does** return rows (a report is a table you download), so
-it is **paginated**. Reuses the dashboard derivations (purchase status, stock
-status + reorder level, logistics cost/kg + stage) — a figure in a report
-matches the same figure on its dashboard.
+`ref/item/supplier/branch/category/status/value/date` + ~80 type-specific keys;
+a key a type has no value for is null, and every row carries its `type`).
+Unlike the dashboards this **does** return rows (a report is a table you
+download), so it is **paginated**. Reuses the dashboard derivations (purchase
+status, stock status + reorder level, logistics cost/kg + stage) — a figure in
+a report matches the same figure on its dashboard. Wired end-to-end: front end
+(`Reports.tsx`, `reportBuilder.tsx`) talks to the live endpoints below, not
+mock data; `savedReports.ts`'s old localStorage list was replaced by the
+`SavedReport` table.
 
+**Imports and logistics are ONE ROW PER LINE item, not per consignment/order —
+purchases and inventory stay one row per source record.** Per-line fields
+(HS code, quantity, unit price, ELC/ALC, RFD dates, ...) exist only on the
+child table (`ConsignmentItem` / `LogisticsItem`); folding them onto one header
+row per consignment either drops them or forces an arbitrary aggregate, so
+`app/reports/helpers.py::_MODEL` queries the LINE table for these two types and
+joins back to the header (`_JOINS`) for everything header-level, which then
+simply repeats on every line of the same consignment/order — normal for a flat
+export. One consequence: filters that used to mean "does ANY line of this
+consignment match" (shaft, category) now mean "does THIS line match" — more
+precise, since a consignment with one shaft line and four other items used to
+hand back all five rows under the shaft filter.
+
+- **`value` follows the same line-vs-header split as valuation elsewhere in
+  the app.** Imports gets a genuine per-LINE PKR figure (quantity × unit price
+  × the consignment's booked rate, `serializers._line_value_pkr`) — repeating
+  the whole consignment's `pkr_total` on every one of its rows would multiply
+  it the moment someone sums the column, the same trap the dashboards avoid
+  (see "Imports money is counted in the month it ARRIVED"). Logistics has no
+  per-item cost breakdown at all, so `value` stays the ORDER's total cost
+  (`total_logistics_cost`), repeated per line — the individual freight/packing/
+  etc. columns are the real per-order figures either way, `value` is just
+  their sum, same as before this change.
 - **`GET /reports/data`** — `types[]` + the shared filters (`item[]`, `shaft[]`,
   `supplier[]`, `branch[]`, `category[]` — **multi-select, repeated params → IN**;
   plus single `date_from`/`date_to`, `search`) + `page`/`page_size`. **`shaft`** is
@@ -796,16 +822,16 @@ matches the same figure on its dashboard.
   categories) scoped to the selected types.
 - **Saved templates** — `SavedReport` (`types`/`columns`/`filters` as JSON, no
   date range — chosen fresh each run; soft-deleted like everything). The list is
-  **shared** (everyone who can reach Reports sees all templates), replacing the
-  front end's localStorage. `GET/POST /reports/saved`, `GET/PUT/DELETE
-  /reports/saved/{id}`. All of reports is gated by `can_make_reports`; a saved
-  template may be edited/deleted only by its creator or an admin.
-- **Dropped for want of a backend source** (by decision): imports `customer` /
-  `weight` / `shipping line` / `bank` / `documentation status`; inventory
+  **shared** (everyone who can reach Reports sees all templates). `GET/POST
+  /reports/saved`, `GET/PUT/DELETE /reports/saved/{id}`. All of reports is
+  gated by `can_make_reports`; a saved template may be edited/deleted only by
+  its creator or an admin.
+- **Dropped for want of a backend source** (by decision): imports `customer`
+  (no such concept on a consignment) / `shipping line` / `bank` (Payment is its
+  own one-to-many child table, not folded in) / `documentation status`
+  (the Documentation dashboard tab was never built either); inventory
   `last_restocked`; purchases `material`. Imports `ref` falls back to the LC
   instrument number (then `IMP-{id}`); `ppc_store` stays a date.
-- The front end (`Reports.tsx`, `reportBuilder.tsx`, `savedReports.ts`) is still
-  mock + localStorage — **not yet wired** to these endpoints.
 
 ## loading
 

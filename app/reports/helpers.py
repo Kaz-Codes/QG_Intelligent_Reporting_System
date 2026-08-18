@@ -4,10 +4,10 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload
 
 from app.imports.models import Consignment, ConsignmentItem
-from app.logistics.models import LogisticsConsignment
+from app.logistics.models import LogisticsConsignment, LogisticsItem
 from app.loading.schemas.stores_schemas import (
     PurchasesData, Stock, StoreRequisition,
 )
@@ -142,21 +142,25 @@ def _purchases_conditions(f):
 
 
 def _imports_conditions(f):
-    conds = [Consignment.is_deleted == False]  # noqa: E712
+    # ONE ROW PER LINE (ConsignmentItem) — see serializers.py's ROW_KEYS
+    # comment. Conditions that used to reach INTO the lines via `.any()` (any
+    # line matches) now apply directly to THIS line, which is more precise: a
+    # consignment carrying one shaft line and four non-shaft ones used to hand
+    # back all five under the shaft filter, because the match was "does this
+    # consignment have a matching line anywhere" rather than "is this row's
+    # own line a match".
+    conds = [
+        ConsignmentItem.is_deleted == False,  # noqa: E712
+        Consignment.is_deleted == False,  # noqa: E712
+    ]
     if f.shaft:
-        conds.append(Consignment.items.any(
-            (ConsignmentItem.is_deleted == False) &  # noqa: E712
-            ConsignmentItem.item_name.in_(f.shaft)
-        ))
+        conds.append(ConsignmentItem.item_name.in_(f.shaft))
     if f.supplier:
         conds.append(Consignment.supplier.has(Supplier.name.in_(f.supplier)))
     if f.branch:
         conds.append(Consignment.branch.has(Branch.name.in_(f.branch)))
     if f.category:
-        conds.append(Consignment.items.any(
-            (ConsignmentItem.is_deleted == False) &  # noqa: E712
-            ConsignmentItem.item.has(Item.category.in_(f.category))
-        ))
+        conds.append(ConsignmentItem.item.has(Item.category.in_(f.category)))
     if f.date_from:
         conds.append(Consignment.requisition_date >= f.date_from)
     if f.date_to:
@@ -167,6 +171,7 @@ def _imports_conditions(f):
             Consignment.instrument_number.ilike(p),
             Consignment.origin.ilike(p),
             Consignment.gd_number.ilike(p),
+            ConsignmentItem.item_name.ilike(p),
             Consignment.supplier.has(Supplier.name.ilike(p)),
         ))
     return conds
@@ -193,7 +198,13 @@ def _inventory_conditions(f):
 
 
 def _logistics_conditions(f):
-    conds = [LogisticsConsignment.is_deleted == False]  # noqa: E712
+    # ONE ROW PER LINE (LogisticsItem). Logistics supports none of the
+    # item/shaft/supplier/branch/category filters (FILTER_SUPPORT below), so
+    # only the join's is_deleted pair, date and search change here.
+    conds = [
+        LogisticsItem.is_deleted == False,  # noqa: E712
+        LogisticsConsignment.is_deleted == False,  # noqa: E712
+    ]
     if f.date_from:
         conds.append(LogisticsConsignment.port_in_date >= f.date_from)
     if f.date_to:
@@ -206,15 +217,18 @@ def _logistics_conditions(f):
             LogisticsConsignment.pod.ilike(p),
             LogisticsConsignment.shipping_line.ilike(p),
             LogisticsConsignment.origin_country.ilike(p),
+            LogisticsItem.item_detail.ilike(p),
         ))
     return conds
 
 
 _MODEL = {
     "purchases": PurchasesData,
-    "imports": Consignment,
+    # ONE ROW PER LINE for imports and logistics — see serializers.py's
+    # ROW_KEYS comment for why. `_JOINS` below joins each back to its header.
+    "imports": ConsignmentItem,
     "inventory": Stock,
-    "logistics": LogisticsConsignment,
+    "logistics": LogisticsItem,
 }
 
 _CONDITIONS = {
@@ -224,16 +238,30 @@ _CONDITIONS = {
     "logistics": _logistics_conditions,
 }
 
-# The eager loads each type's row serializer needs (master names, item lines).
+# Only the two line-based types need a join back to their header — every
+# condition and serialized column that reads a header field (supplier,
+# clearing agent, freight cost, ...) depends on it being in the query already.
+_JOINS = {
+    "imports": lambda stmt: stmt.join(ConsignmentItem.consignment),
+    "logistics": lambda stmt: stmt.join(LogisticsItem.consignment),
+}
+
+# The eager loads each type's row serializer needs (master names, related
+# header). `contains_eager` would need the join columns selected too, so this
+# stays a plain `joinedload` off the relationship path — a second join, but
+# skipping it would N+1 the header lookup for every one of a page's lines.
 _OPTIONS = {
     "purchases": lambda: (joinedload(PurchasesData.item),),
     "imports": lambda: (
-        joinedload(Consignment.branch),
-        joinedload(Consignment.supplier),
-        selectinload(Consignment.items).joinedload(ConsignmentItem.item),
+        joinedload(ConsignmentItem.item),
+        joinedload(ConsignmentItem.consignment).joinedload(Consignment.branch),
+        joinedload(ConsignmentItem.consignment).joinedload(Consignment.supplier),
+        joinedload(ConsignmentItem.consignment).joinedload(Consignment.clearing_agent),
+        joinedload(ConsignmentItem.consignment).joinedload(Consignment.loading_port),
+        joinedload(ConsignmentItem.consignment).joinedload(Consignment.delivery_port),
     ),
     "inventory": lambda: (joinedload(Stock.item),),
-    "logistics": lambda: (selectinload(LogisticsConsignment.items),),
+    "logistics": lambda: (joinedload(LogisticsItem.consignment),),
 }
 
 
@@ -241,9 +269,14 @@ def conditions_for(report_type, filters):
     return _CONDITIONS[report_type](filters)
 
 
+def _apply_join(stmt, report_type):
+    join = _JOINS.get(report_type)
+    return join(stmt) if join else stmt
+
+
 def count_for(db, report_type, conds):
     model = _MODEL[report_type]
-    stmt = select(func.count()).select_from(model)
+    stmt = _apply_join(select(func.count(model.id)).select_from(model), report_type)
     if conds:
         stmt = stmt.where(*conds)
     return db.execute(stmt).scalar() or 0
@@ -251,7 +284,7 @@ def count_for(db, report_type, conds):
 
 def fetch_slice(db, report_type, conds, offset, limit):
     model = _MODEL[report_type]
-    stmt = select(model).options(*_OPTIONS[report_type]())
+    stmt = _apply_join(select(model), report_type).options(*_OPTIONS[report_type]())
     if conds:
         stmt = stmt.where(*conds)
     stmt = stmt.order_by(model.id).offset(offset).limit(limit)
@@ -262,7 +295,7 @@ def fetch_all(db, report_type, conds, cap):
     # For export: the whole filtered set, capped so a runaway filter can't pull
     # the entire database into memory.
     model = _MODEL[report_type]
-    stmt = select(model).options(*_OPTIONS[report_type]())
+    stmt = _apply_join(select(model), report_type).options(*_OPTIONS[report_type]())
     if conds:
         stmt = stmt.where(*conds)
     stmt = stmt.order_by(model.id).limit(cap)
