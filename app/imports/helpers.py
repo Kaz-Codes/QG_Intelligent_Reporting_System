@@ -767,6 +767,16 @@ REQUISITION_REQUIRED = {
     "Others": [("description", "Description")],
 }
 
+# Requisition types exempt from the item-code rule below — "Others" items are
+# not drawn from the item master, so there is often no code to give. A set
+# (not a bare "Others" check) so a future exempt type is a one-line change
+# here rather than a second if-statement.
+#
+# MIRRORED ON THE FRONT END: React_Frontend-main/frontend/src/features/
+# importsStatus/schema.ts (superRefine, keyed off the lowercase
+# requisitionType) makes the same field optional. Keep both in sync.
+ITEM_CODE_NOT_REQUIRED_FOR = {"Others"}
+
 
 #---------------------------------------
 # STORED COMPUTED VALUES
@@ -839,7 +849,7 @@ def submission_errors(consignment):
     for index, item in enumerate(active_items, start=1):
         if not item.item_name:
             errors.append(f"Item {index}: item name is required")
-        if not item.item_code:
+        if not item.item_code and item.requisition_type not in ITEM_CODE_NOT_REQUIRED_FOR:
             errors.append(f"Item {index}: item code is required")
         if item.quantity is None:
             errors.append(f"Item {index}: quantity is required")

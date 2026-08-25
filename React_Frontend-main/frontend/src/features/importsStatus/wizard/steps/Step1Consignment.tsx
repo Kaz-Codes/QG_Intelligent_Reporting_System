@@ -1,4 +1,4 @@
-import { useFormContext, useFieldArray } from 'react-hook-form'
+import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
 import {
   type ConsignmentDraft, type ConsignmentItem,
   REQUISITION_TYPES, REQUISITION_FIELDS, CONSIGNMENT_TYPES, UNITS_OF_MEASURE, INCOTERMS,
@@ -18,6 +18,33 @@ const REQ_LEAD: Record<string, string> = {
   store: 'Store item — reference number can be added later',
   engineering: 'Engineering item — reference, job and MO numbers can be added later',
   others: 'Describe what this item is for',
+}
+
+/**
+ * Item code, required for every item except "Others" — those aren't drawn
+ * from the item master, so there's often no code to give. Its own component
+ * so `useWatch` can scope to this one item's requisitionType without
+ * re-rendering the whole item list on every keystroke (the pattern used for
+ * per-row reactive reads elsewhere, e.g. trucking's PackageAllocation).
+ *
+ * MIRRORED ON THE BACKEND: app/imports/helpers.py (submission_errors,
+ * ITEM_CODE_NOT_REQUIRED_FOR) makes the same field optional, keyed off the
+ * capitalised requisition type. Keep both in sync.
+ */
+function ItemCodeField({ index, error }: { index: number; error?: string }) {
+  const { register, control } = useFormContext<ConsignmentDraft>()
+  const requisitionType = useWatch({ control, name: `items.${index}.requisitionType` })
+  const optional = requisitionType === 'others'
+
+  return (
+    <Field label="Item code" required={!optional} error={error}>
+      <Input
+        {...register(`items.${index}.itemCode`)}
+        placeholder={optional ? 'Optional for Others' : undefined}
+        autoComplete="off"
+      />
+    </Field>
+  )
 }
 
 /**
@@ -152,9 +179,7 @@ export function Step1Consignment() {
                     <Field label="Placeholder name" hint="Optional nickname" span>
                       <Input {...register(`items.${i}.placeholderName`)} placeholder="e.g. “blue drum”" autoComplete="off" />
                     </Field>
-                    <Field label="Item code" required error={errors.items?.[i]?.itemCode?.message}>
-                      <Input {...register(`items.${i}.itemCode`)} autoComplete="off" />
-                    </Field>
+                    <ItemCodeField index={i} error={errors.items?.[i]?.itemCode?.message} />
                     <Field label="H.S. code" hint="Optional now">
                       <Input {...register(`items.${i}.hsCode`)} placeholder="0000.00.00" className="tabular-nums" autoComplete="off" />
                     </Field>

@@ -399,7 +399,13 @@ export const consignmentSubmitSchema = consignmentDraftSchema.superRefine((v, ct
 
   v.items.forEach((item, i) => {
     if (!item.itemName) need(['items', i, 'itemName'], 'Item name is required')
-    if (!item.itemCode) need(['items', i, 'itemCode'], 'Item code is required')
+    // "Others" items aren't drawn from the item master, so there's often no
+    // code to give. MIRRORED ON THE BACKEND: app/imports/helpers.py
+    // (submission_errors, ITEM_CODE_NOT_REQUIRED_FOR) makes the same field
+    // optional, keyed off the capitalised requisition type. Keep both in sync.
+    if (!item.itemCode && item.requisitionType !== 'others') {
+      need(['items', i, 'itemCode'], 'Item code is required')
+    }
     if (item.quantity === undefined) need(['items', i, 'quantity'], 'Quantity is required')
     if (!item.uom) need(['items', i, 'uom'], 'Unit of measure is required')
 
