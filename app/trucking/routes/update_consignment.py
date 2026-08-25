@@ -6,7 +6,7 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_TRUCKING
 from app.trucking.helpers import (
-    updated_fields, verify_entry_ownership, apply_updates, new_vehicles_to_add,
+    updated_fields, apply_updates, new_vehicles_to_add,
     updated_vehicles, delete_missing, add_in_consignment_change_history,
     fetch_consignment, resolve_transporter_id,
 )
@@ -49,8 +49,6 @@ def update_consignment(
                 status_code=423,
                 detail="This trucking job is closed. An admin must reopen it before it can be edited."
             )
-
-        verify_entry_ownership(consignment, user, db)
 
         updation_dict = updated_fields(consignment, consignment_data, db)
         new_vehicles = new_vehicles_to_add(consignment, consignment_data)

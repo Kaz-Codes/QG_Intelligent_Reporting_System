@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS
-from app.imports.helpers import fetch_consignment, verify_entry_ownership, submission_errors, is_closed
+from app.imports.helpers import fetch_consignment, submission_errors, is_closed
 from app.imports.serializers import serialize_consignment
 import logging
 
@@ -59,8 +59,6 @@ def submit_consignment(
                 status_code=423,
                 detail="This consignment is closed. An admin must reopen it first."
             )
-
-        verify_entry_ownership(consignment, user, db)
 
         errors = submission_errors(consignment)
 

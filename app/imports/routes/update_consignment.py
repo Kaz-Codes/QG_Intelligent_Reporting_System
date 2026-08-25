@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, verify_entry_ownership, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived
 
 from app.imports.helpers import fetch_consignment
 from app.imports.models import ConsignmentItem, Payment
@@ -47,8 +47,6 @@ def update_consignment(
                 status_code=423,
                 detail="This consignment is closed. An admin must reopen it before it can be edited."
             )
-
-        verify_entry_ownership(consignment, user, db)
 
         updation_dict = updated_fields(consignment, consignment_data, db)
         new_items = new_items_to_add(consignment, consignment_data)

@@ -6,7 +6,7 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_LOGISTICS
 from app.logistics.helpers import (
-    updated_fields, verify_entry_ownership, apply_updates,
+    updated_fields, apply_updates,
     new_children_to_add, updated_children, delete_missing,
     add_in_consignment_change_history, add_in_status_change_history,
     create_child_objects, fetch_consignment, resolve_customer_id,
@@ -50,8 +50,6 @@ def update_consignment(
                 status_code=423,
                 detail="This order is closed. An admin must reopen it before it can be edited."
             )
-
-        verify_entry_ownership(consignment, user, db)
 
         # Header field diff
         updation_dict = updated_fields(consignment, consignment_data, db)

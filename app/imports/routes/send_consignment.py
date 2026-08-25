@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS, CAN_EDIT_IMPORTS
-from app.imports.helpers import fetch_consignment, verify_entry_ownership
+from app.imports.helpers import fetch_consignment
 from app.imports.serializers import serialize_consignment
 from app.enums import Incoterm
 from datetime import datetime, timezone
@@ -58,8 +58,6 @@ def _send(request, consignment_id, field, label):
                 status_code=423,
                 detail="This consignment is closed. An admin must reopen it first."
             )
-
-        verify_entry_ownership(consignment, user, db)
 
         # FOB is what makes a consignment eligible: on other incoterms the
         # supplier arranges the onward legs, so there is nothing to hand over.

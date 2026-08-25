@@ -6,7 +6,7 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_LOGISTICS
 from app.logistics.helpers import (
     fetch_consignment, fetch_consignment_history,
-    fetch_latest_consignment_history, revert, verify_entry_ownership,
+    fetch_latest_consignment_history, revert,
     resolve_customer_id,
 )
 from app.logistics.serializers import serialize_consignment
@@ -40,9 +40,6 @@ def revert_update(
                 status_code=404,
                 detail="Order not found"
             )
-
-        # Non-admins may only revert changes on their own records.
-        verify_entry_ownership(consignment, user, db)
 
         consignment_history = fetch_consignment_history(db, consignment.id, change_history_id)
         latest_consignment_history = fetch_latest_consignment_history(db, consignment.id)

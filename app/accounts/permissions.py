@@ -11,6 +11,14 @@ Names are used verbatim as the `Permission.name` values seeded at startup and as
 the strings the frontend sends when creating/editing an account, so they must
 match on both sides. Reference the constants (not raw strings) in routes so a
 typo is a loud NameError, not a silent 403.
+
+Edit permissions are RECORD-AGNOSTIC: holding a `can_edit_*` permission lets a
+user edit ANY record in that module, not only ones they created. There used to
+be an additional ownership check (`verify_entry_ownership`) layered on top of
+`authorize()` restricting edit/submit/revert to a user's own records; it was
+removed because it broke the shared operational workflow this system supports
+and hard-locked any record whose creator had since been deactivated.
+`created_by_id` is still recorded on every record (audit trail only).
 """
 
 # --- imports consignments ---

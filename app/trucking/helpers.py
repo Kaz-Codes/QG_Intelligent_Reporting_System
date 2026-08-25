@@ -1,4 +1,3 @@
-from fastapi import HTTPException
 from sqlalchemy import select, func, or_, and_, exists
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.inspection import inspect
@@ -32,22 +31,6 @@ def coerce_value(model, field, value):
     if col_type == "Numeric" and not isinstance(value, Decimal):
         return Decimal(str(value))
     return value
-
-
-#----------------------------------
-# ADMINS MAY TOUCH ANY JOB; EVERYONE
-# ELSE ONLY THE ONES THEY CREATED.
-#----------------------------------
-
-def verify_entry_ownership(consignment, user, db):
-    if user.is_admin:
-        return
-
-    if consignment.created_by_id != user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="This entry does not belong to you"
-        )
 
 
 #-------------------------------------------------

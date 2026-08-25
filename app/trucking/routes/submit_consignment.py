@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING
-from app.trucking.helpers import fetch_consignment, verify_entry_ownership, submission_errors, is_closed
+from app.trucking.helpers import fetch_consignment, submission_errors, is_closed
 from app.trucking.serializers import serialize_consignment
 import logging
 
@@ -53,8 +53,6 @@ def submit_consignment(
                 status_code=423,
                 detail="This trucking job is closed. An admin must reopen it first."
             )
-
-        verify_entry_ownership(consignment, user, db)
 
         errors = submission_errors(consignment)
 

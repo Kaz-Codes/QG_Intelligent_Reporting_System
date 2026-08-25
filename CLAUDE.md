@@ -136,10 +136,14 @@ explicit set of **permissions**. Users ⇆ permissions is many-to-many
 - `POST /auth/login` verifies credentials and sets an httpOnly cookie; `POST /auth/logout` clears it. The token carries only the user id.
 - `authenticate(request)` reads the cookie and returns the user payload (401 if missing/invalid).
 - `authorize(user_payload, permission, db)` — passes if the user **is_admin** OR holds `permission`; 403 otherwise. `permission` is one name **or a list** (any-of; e.g. Submit needs `can_add_*` OR `can_edit_*`). Returns the user.
-- `require_admin(user_payload, db)` — admin-only routes: **account management, the activity-log feed, and reopening a closed record**. No permission grants these.
-- **Entry-ownership**: `verify_entry_ownership` lets an **admin** touch any
-  record but restricts everyone else to records they created — applied to edit,
-  submit, delete, undo-delete and revert (view is not ownership-scoped).
+- `require_admin(user_payload, db)` — admin-only routes: **account management, the activity-log feed, deleting/undoing a delete, and reopening a closed record**. No permission grants these.
+- **Edit permissions are record-agnostic.** Holding `can_edit_*` lets a user
+  edit, submit or revert ANY record in that module, not only ones they
+  created — there used to be an additional ownership check
+  (`verify_entry_ownership`) restricting this to a user's own records, removed
+  because it broke the shared operational workflow this system supports and
+  hard-locked any record whose creator had since been deactivated.
+  `created_by_id` is still recorded on create (audit trail only).
 - Enforced **server-side** on every route. The frontend hiding something is UX, never the security boundary.
 
 ### The permission catalogue
@@ -149,8 +153,8 @@ explicit set of **permissions**. Users ⇆ permissions is many-to-many
 `can_{view,add,edit}_master` · `can_make_reports` · `can_use_assistant`.
 
 Mapping: create→`can_add_*`, list/get/export/history→`can_view_*`,
-update→`can_edit_*` (+own), delete/undo-delete→`can_delete_*` (+own),
-submit→`can_add_*|can_edit_*` (+own), reopen→admin-only. Masters read→
+update→`can_edit_*`, delete/undo-delete→`can_delete_*`,
+submit→`can_add_*|can_edit_*`, reopen→admin-only. Masters read→
 `can_view_master`, inline-create→`can_add_master`, manage→`can_edit_master`.
 Reports (data/export/options + saved templates)→`can_make_reports` (saved
 edit/delete restricted to the owner or an admin). Viewing needs the matching
@@ -1030,7 +1034,7 @@ recording each in the change history so it can be undone.
 **Change history + field-level revert.** Every update writes one
 `*ChangeHistory` row whose `history` JSON holds the pre-change values (header
 `fields`, plus per-collection `new_*` / `deleted_*` / updated diffs). Revert
-(`can_edit_*` + own-record, latest-first) writes the old values back, re-adds soft-deleted
+(`can_edit_*`, latest-first) writes the old values back, re-adds soft-deleted
 lines and soft-deletes added ones. The engine's `json_serializer` uses
 `default=str`, so Decimals/dates serialize into JSON as strings; `coerce_value`
 turns them back on revert.
