@@ -57,6 +57,11 @@ load_dotenv()
 # already), the four roles the whole system is built around are put in, and
 # a first admin account is created from the credentials in the .env file so
 # there is somebody to log in as.
+#
+# create_all only ever creates a MISSING table — it never alters a column on
+# one that already exists, so it's kept here only to boot a brand-new empty
+# database. Alembic (alembic/) is the source of truth for schema changes now
+# — see "Database migrations" in CLAUDE.md.
 #-----------------------------------------------------
 
 def create_tables():

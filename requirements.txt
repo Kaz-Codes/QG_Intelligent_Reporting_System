@@ -20,6 +20,10 @@ sqlalchemy
 # (app/loading/database_connection.py). The -binary build ships wheels, so no
 # local libpq/compiler is needed.
 psycopg2-binary
+# Schema migrations (alembic/). create_all() only ever creates missing
+# tables — it never alters an existing one — so column/index changes on a
+# table that already exists go through a migration instead.
+alembic
 
 # --- auth ---
 # JWT for the httpOnly session cookie (app/auth). HS256 is symmetric, so the

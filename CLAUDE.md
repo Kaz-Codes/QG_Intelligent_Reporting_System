@@ -24,9 +24,10 @@ stack — do not reintroduce Django/templates.
 - Pydantic schemas for request bodies; plain dict serializers for responses.
 - Cookie-based auth (an httpOnly session cookie set by `/auth/login`).
 - Excel export via **openpyxl**. No server-side PDF (the frontend prints/exports client-side).
-- **No migration tool** — `Base.metadata.create_all()` runs on startup. Schema
-  changes therefore need the tables dropped & recreated (or manual `ALTER`).
-  `create_all` only creates missing tables; it never adds/drops columns.
+- `Base.metadata.create_all()` still runs on startup and still only creates
+  missing tables — it never adds/drops/alters a column on a table that
+  already exists. **Alembic** (`alembic/`) is the source of truth for schema
+  changes now — see **Database migrations** below.
 
 **Frontend** (`React_Frontend-main/frontend/`)
 - React + Vite + TypeScript, React Router, **@tanstack/react-query**, react-hook-form + zod, Tailwind.
@@ -78,6 +79,49 @@ Route files self-register by importing the shared `router` and decorating it;
 whole module. **Ordering matters** where a literal path could be captured by a
 param path: `GET /export`, `GET /open-requests` etc. are imported **before**
 `get_consignment` (`GET /{consignment_id}`), or FastAPI 422s on the int param.
+
+---
+
+## Database migrations
+
+`create_all()` (still run on every startup, see above) only ever creates a
+table that doesn't exist yet — it silently does nothing for a new column, a
+changed type, or a dropped column on a table that's already there. **Alembic**
+closes that gap and is the source of truth for schema changes going forward;
+`create_all()` stays only so a brand-new empty database still boots.
+
+- `alembic/env.py` imports `Base` from `app.database` plus every model module
+  (`accounts`, `masters`, `imports`, `logistics`, `trucking`, `logs`,
+  `reports`, `loading.schemas.stores_schemas` — the same set `app/main.py`
+  imports) so autogenerate sees the whole schema, and builds the connection
+  URL from the same `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` env
+  vars `app/database.py` reads — the URL is never hardcoded in `alembic.ini`.
+- **chatbot_backend's tables are deliberately excluded.** `chatbot_messages` /
+  `chatbot_conversations` live in the same Postgres database but are owned and
+  migrated by the separate chatbot service (its own `.env`, its own code), not
+  by this app's models. `env.py`'s `include_object` filter skips any reflected
+  table that has no counterpart in `Base.metadata`, so autogenerate never
+  proposes dropping them.
+- The first revision (`baseline`) is deliberately **empty** — `pass` in both
+  `upgrade()` and `downgrade()`. The production database already has this
+  schema (built by `create_all()` and loaded from Excel), and autogenerate
+  confirmed zero drift against the models, so there is nothing to create.
+  It exists only to give every environment a shared starting point.
+
+**Workflow:**
+```
+# after changing a model:
+alembic revision --autogenerate -m "describe the change"
+# review the generated file — autogenerate is a first draft, not a fact —
+# then apply it:
+alembic upgrade head
+```
+
+A database that already has the schema (e.g. anything migrated from before
+Alembic existed) should be stamped rather than migrated the first time:
+`alembic stamp head`. **Running the pending migrations is now a required
+deploy step** — a code change that adds/renames/drops a column is not fully
+deployed until `alembic upgrade head` has run against that environment.
 
 ---
 
