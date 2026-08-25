@@ -81,6 +81,10 @@ export interface ApiTruckingJob {
   dispatch_note_date: string | null
   eta_works: string | null
   remarks: string | null
+  /** Generated server-side from the taken-from hand-off, the vehicles'
+   *  current tracking statuses, and the dispatch/ETA works dates — never
+   *  stored, never sent back. */
+  system_remarks: string | null
 
   record_state: string
   is_locked: boolean

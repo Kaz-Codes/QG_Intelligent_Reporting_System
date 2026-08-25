@@ -1,5 +1,69 @@
 from sqlalchemy.inspection import inspect
 
+from app.enums import VehicleTrackingStatus
+
+
+#----------------------------------------
+# AUTO-GENERATED SYSTEM REMARKS
+#
+# Mirrors app/imports/serializers.py::build_system_remarks — derived on read,
+# never stored, never accepted from the client, so a user edit can't wipe it
+# and it is always current.
+#
+# Trucking has NEITHER an ETA-revision table NOR a status-history table —
+# unlike imports/logistics there is no stored job-level status at all (see
+# the module docstring in models.py): each vehicle carries its own
+# tracking_status, with no log of its past values, only the current one. So
+# there is no "status changed on date X" sentence to build here; instead this
+# states the hand-off this job was taken from (source/source_ref/taken_at)
+# and a same-instant rollup of the vehicles' CURRENT tracking statuses — the
+# only "status" data this module actually keeps.
+#----------------------------------------
+
+_SOURCE_LABELS = {
+    "from-logistics": "a Logistics order",
+    "from-import-fob": "an Import FOB consignment",
+    "from-export": "an Export order",
+}
+
+
+def build_system_remarks(consignment):
+    parts = []
+
+    # Where the job came from, if taken from an open request.
+    if consignment.source and consignment.source != "manual" and consignment.source_ref:
+        label = _SOURCE_LABELS.get(consignment.source, consignment.source)
+        if consignment.taken_at:
+            parts.append(f"Taken from {label} {consignment.source_ref} on {consignment.taken_at:%Y-%m-%d}.")
+        else:
+            parts.append(f"Taken from {label} {consignment.source_ref}.")
+
+    # Current tracking status per vehicle — the only "status" trucking keeps;
+    # there is no history of past values to chain, only today's snapshot.
+    active_vehicles = [v for v in consignment.vehicles if not v.is_deleted]
+    if active_vehicles:
+        order = [s.value for s in VehicleTrackingStatus]
+        counts = {}
+        for vehicle in active_vehicles:
+            counts[vehicle.tracking_status] = counts.get(vehicle.tracking_status, 0) + 1
+        total = len(active_vehicles)
+
+        if len(counts) == 1:
+            status = next(iter(counts))
+            parts.append(f"All {total} vehicle{'s' if total != 1 else ''} {status.lower()}.")
+        else:
+            ordered_statuses = [s for s in order if s in counts] + [s for s in counts if s not in order]
+            breakdown = ", ".join(f"{counts[s]} {s.lower()}" for s in ordered_statuses)
+            parts.append(f"{total} vehicles — {breakdown}.")
+
+    if consignment.dispatch_note_date:
+        parts.append(f"Dispatch note issued {consignment.dispatch_note_date}.")
+
+    if consignment.eta_works:
+        parts.append(f"ETA works {consignment.eta_works}.")
+
+    return " ".join(parts)
+
 
 #---------------------------------------
 # CONVERT SQL ALCHEMY MODEL OBJECTS
@@ -19,6 +83,7 @@ def serialize_consignment(consignment):
 
     data["vehicles"] = serialize_many(consignment.vehicles)
     data["change_history"] = serialize_many(consignment.change_history)
+    data["system_remarks"] = build_system_remarks(consignment)
 
     data["created_by"] = consignment.created_by.username if consignment.created_by else None
     data["deleted_by"] = consignment.deleted_by.username if consignment.deleted_by else None

@@ -130,6 +130,8 @@ export interface LogisticsListRow {
   sentToTrucking: boolean
   /** Header remarks feed, stored whole as JSON. */
   remarksLog: RemarkEntry[]
+  /** Generated server-side, read-only — see ApiLogisticsOrder.system_remarks. */
+  systemRemarks: string
   /** 'draft' | 'submitted' — drives the Submitted column. */
   recordState: string
   /** Closed lock: set once the order reaches "Delivered". Drives the Closed
@@ -266,6 +268,7 @@ export function apiToRow(o: ApiLogisticsOrder): LogisticsListRow {
     status: o.current_status ?? '',
     sentToTrucking: !!o.sent_to_trucking,
     remarksLog: jsonArray<RemarkEntry>(o.remarks_log),
+    systemRemarks: o.system_remarks ?? '',
     recordState: o.record_state,
     isLocked: !!o.is_locked,
     // Soft-deleted rows are only ever FETCHED for an admin (includeDeleted on
@@ -476,6 +479,7 @@ export function apiToDraft(o: ApiLogisticsOrder): LogisticsDraft {
 
     status: row.status,
     remarksLog: row.remarksLog,
+    systemRemarks: row.systemRemarks,
     gateOutDate: row.gateOutDate ?? '',
     sentToTrucking: row.sentToTrucking,
   } as LogisticsDraft

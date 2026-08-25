@@ -10,6 +10,7 @@ const selectClass =
 export function Step4Tracking() {
   const { register, control } = useFormContext<TruckingDraft>()
   const vehicles = useWatch({ control, name: 'vehicles' })
+  const systemRemarks = useWatch({ control, name: 'systemRemarks' })
   const rollup = trackingRollup(vehicles)
 
   return (
@@ -59,6 +60,16 @@ export function Step4Tracking() {
           <p className="text-xs text-muted">Delivered fraction · slowest (least-advanced) vehicle stage</p>
         </div>
         <span className="text-sm font-semibold text-ink">{rollup.label}</span>
+      </div>
+
+      {/* Generated server-side (app/trucking/serializers.py::
+          build_system_remarks) from the taken-from hand-off and the
+          vehicles' current tracking statuses — read-only, never sent back. */}
+      <div className="flex flex-col gap-1.5">
+        <Label>System Remarks</Label>
+        <div className="rounded-lg border border-line bg-canvas-alt px-3 py-2.5 text-[13px] leading-relaxed text-ink/80">
+          {systemRemarks || 'No system-generated history yet.'}
+        </div>
       </div>
 
       <div className="flex flex-col gap-1.5">

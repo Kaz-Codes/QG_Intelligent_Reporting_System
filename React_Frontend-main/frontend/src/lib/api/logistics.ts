@@ -103,6 +103,9 @@ export interface ApiLogisticsOrder {
   sent_to_trucking: boolean
   /** Header remarks feed, stored whole as JSON. */
   remarks_log: unknown
+  /** Generated server-side from status_updates, the trucking hand-off and
+   *  every item's RFD change log — never stored, never sent back. */
+  system_remarks: string | null
 
   record_state: string
   is_locked: boolean

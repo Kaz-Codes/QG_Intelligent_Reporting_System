@@ -32,11 +32,19 @@ function DerivedField({ label, value, derivation }: { label: string; value: stri
  * Adds, on top of the plain status select:
  *   - a derived, read-only Marketing Delay (packing date − gate out date,
  *     falling back to − today);
- *   - a chronological remarks FEED (buildRemarksFeed) merging user-entered
- *     entries with system-generated ones from every item's RFD change log —
- *     system entries are tagged and locked to everyone except an admin, who
- *     may only edit the entry's own text/remark, never who/when/the
- *     underlying date values;
+ *   - a read-only System Remarks block: generated SERVER-SIDE (see
+ *     app/logistics/serializers.py::build_system_remarks) from status_updates,
+ *     the trucking hand-off and every item's RFD change log, so it can't be
+ *     forged, exists for Excel-loaded rows, and can't drift from what the
+ *     backend actually derives. Whatever this order was loaded with — a
+ *     brand-new one has nothing yet, since the server hasn't generated it
+ *     until the first save;
+ *   - a chronological user REMARKS feed (buildRemarksFeed) — the stored
+ *     remarksLog, sorted. Any legacy `system: true` rows an order already had
+ *     before system remarks moved server-side are still shown here (tagged,
+ *     and locked to everyone except an admin, who may only edit the entry's
+ *     own text/remark, never who/when/the underlying date values); no new
+ *     ones are added;
  *   - a one-way "Send to Trucking" handoff — unchecking an already-saved
  *     true value requires a distinct confirmation, since that pulls the
  *     request back out of Trucking Status;
@@ -54,12 +62,13 @@ export function Step5Status() {
   const packages = (useWatch({ control, name: 'packages' }) ?? []) as LogisticsPackage[]
   const gateOutDate = useWatch({ control, name: 'gateOutDate' })
   const remarksLog = (useWatch({ control, name: 'remarksLog' }) ?? []) as RemarkEntry[]
+  const systemRemarks = useWatch({ control, name: 'systemRemarks' })
   const sentToTrucking = useWatch({ control, name: 'sentToTrucking' })
 
   const { append: appendRemark } = useFieldArray({ control, name: 'remarksLog' })
 
   const delay = marketingDelay(packages, gateOutDate)
-  const feed = buildRemarksFeed(items, remarksLog)
+  const feed = buildRemarksFeed(remarksLog)
   const isAdmin = canEditRemark(user?.isAdmin ? 'admin' : 'user')
 
   // Whether sentToTrucking was already true when the wizard loaded this
@@ -179,6 +188,18 @@ export function Step5Status() {
             )}
           </div>
         )}
+      </section>
+
+      {/* System remarks — generated server-side, read-only */}
+      <section className="rounded-xl border border-line bg-surface">
+        <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          System Remarks
+        </h3>
+        <div className="p-4">
+          <div className="rounded-lg border border-line bg-canvas-alt px-3 py-2.5 text-[13px] leading-relaxed text-ink/80">
+            {systemRemarks || 'No system-generated history yet.'}
+          </div>
+        </div>
       </section>
 
       {/* Remarks feed */}

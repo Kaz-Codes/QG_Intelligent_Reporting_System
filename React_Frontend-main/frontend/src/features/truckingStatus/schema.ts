@@ -279,6 +279,10 @@ export const trackingSchema = z.object({
   dispatchNoteDate: z.string().optional(),
   etaWorks: z.string().optional(),
   remarks: z.string().optional(),
+  /** Generated server-side (app/trucking/serializers.py::build_system_remarks)
+   *  from the taken-from hand-off and the vehicles' current tracking
+   *  statuses. Read-only display only — never sent back, see draftToPayload. */
+  systemRemarks: z.string().default(''),
 })
 
 /**
@@ -339,6 +343,7 @@ export const DRAFT_DEFAULT_VALUES: TruckingDraft = {
   dispatchNoteDate: '',
   etaWorks: '',
   remarks: '',
+  systemRemarks: '',
 }
 
 export interface WizardStepDef {

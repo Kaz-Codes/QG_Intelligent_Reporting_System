@@ -315,9 +315,16 @@ class LogisticsConsignment(Base, TimestampMixin):
     )
 
     # A feed of remark entries: {id, text, authored_by, authored_at, system}.
-    # System entries are generated on the front end (e.g. from RFD changes);
-    # user entries are typed. Stored whole, so it is one field to read and
-    # write.
+    # User entries are typed; `system: true` rows are LEGACY — the front end
+    # used to synthesize one per RFD change and merge it into the feed
+    # in-memory (never actually written back here, so none of this table's
+    # rows should carry one from that code path, but any that predate it are
+    # kept as-is). System remarks are now generated on read, server-side (see
+    # serializers.build_system_remarks), which also covers Excel-loaded rows
+    # this JSON feed never had anything for. Any `system: true` rows already
+    # in this column are real historical data and stay untouched — the
+    # detail view renders them alongside the generated system_remarks, not
+    # instead of it.
     remarks_log: Mapped[list] = mapped_column(
         JSON,
         default=list,

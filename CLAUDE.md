@@ -304,6 +304,16 @@ rather than their own tables: per-item `rfd_history`, per-package `allocations`
 `remarks_log` feed. MO/batch numbering and cross-batch resolution are
 frontend-driven — the backend stores what it's given.
 
+**System remarks are generated server-side** (`serializers.build_system_remarks`,
+mirroring imports rule 6) from `status_updates`, the `sent_to_trucking` hand-off
+and every item's `rfd_history` — derived on read, never stored, never accepted
+from the client. `remarks_log` holds user entries only going forward; the front
+end used to synthesize `system: true` rows into it in-memory on every render
+(never actually persisting one), so that generation is gone from
+`buildRemarksFeed`. Any `system: true` rows an order already has from before
+this change are real historical data and are shown **alongside** the generated
+`system_remarks`, not replaced by it.
+
 Endpoints mirror imports (`POST /`, `GET /`, `GET /export`, `GET /filter-options`,
 `GET /{id}`, `GET /{id}/trucking-jobs`, `PUT`, `POST /{id}/submit`,
 `POST /{id}/reopen`, `DELETE`, undo-delete, change-history, revert).
@@ -381,6 +391,14 @@ alone. Only `POST /{id}/submit` sets `is_locked`; the update route never closes
 a job. `serialize_consignment` returns `missing_fields`, and the history
 serializer returns `changed_at` (both imported inside the function to dodge the
 helpers cycle).
+
+**System remarks** are generated server-side too (`serializers.build_system_remarks`,
+mirroring imports rule 6 and logistics), but trucking has neither an
+ETA-revision nor a status-history table to chain — there is no stored
+job-level status at all (above). So instead of a dated narrative, it states
+where the job was taken from (`source`/`source_ref`/`taken_at`) and a
+same-instant rollup of the vehicles' CURRENT tracking statuses, the only
+"status" data this module keeps.
 
 **Frontend is wired**: `lib/api/trucking.ts`, `truckingMap.ts`,
 `truckingChangeHistoryMap.ts` — list, detail, wizard and change history all on

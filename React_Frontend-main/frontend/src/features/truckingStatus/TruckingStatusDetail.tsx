@@ -322,6 +322,15 @@ export function TruckingStatusDetail() {
         )}
       </Section>
 
+      {/* Generated server-side (build_system_remarks) — never stored, never
+          editable. Always shown, unlike the user Remarks section below, to
+          match ImportsStatusDetail's system-remarks block. */}
+      <Section title="System Remarks">
+        <div className="rounded-lg border border-line bg-canvas-alt px-3 py-2.5 text-[13px] leading-relaxed text-ink/80">
+          {row.systemRemarks || 'No system-generated history yet.'}
+        </div>
+      </Section>
+
       {row.remarks && (
         <Section title="Remarks">
           <p className="text-sm leading-relaxed text-ink/80">{row.remarks}</p>

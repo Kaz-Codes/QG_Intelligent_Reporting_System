@@ -205,7 +205,7 @@ export default function LogisticsStatusDetail() {
   const totalPkgNet = totalPackageNetWeight(row.packages, allItems)
   const totalPkgGross = totalPackageGrossWeight(row.packages)
   const mDelay = marketingDelay(row.packages, row.gateOutDate)
-  const feed = buildRemarksFeed(row.items, row.remarksLog)
+  const feed = buildRemarksFeed(row.remarksLog)
 
   // How much of each item is still unallocated. Computed here rather than via
   // the mock's outstandingByItemAcrossMo, which keys on the mock system id;
@@ -565,6 +565,15 @@ export default function LogisticsStatusDetail() {
               })}
             </div>
           )}
+        </div>
+
+        {/* Generated server-side (build_system_remarks) — never stored, never
+            editable. Legacy `system: true` rows already in remarksLog (from
+            before system remarks moved server-side) still render below,
+            alongside this rather than instead of it — they're real history
+            for existing orders and are never regenerated or removed. */}
+        <div className="mt-3 rounded-lg border border-line bg-canvas-alt px-3 py-2.5 text-[13px] leading-relaxed text-ink/80">
+          {row.systemRemarks || 'No system-generated history yet.'}
         </div>
 
         {feed.length > 0 && (

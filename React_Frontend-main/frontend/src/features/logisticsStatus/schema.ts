@@ -259,6 +259,10 @@ export type RemarkEntry = z.infer<typeof remarkEntrySchema>
 export const statusSchema = z.object({
   status: z.string().min(1, 'Status is required'),
   remarksLog: z.array(remarkEntrySchema).default([]),
+  /** Generated server-side (app/logistics/serializers.py::build_system_remarks)
+   *  from status_updates, the trucking hand-off and every item's RFD change
+   *  log. Read-only display only — never sent back, see draftToPayload. */
+  systemRemarks: z.string().default(''),
   gateOutDate: z.string().optional(),
   sentToTrucking: z.boolean().default(false),
 })
@@ -336,6 +340,7 @@ export const DRAFT_DEFAULT_VALUES: LogisticsDraft = {
   seaAirFreight: 0,
   status: '',
   remarksLog: [],
+  systemRemarks: '',
   gateOutDate: '',
   sentToTrucking: false,
 }
@@ -576,24 +581,19 @@ export function recordRfdChange(
   return { ...item, [field]: newValue, rfdHistory: [...item.rfdHistory, event] }
 }
 
-export function formatRfdEvent(event: RfdChangeEvent, itemLabel: string): string {
-  const fieldLabel = event.field === 'plannedRfdDate' ? 'Planned RFD' : 'Actual RFD'
-  const from = event.previousValue || 'not set'
-  const when = new Date(event.changedAt).toLocaleString()
-  return `${itemLabel}: ${fieldLabel} changed from ${from} to ${event.newValue} by ${event.changedBy} on ${when}`
-}
-
-export function buildRemarksFeed(items: LogisticsItem[], remarksLog: RemarkEntry[]): RemarkEntry[] {
-  const systemEntries: RemarkEntry[] = items.flatMap((item, i) =>
-    item.rfdHistory.map((event) => ({
-      id: event.id,
-      text: formatRfdEvent(event, item.itemDetail || `Item ${i + 1}`),
-      authoredBy: event.changedBy,
-      authoredAt: event.changedAt,
-      system: true,
-    })),
-  )
-  return [...remarksLog, ...systemEntries].sort((a, b) => a.authoredAt.localeCompare(b.authoredAt))
+/**
+ * The order's remarks feed, sorted chronologically. Used to also synthesize
+ * a fresh `system: true` entry per RFD change (formatRfdEvent) on every
+ * render, merged in with the stored ones — that's now the SERVER's job (see
+ * app/logistics/serializers.py::build_system_remarks), which derives the
+ * same kind of narrative from the record's own history so it exists for
+ * Excel-loaded rows too and can't drift from what was actually saved. This
+ * just sorts what's really in remarksLog — including any `system: true` rows
+ * an order already has from before this change (real historical data, kept
+ * as-is, never regenerated or removed here).
+ */
+export function buildRemarksFeed(remarksLog: RemarkEntry[]): RemarkEntry[] {
+  return [...remarksLog].sort((a, b) => a.authoredAt.localeCompare(b.authoredAt))
 }
 
 export function canEditRemark(userRole: string): boolean {

@@ -71,6 +71,8 @@ export interface TruckingListRow {
   dispatchNoteDate?: string
   etaWorks?: string
   remarks?: string
+  /** Generated server-side, read-only — see ApiTruckingJob.system_remarks. */
+  systemRemarks?: string
 
   recordState: string
   /** Closed lock: every vehicle Delivered AND the job submitted. */
@@ -171,6 +173,7 @@ export function apiToRow(j: ApiTruckingJob): TruckingListRow {
     dispatchNoteDate: str(j.dispatch_note_date),
     etaWorks: str(j.eta_works),
     remarks: str(j.remarks),
+    systemRemarks: str(j.system_remarks),
 
     recordState: j.record_state,
     isLocked: !!j.is_locked,
@@ -348,6 +351,7 @@ export function apiToDraft(j: ApiTruckingJob): TruckingDraft {
     dispatchNoteDate: row.dispatchNoteDate ?? '',
     etaWorks: row.etaWorks ?? '',
     remarks: row.remarks ?? '',
+    systemRemarks: row.systemRemarks ?? '',
   } as TruckingDraft
 }
 
