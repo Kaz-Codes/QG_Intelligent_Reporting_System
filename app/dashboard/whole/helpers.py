@@ -16,8 +16,10 @@ from app.reports.helpers import SHAFT_ITEMS
 from app.dashboard.stock_runway import RUNWAY_WINDOW_DAYS, runway_window
 from app.dashboard.period import (
     coverage, PURCHASES_DATE_DEFAULT as SHARED_PURCHASES_DATE_DEFAULT,
+    AGED_REQUEST_WARNING_DAYS, AGED_REQUEST_CRITICAL_DAYS,
 )
 from app.dashboard.inventory.helpers import PURCHASES_BRANCH_TO_STOCK_BRANCH
+from app.cross_module import count_aged_open_requests
 
 #-----------------------------------------------------
 # OVERVIEW DASHBOARD QUERIES
@@ -319,6 +321,23 @@ def trucking_date_coverage(db, date_field=None):
         select(func.count(column), func.count(TruckingConsignment.id))
         .where(TruckingConsignment.is_deleted.is_(False))
     ).one()
+
+
+def aged_open_requests(db):
+    """(warning_count, critical_count) open trucking requests nobody has
+    actioned yet — NOT windowed, unlike the rest of this section, because a
+    backlog of unactioned hand-offs is a right-now operational fact, not
+    something that happened "during" a period.
+
+    Delegates to cross_module.count_aged_open_requests, which owns the
+    open/not-taken definition (the same one GET /trucking/open-requests
+    uses) and the AGED_REQUEST_WARNING_DAYS / AGED_REQUEST_CRITICAL_DAYS
+    thresholds — duplicating either here would risk this tile disagreeing
+    with the list it summarises.
+    """
+    return count_aged_open_requests(
+        db, AGED_REQUEST_WARNING_DAYS, AGED_REQUEST_CRITICAL_DAYS
+    )
 
 
 def imports_in_process_by_stage(db, date_from=None, date_to=None,

@@ -66,6 +66,25 @@ PURCHASES_DATE_DEFAULT = "purchase"
 
 DEAD_STOCK_WINDOW_DAYS = 365
 
+#-----------------------------------------------------
+# HOW LONG AN OPEN TRUCKING REQUEST CAN SIT BEFORE IT'S "AGED"
+#
+# Nothing used to detect a hand-off nobody actioned — a consignment or order
+# sent to trucking could sit in the open-requests inbox indefinitely with no
+# alert, a real process failure the system was silent about.
+#
+# ONE pair of thresholds, used on both sides of the same feature: the trucking
+# open-requests list badges an individual request amber/red off these, and the
+# overview dashboard counts against the SAME two numbers — so "aged" can never
+# mean a different span of days on the list than it does on the tile that
+# summarises it. Python and the frontend cannot literally share a constant
+# across languages, so the frontend copy (lib/api/trucking.ts) is commented to
+# point back here; if these move, that comment is the reminder to move it too.
+#-----------------------------------------------------
+
+AGED_REQUEST_WARNING_DAYS = 3
+AGED_REQUEST_CRITICAL_DAYS = 7
+
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",

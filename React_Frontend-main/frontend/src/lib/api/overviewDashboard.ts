@@ -128,6 +128,20 @@ export interface OverviewLogistics extends SectionMeta {
       import_total: number
     }
   }
+  /** LIFETIME, not windowed like the rest of this section — a backlog of
+   *  trucking hand-offs nobody has actioned is a right-now fact, not
+   *  something scoped to the selected period. `count` is a SUPERSET of
+   *  `critical_count`; both thresholds ride along so a tooltip can state
+   *  them rather than a hardcoded number that could drift from what the
+   *  trucking open-requests list itself badges off (see
+   *  AGED_REQUEST_WARNING_DAYS / AGED_REQUEST_CRITICAL_DAYS in
+   *  lib/api/trucking.ts). */
+  aged_open_requests: {
+    count: number
+    critical_count: number
+    warning_days: number
+    critical_days: number
+  }
   /** One figure from each of the section's three areas, so "logistics" stops
    *  meaning "trucking". Each carries its own basis, because they rest on
    *  different — and in one case small — slices of the book. */

@@ -1,4 +1,6 @@
-from sqlalchemy import select, cast, String
+from datetime import datetime, timezone, timedelta
+
+from sqlalchemy import select, cast, String, func
 from sqlalchemy.orm import selectinload, joinedload
 
 from app.logistics.models import LogisticsConsignment
@@ -31,11 +33,28 @@ from app.trucking.models import TruckingConsignment
 # them instead of re-keying figures that exist upstream. Read-only reference
 # data only: nothing here writes them onto a vehicle, since a vehicle is not
 # an item line and the two are not 1:1.
+#
+# Each open request also carries `days_open` (see _days_open), computed from
+# the source record's own handoff timestamp — nothing used to flag a hand-off
+# nobody actioned, so a request could sit in this list indefinitely with no
+# alert. app/dashboard/period.py's AGED_REQUEST_WARNING_DAYS /
+# AGED_REQUEST_CRITICAL_DAYS are the ONE place those thresholds are defined;
+# count_aged_open_requests (below) uses them for the overview dashboard's
+# tile, and the frontend badges individual requests off the same two numbers.
 #-----------------------------------------------------
 
 
 def _num(v):
     return float(v) if v is not None else None
+
+
+def _days_open(sent_at):
+    # None for a logistics order handed off before sent_to_trucking_at
+    # existed (the bool was flipped true, but nothing stamped a time) — an
+    # unknown age is reported as unknown, not silently as 0 days old.
+    if sent_at is None:
+        return None
+    return (datetime.now(timezone.utc) - sent_at).days
 
 
 def _not_taken(source, ref_column):
@@ -134,6 +153,7 @@ def derive_open_requests(db):
             "customer": order.customer_name,
             "mo_no": order.mo_no,
             "snapshot": _logistics_snapshot(order),
+            "days_open": _days_open(order.sent_to_trucking_at),
         })
 
     # Consignments EXPLICITLY sent to trucking — not merely bought FOB.
@@ -163,9 +183,63 @@ def derive_open_requests(db):
             "supplier": consignment.supplier.name if consignment.supplier else None,
             "instrument_number": consignment.instrument_number,
             "snapshot": _import_snapshot(consignment),
+            "days_open": _days_open(consignment.sent_to_trucking_at),
         })
 
     return requests
+
+
+#--------------------------------
+# AGED OPEN REQUESTS (nobody has actioned the hand-off)
+#
+# A pair of COUNT aggregates rather than derive_open_requests's full row
+# materialisation (snapshots, joined masters) — the overview dashboard's own
+# rule is that every figure there is a single SQL aggregate (see
+# app/dashboard/whole/helpers.py's module docstring), and a count doesn't need
+# any of that detail. Same open/not-taken definition as derive_open_requests,
+# so the two can never disagree about which requests are open.
+#--------------------------------
+
+def count_aged_open_requests(db, warning_days, critical_days):
+    """(warning_count, critical_count) among currently open trucking requests.
+
+    warning_count is a SUPERSET of critical_count (>= the warning threshold
+    includes everything over the critical one too) — the same relationship
+    the trucking list's badges have, where a red request is also amber-worthy.
+    A request with no handoff timestamp to measure from (see _days_open) is
+    excluded from both rather than guessed at.
+    """
+    now = datetime.now(timezone.utc)
+    warning_cutoff = now - timedelta(days=warning_days)
+    critical_cutoff = now - timedelta(days=critical_days)
+
+    logistics_warning, logistics_critical = db.execute(
+        select(
+            func.count().filter(LogisticsConsignment.sent_to_trucking_at <= warning_cutoff),
+            func.count().filter(LogisticsConsignment.sent_to_trucking_at <= critical_cutoff),
+        )
+        .select_from(LogisticsConsignment)
+        .where(LogisticsConsignment.is_deleted == False)
+        .where(LogisticsConsignment.sent_to_trucking == True)
+        .where(LogisticsConsignment.sent_to_trucking_at.is_not(None))
+        .where(_not_taken("from-logistics", LogisticsConsignment.id))
+    ).one()
+
+    import_warning, import_critical = db.execute(
+        select(
+            func.count().filter(Consignment.sent_to_trucking_at <= warning_cutoff),
+            func.count().filter(Consignment.sent_to_trucking_at <= critical_cutoff),
+        )
+        .select_from(Consignment)
+        .where(Consignment.is_deleted == False)
+        .where(Consignment.sent_to_trucking_at.is_not(None))
+        .where(_not_taken("from-import-fob", Consignment.id))
+    ).one()
+
+    return (
+        (logistics_warning or 0) + (import_warning or 0),
+        (logistics_critical or 0) + (import_critical or 0),
+    )
 
 
 #--------------------------------

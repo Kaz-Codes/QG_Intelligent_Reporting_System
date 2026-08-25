@@ -4,6 +4,7 @@ from decimal import Decimal
 from app.dashboard.stock_runway import (
     days_of_stock as value_days_of_stock, BASIS as RUNWAY_BASIS,
 )
+from app.dashboard.period import AGED_REQUEST_WARNING_DAYS, AGED_REQUEST_CRITICAL_DAYS
 
 #-----------------------------------------------------
 # OVERVIEW DASHBOARD CALCULATIONS
@@ -245,6 +246,23 @@ def logistics_shipments_handled(counts):
             "import_datable": counts["import_datable"],
             "import_total": counts["import_total"],
         },
+    }
+
+
+def logistics_aged_open_requests(warning_count, critical_count):
+    """Open trucking requests nobody has actioned — a process failure the
+    system used to be silent about. `count` is a SUPERSET of
+    `critical_count` (over the warning threshold includes everything over
+    the critical one too), matching how a red badge on the trucking list is
+    also amber-worthy. The thresholds ride along so the tile's tooltip can
+    state them rather than the front end hardcoding a number that could
+    drift from what actually produced the count.
+    """
+    return {
+        "count": warning_count,
+        "critical_count": critical_count,
+        "warning_days": AGED_REQUEST_WARNING_DAYS,
+        "critical_days": AGED_REQUEST_CRITICAL_DAYS,
     }
 
 

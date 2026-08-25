@@ -386,6 +386,19 @@ export function OverviewTab() {
                 fetchRefs={logisticsRefs('logistics.shipments_handled')}
                 help={withBasis(OVERVIEW_HELP.shipmentsHandled,
                   `Only ${data.logistics.shipments_handled.coverage.export_datable.toLocaleString()} of ${data.logistics.shipments_handled.coverage.export_total.toLocaleString()} logistics orders carry this date, so the export count covers the dated ones only.`)} />
+              {/* LIFETIME, not windowed like the tiles around it — a stale
+                  hand-off is a right-now backlog. direction/goodWhen just
+                  drive the border+icon color (red once anything is aged,
+                  green when the backlog is empty); no real trend behind it,
+                  so no delta badge is passed. */}
+              <KpiCard label="Aged Open Requests"
+                value={data.logistics.aged_open_requests.count.toLocaleString()}
+                direction={data.logistics.aged_open_requests.count > 0 ? 'up' : 'down'}
+                goodWhen="down"
+                sub={data.logistics.aged_open_requests.count === 0
+                  ? `no request over ${data.logistics.aged_open_requests.warning_days}d`
+                  : `${data.logistics.aged_open_requests.critical_count} over ${data.logistics.aged_open_requests.critical_days}d`}
+                help={OVERVIEW_HELP.agedOpenRequests} />
 
               {/* One figure from each of the section's three areas. The tiles
                   above are both about road movement, which made "logistics"

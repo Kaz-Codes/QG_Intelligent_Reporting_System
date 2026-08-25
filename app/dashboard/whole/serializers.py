@@ -141,6 +141,7 @@ def serialize_procurement(db, date_from, date_to, date_field, period_kind):
 def serialize_logistics(db, date_from, date_to, date_field, period_kind):
     counts = helpers.shipments_handled(db, date_from, date_to, date_field)
     trucking = helpers.trucking_cost_by_movement(db, date_from, date_to, date_field)
+    aged_warning, aged_critical = helpers.aged_open_requests(db)
 
     truck_dated, truck_total = helpers.trucking_date_coverage(db, date_field)
 
@@ -171,6 +172,10 @@ def serialize_logistics(db, date_from, date_to, date_field, period_kind):
         "data_notes": notes,
         "trucking_cost": calc.logistics_trucking_cost(trucking),
         "shipments_handled": calc.logistics_shipments_handled(counts),
+        # LIFETIME, not windowed like the figures around it — see
+        # helpers.aged_open_requests. A backlog of unactioned hand-offs is a
+        # right-now fact, not something scoped to whatever period is selected.
+        "aged_open_requests": calc.logistics_aged_open_requests(aged_warning, aged_critical),
         # One figure from each of the section's three areas, so "logistics"
         # stops meaning "trucking". Each carries its own basis — see the
         # helpers for why these three and not the more obvious ones.

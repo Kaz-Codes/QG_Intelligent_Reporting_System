@@ -428,7 +428,23 @@ export interface ApiOpenRequest {
   mo_no?: string | null
   instrument_number?: string | null
   snapshot: ApiSnapshotLine[]
+  /** Days since the source record's own handoff timestamp
+   *  (cross_module.py::_days_open) — null when that record has no timestamp
+   *  to measure from (a logistics order flagged sent before
+   *  sent_to_trucking_at existed). Used to badge a request nobody has
+   *  actioned; see AGED_REQUEST_WARNING_DAYS / AGED_REQUEST_CRITICAL_DAYS. */
+  days_open: number | null
 }
+
+/**
+ * How long an open request can sit before it's flagged — mirrors
+ * app/dashboard/period.py's AGED_REQUEST_WARNING_DAYS /
+ * AGED_REQUEST_CRITICAL_DAYS, the ONE definition of "aged" shared by this
+ * list's badges and the overview dashboard's aged-count tile. If those move
+ * on the backend, move these to match.
+ */
+export const AGED_REQUEST_WARNING_DAYS = 3
+export const AGED_REQUEST_CRITICAL_DAYS = 7
 
 export async function getOpenRequests(): Promise<ApiOpenRequest[]> {
   const res = await apiFetch<{ status_code: number; detail: string; data: ApiOpenRequest[] }>(

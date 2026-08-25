@@ -18,6 +18,7 @@ import {
   listTruckingJobs, getOpenRequests, fetchTruckingFilterOptions,
   exportTruckingExcel, downloadBlob, reopenTruckingJob,
   deleteTruckingJob, undoDeleteTruckingJob,
+  AGED_REQUEST_WARNING_DAYS, AGED_REQUEST_CRITICAL_DAYS,
   type TruckingQuery, type ApiOpenRequest,
 } from '@/lib/api/trucking'
 import { apiToRow, sourceLabel, type TruckingListRow } from '@/lib/api/truckingMap'
@@ -35,6 +36,9 @@ const PAGE_SIZE = 50
  *      records: they are derived from the source order/consignment, so they
  *      have no id here and cannot be opened or edited. Taking one starts an
  *      owned job. A request drops off this list the moment a job takes it.
+ *      Its Age column (AgeBadge) flags one nobody has actioned — amber over
+ *      AGED_REQUEST_WARNING_DAYS, red over AGED_REQUEST_CRITICAL_DAYS, the
+ *      same two thresholds the overview dashboard's aged-count tile uses.
  *   2. Trucking Jobs — GET /trucking/. The module's own records, server
  *      filtered and server paged.
  *
@@ -312,6 +316,7 @@ export function TruckingStatusList() {
                   <th className="px-3 py-2">Movement</th>
                   <th className="px-3 py-2">Counterparty</th>
                   <th className="px-3 py-2">Reference</th>
+                  <th className="px-3 py-2">Age</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
@@ -323,6 +328,7 @@ export function TruckingStatusList() {
                     <td className="px-3 py-2">{r.movement_type ?? '—'}</td>
                     <td className="px-3 py-2 text-muted">{r.customer ?? r.supplier ?? '—'}</td>
                     <td className="px-3 py-2 tabular-nums">{r.mo_no ?? r.instrument_number ?? '—'}</td>
+                    <td className="px-3 py-2"><AgeBadge daysOpen={r.days_open} /></td>
                     <td className="px-3 py-2">
                       {/* A request is derived from its source record — there is
                           nothing in trucking to open until it is taken. */}
@@ -554,6 +560,42 @@ function SourceTag({ source }: { source: string }) {
       {sourceLabel(source)}
     </span>
   )
+}
+
+/**
+ * How long an open request has sat unactioned. Nothing used to flag this —
+ * a hand-off nobody picked up just sat in the list indefinitely — so over
+ * AGED_REQUEST_WARNING_DAYS badges amber and over AGED_REQUEST_CRITICAL_DAYS
+ * badges red, mirroring the overdue-ETA badge below (DelayCell) and the
+ * overview dashboard's aged-count tile, which uses the exact same two
+ * thresholds server-side.
+ */
+function AgeBadge({ daysOpen }: { daysOpen: number | null }) {
+  if (daysOpen === null) return <span className="text-muted">—</span>
+
+  if (daysOpen > AGED_REQUEST_CRITICAL_DAYS) {
+    return (
+      <span
+        className="inline-block rounded border border-[var(--color-risk)] bg-[var(--color-risk-bg)] px-1.5 py-0.5 text-[11px] tabular-nums text-[var(--color-risk)]"
+        title={`Open ${daysOpen} days — no trucking job has taken this request yet`}
+      >
+        {daysOpen}d open
+      </span>
+    )
+  }
+
+  if (daysOpen > AGED_REQUEST_WARNING_DAYS) {
+    return (
+      <span
+        className="inline-block rounded border border-[var(--color-watch)]/30 bg-[var(--color-watch-bg)] px-1.5 py-0.5 text-[11px] tabular-nums text-[var(--color-watch)]"
+        title={`Open ${daysOpen} days — no trucking job has taken this request yet`}
+      >
+        {daysOpen}d open
+      </span>
+    )
+  }
+
+  return <span className="tabular-nums text-muted">{daysOpen}d</span>
 }
 
 

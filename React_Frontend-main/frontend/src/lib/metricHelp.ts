@@ -178,6 +178,11 @@ export const OVERVIEW_HELP: Record<string, MetricHelp> = {
     how: 'Standard logistics orders plus import consignments falling in the window. Rework service jobs are excluded — they are not shipments handled for a customer. Most logistics orders carry no ETD or arrival date, so the export half covers only the dated ones; the note above the section says how many.',
     differs: 'Unlike Trucking Cost this counts shipments, not money.',
   },
+  agedOpenRequests: {
+    what: 'Logistics orders and FOB import consignments handed to trucking that no trucking job has picked up yet.',
+    how: 'Counted from each request’s own hand-off timestamp against today — amber past 3 days, red past 7. Not period-filtered: a stale hand-off is a right-now backlog, not something that happened "during" the selected window. See the Age column on the Trucking Status open-requests list for the individual requests behind this count.',
+    differs: 'Unlike every other tile in this section this is a snapshot of the current backlog, not a total for the period.',
+  },
   stockValue: {
     what: 'What is sitting in the stores right now.',
     how: 'Stock value summed across every store, counted as distinct ITEMS rather than item-at-a-branch records.',
