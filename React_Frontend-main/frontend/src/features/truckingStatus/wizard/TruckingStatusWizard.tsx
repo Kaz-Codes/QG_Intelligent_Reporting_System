@@ -21,7 +21,8 @@ import {
   parseSubmitErrors, type TruckingPayload,
 } from '@/lib/api/trucking'
 import { apiToDraft, draftToPayload, remapNewVehicleIds } from '@/lib/api/truckingMap'
-import { WizardStepper } from './WizardStepper'
+import { WizardStepper } from '@/components/ui/WizardStepper'
+import { useStepNavigation } from '@/lib/useStepNavigation'
 import { Step1Movement } from './steps/Step1Movement'
 import { Step2Vehicles } from './steps/Step2Vehicles'
 import { Step3Freight } from './steps/Step3Freight'
@@ -34,9 +35,12 @@ const STEP_COMPONENTS = [Step1Movement, Step2Vehicles, Step3Freight, Step4Tracki
  *
  * Same shape as the imports and logistics wizards, for the same reasons:
  *
- *  - NO unsaved-changes dialog. Every navigation — Back, "Save and Next", or
- *    clicking a step — saves first (POST the first time, PUT after) and only
- *    moves once that succeeds. Nothing is left to lose, so nothing to warn about.
+ *  - Back and "Save and Next" always save first (POST the first time, PUT
+ *    after) and only move once that succeeds. Clicking a STEP PILL is
+ *    different: it jumps there directly with no save if the form is clean,
+ *    and otherwise asks (via useStepNavigation/WizardStepper, shared with
+ *    imports and logistics) whether to save first or move without saving —
+ *    the "Unsaved changes" dialog below.
  *  - SUBMIT sits on every step, not just the last, and reports back whatever
  *    the server says is still missing.
  *  - A CLOSED job is read-only. Only /submit can close one (every vehicle
@@ -119,7 +123,21 @@ export function TruckingStatusWizard() {
   const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
   const [justSaved, setJustSaved] = useState(false)
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
-  const [pendingStep, setPendingStep] = useState<number | null>(null)
+
+  // navigateToStep/doGoToStep are defined below (hoisted function
+  // declarations — referencing them here before their textual definition is
+  // fine); this hook call has to sit before the `allowed` early return like
+  // every other hook in this component.
+  const {
+    goToStep, pendingStep, saveThenMove, moveWithoutSaving, cancelMove,
+  } = useStepNavigation({
+    currentStep: stepDef.step,
+    totalSteps: WIZARD_STEPS.length,
+    isDirty: methods.formState.isDirty,
+    clearDirty: () => methods.reset(methods.getValues()),
+    navigateToStep,
+    saveAndNavigateToStep: (step) => doGoToStep(step),
+  })
 
   const isNew = !jobId
   const allowed = isNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
@@ -181,18 +199,6 @@ export function TruckingStatusWizard() {
     action?.()
   }
 
-  function goToStep(nextStep: number) {
-    const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
-    if (clamped === stepDef.step) return
-    // No unsaved edits — jump straight there, no save round-trip. Unsaved edits
-    // — ask whether to save first or move without saving.
-    if (methods.formState.isDirty) {
-      setPendingStep(clamped)
-    } else {
-      navigateToStep(clamped)
-    }
-  }
-
   /** Navigate to a step WITHOUT saving. For a brand-new unsaved job there's no
    *  id yet, so we can only move once it's been saved at least once. */
   function navigateToStep(clamped: number) {
@@ -213,20 +219,6 @@ export function TruckingStatusWizard() {
     navigate(saved.isLocked
       ? `/trucking-status/${saved.id}`
       : `/trucking-status/${saved.id}/edit/${clamped}`)
-  }
-
-  async function saveThenMove() {
-    const target = pendingStep
-    setPendingStep(null)
-    if (target != null) await doGoToStep(target)
-  }
-
-  function moveWithoutSaving() {
-    const target = pendingStep
-    setPendingStep(null)
-    // Drop unsaved edits so we don't re-prompt, then navigate.
-    methods.reset(methods.getValues())
-    if (target != null) navigateToStep(target)
   }
 
   async function handleSaveOnly() {
@@ -383,7 +375,7 @@ export function TruckingStatusWizard() {
         confirmingLabel="Saving…"
         confirming={busy}
         onConfirm={() => void saveThenMove()}
-        onCancel={() => setPendingStep(null)}
+        onCancel={cancelMove}
         secondaryLabel="Move without saving"
         onSecondary={moveWithoutSaving}
       />

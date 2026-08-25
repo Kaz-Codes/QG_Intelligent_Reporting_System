@@ -22,7 +22,8 @@ import {
   type ConsignmentDraft, type ConsignmentItem, type Payment,
 } from '../schema'
 import { MastersProvider, useMasters } from './MastersContext'
-import { WizardStepper } from './WizardStepper'
+import { WizardStepper } from '@/components/ui/WizardStepper'
+import { useStepNavigation } from '@/lib/useStepNavigation'
 import { Step1Consignment } from './steps/Step1Consignment'
 import { Step2Finance } from './steps/Step2Finance'
 import { Step3Shipping } from './steps/Step3Shipping'
@@ -36,15 +37,23 @@ const STEP_COMPONENTS = [
 ]
 
 /**
- * Imports Status wizard — every step-change saves.
+ * Imports Status wizard.
  *
- * No more "unsaved changes" dialog: there is nothing left to lose. Every
- * navigation — Next, Back, or clicking a step in the stepper — saves the
- * current form state first (POST the first time, PUT after) and only moves
- * once that succeeds; if it fails, the error shows and the page stays put.
- * "Next" reads "Save and Next" for exactly that reason. Submit (last step
- * only) saves the same way, then calls the strict /submit endpoint, which
- * validates server-side and reports back anything still missing.
+ * Back and "Save and Next" always save the current form state first (POST
+ * the first time, PUT after) and only move once that succeeds; if it fails,
+ * the error shows and the page stays put. "Next" reads "Save and Next" for
+ * exactly that reason. Submit (available on every step) saves the same way,
+ * then calls the strict /submit endpoint, which validates server-side and
+ * reports back anything still missing.
+ *
+ * Clicking a STEP PILL is different: via useStepNavigation/WizardStepper
+ * (shared with logistics and trucking), it jumps there directly with no save
+ * if the form is clean, and otherwise asks whether to save first or move
+ * without saving — the "Unsaved changes" dialog below. Either way, a save
+ * that would happen along that path still goes through runWithCloseConfirm
+ * (see saveAndNavigateToStepConfirmed) — the "Close this consignment?" prompt
+ * is a DIFFERENT question from "you have unsaved edits", and both can fire
+ * for the same click, one after the other.
  *
  * react-hook-form holds ONE draft across all six steps (this component is not
  * remounted between them — only the `:step` route param changes), so every
@@ -144,6 +153,21 @@ function ImportsStatusWizardInner() {
   // while the dialog is open; null/undefined means the dialog is closed.
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
 
+  // navigateToStep/saveAndNavigateToStepConfirmed are defined below (hoisted
+  // function declarations, so referencing them here is fine) — this hook
+  // drives the STEPPER's own "unsaved changes" prompt, a different question
+  // from the close-confirm above and independent of it.
+  const {
+    goToStep, pendingStep, saveThenMove, moveWithoutSaving, cancelMove,
+  } = useStepNavigation({
+    currentStep: stepDef.step,
+    totalSteps: WIZARD_STEPS.length,
+    isDirty: methods.formState.isDirty,
+    clearDirty: () => methods.reset(methods.getValues()),
+    navigateToStep,
+    saveAndNavigateToStep: saveAndNavigateToStepConfirmed,
+  })
+
   /** "Arrived at Works" locks the consignment for everyone but an admin —
    *  worth a confirmation, since it's not obviously reversible from the
    *  wizard itself. A plain draft save never closes it, no matter what
@@ -210,22 +234,34 @@ function ImportsStatusWizardInner() {
     }
   }
 
-  /** The single navigation primitive — Back, "Save and Next", and clicking a
-   *  step in the stepper all go through this, so a save always happens before
-   *  the page moves (there's no other way to lose an edit any more). */
-  function goToStep(nextStep: number) {
-    const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
-    if (clamped === stepDef.step) return
-    runWithCloseConfirm(() => void doGoToStep(clamped))
+  /** Navigate to a step WITHOUT saving. For a brand-new unsaved consignment
+   *  there's no id yet, so we can only move once it's been saved at least
+   *  once — routed through runWithCloseConfirm like every other save, since
+   *  even that first save could set a closing status. */
+  function navigateToStep(clamped: number) {
+    if (isNew) {
+      runWithCloseConfirm(() => void doGoToStep(clamped, true))
+      return
+    }
+    navigate(`/imports-status/${consignmentId}/edit/${clamped}`)
   }
 
-  async function doGoToStep(clamped: number) {
+  async function doGoToStep(clamped: number, keepDirtyReset = false) {
     const saved = await saveDraft()
     if (saved === null) return // error is already shown; stay put
+    if (keepDirtyReset) methods.reset(methods.getValues())
     // A save that just closed the consignment leaves nothing further to
     // edit — land on the read-only detail view instead of an edit route
     // that would immediately bounce with "this consignment is closed".
     navigate(saved.isLocked ? `/imports-status/${saved.id}` : `/imports-status/${saved.id}/edit/${clamped}`)
+  }
+
+  /** "Save and move" from the unsaved-changes dialog also goes through
+   *  runWithCloseConfirm — it is a real save, and the two prompts (unsaved
+   *  edits vs. about to close the record) are independent and can both fire
+   *  for the same click, one after the other. */
+  async function saveAndNavigateToStepConfirmed(clamped: number) {
+    runWithCloseConfirm(() => void doGoToStep(clamped))
   }
 
   /** The last step's "Save" — same save, but nowhere further to go. */
@@ -385,6 +421,24 @@ function ImportsStatusWizardInner() {
           </FormProvider>
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={pendingStep != null}
+        title="Unsaved changes"
+        description={
+          <>
+            You have unsaved changes on this step. Save them before moving, or move
+            without saving and lose them?
+          </>
+        }
+        confirmLabel="Save and move"
+        confirmingLabel="Saving…"
+        confirming={busy}
+        onConfirm={() => void saveThenMove()}
+        onCancel={cancelMove}
+        secondaryLabel="Move without saving"
+        onSecondary={moveWithoutSaving}
+      />
 
       <ConfirmDialog
         open={!!pendingAction}

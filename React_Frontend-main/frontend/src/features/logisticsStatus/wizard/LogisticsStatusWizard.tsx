@@ -19,7 +19,8 @@ import {
   consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, emptyItem,
   type LogisticsDraft, type JobKind,
 } from '../schema'
-import { WizardStepper } from './WizardStepper'
+import { WizardStepper } from '@/components/ui/WizardStepper'
+import { useStepNavigation } from '@/lib/useStepNavigation'
 import { Step1Order } from './steps/Step1Order'
 import { Step2Packing } from './steps/Step2Packing'
 import { Step3Shipping } from './steps/Step3Shipping'
@@ -41,17 +42,20 @@ function freshDraftDefaults(jobKind: JobKind = 'standard'): LogisticsDraft {
 /**
  * Logistics Status wizard — ORDERS wired to the live backend.
  *
- * Same shape as the imports wizard, and for the same reasons:
+ * Same shape as the imports and trucking wizards, and for the same reasons:
  *
- *  - NO unsaved-changes dialog. Every navigation — Back, "Save and Next", or
- *    clicking a step in the stepper — saves the current form state first (POST
- *    the first time, PUT after) and only moves once that succeeds. There is
- *    nothing left to lose, so there is nothing to warn about.
+ *  - Back and "Save and Next" always save the current form state first (POST
+ *    the first time, PUT after) and only move once that succeeds.
+ *  - Clicking a STEP PILL is different: via useStepNavigation/WizardStepper
+ *    (shared with imports and trucking), it jumps there directly with no save
+ *    if the form is clean, and otherwise asks whether to save first or move
+ *    without saving — the "Unsaved changes" dialog below.
  *  - SUBMIT sits on every step, not just the last. It saves, then calls the
  *    strict /submit endpoint, which reports back anything still missing.
  *  - A CLOSED order is read-only. Only /submit can close one (Delivered AND
  *    submitted), so the confirmation fires on Submit alone — a draft save that
- *    merely sets the status to Delivered closes nothing.
+ *    merely sets the status to Delivered closes nothing, and stepping between
+ *    steps never runs that confirmation either (only Submit does, unchanged).
  *
  * react-hook-form holds ONE draft across all five steps (this component is not
  * remounted between them — only the `:step` param changes), so every save
@@ -134,6 +138,21 @@ export function LogisticsStatusWizard({ initialJobKind = 'standard' }: { initial
   const [justSaved, setJustSaved] = useState(false)
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
 
+  // navigateToStep/doGoToStep are defined below (hoisted function
+  // declarations — referencing them here before their textual definition is
+  // fine); this hook has to sit before the `allowed` early return like every
+  // other hook in this component.
+  const {
+    goToStep, pendingStep, saveThenMove, moveWithoutSaving, cancelMove,
+  } = useStepNavigation({
+    currentStep: stepDef.step,
+    totalSteps: WIZARD_STEPS.length,
+    isDirty: methods.formState.isDirty,
+    clearDirty: () => methods.reset(methods.getValues()),
+    navigateToStep,
+    saveAndNavigateToStep: (step) => doGoToStep(step),
+  })
+
   const isNew = !orderId
   const allowed = isNew ? can(user, 'enter') : can(user, 'editAny') || can(user, 'editOwnDraft')
   if (!allowed) return <Navigate to="/logistics-status" replace />
@@ -201,15 +220,21 @@ export function LogisticsStatusWizard({ initialJobKind = 'standard' }: { initial
 
   /* ---- navigation ---- */
 
-  function goToStep(nextStep: number) {
-    const clamped = Math.min(Math.max(nextStep, 1), WIZARD_STEPS.length)
-    if (clamped === stepDef.step) return
-    void doGoToStep(clamped)
+  /** Navigate to a step WITHOUT saving. For a brand-new unsaved order
+   *  there's no id yet, so we can only move once it's been saved at least
+   *  once. */
+  function navigateToStep(clamped: number) {
+    if (isNew) {
+      void doGoToStep(clamped, true)
+      return
+    }
+    navigate(`/logistics-status/${orderId}/edit/${clamped}`)
   }
 
-  async function doGoToStep(clamped: number) {
+  async function doGoToStep(clamped: number, keepDirtyReset = false) {
     const saved = await saveDraft()
     if (saved === null) return // error already shown; stay put
+    if (keepDirtyReset) methods.reset(methods.getValues())
     // A save that closed the order leaves nothing further to edit — land on
     // the read-only detail view rather than an edit route that would bounce.
     navigate(saved.isLocked
@@ -369,6 +394,24 @@ export function LogisticsStatusWizard({ initialJobKind = 'standard' }: { initial
           </FormProvider>
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={pendingStep != null}
+        title="Unsaved changes"
+        description={
+          <>
+            You have unsaved changes on this step. Save them before moving, or move
+            without saving and lose them?
+          </>
+        }
+        confirmLabel="Save and move"
+        confirmingLabel="Saving…"
+        confirming={busy}
+        onConfirm={() => void saveThenMove()}
+        onCancel={cancelMove}
+        secondaryLabel="Move without saving"
+        onSecondary={moveWithoutSaving}
+      />
 
       <ConfirmDialog
         open={!!pendingAction}

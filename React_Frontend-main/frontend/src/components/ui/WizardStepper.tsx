@@ -1,15 +1,28 @@
 import { cn } from '@/lib/utils'
-import type { WizardStepDef } from '../schema'
+
+/** The bits of a module's WizardStepDef the pills actually need — each
+ *  wizard's own richer step-definition type (which also carries `key`,
+ *  `fields`, ...) satisfies this structurally, so no per-module import. */
+export interface WizardStepLike {
+  step: number
+  label: string
+}
 
 /**
- * `onStepClick` is only passed in edit mode — the wizard has an existing
- * record to jump around in. In new-record mode there's nowhere to jump to
- * until Next has minted an id, so the steps stay plain, non-interactive text.
+ * Step pills shared by the imports/logistics/trucking wizards.
+ *
+ * A step is a clickable button whenever `onStepClick` is supplied, otherwise
+ * plain non-interactive text. There is deliberately no separate `clickable`
+ * flag — that was trucking's own stepper's bug: the prop existed, defaulted
+ * to false, and its wizard never passed `clickable` alongside `onStepClick`,
+ * so the pills looked ready to click but silently never were. Whether
+ * `onStepClick` is supplied is the only signal now, so that failure mode
+ * can't recur.
  */
 export function WizardStepper({
   steps, current, onStepClick,
 }: {
-  steps: WizardStepDef[]
+  steps: WizardStepLike[]
   current: number
   onStepClick?: (step: number) => void
 }) {
