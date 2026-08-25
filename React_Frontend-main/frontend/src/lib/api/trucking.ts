@@ -388,6 +388,27 @@ export async function reopenTruckingJob(id: number | string): Promise<ApiTruckin
 }
 
 /**
+ * One line of an open request's pre-fill snapshot (cross_module.py's
+ * _logistics_snapshot / _import_snapshot). An import-origin line carries the
+ * item's own net/gross weight and dimensions — captured in imports already,
+ * so trucking can read them instead of re-keying. A package-origin
+ * (logistics) line only ever has `weight` (its gross weight); the five extra
+ * fields are simply absent there, not zero.
+ */
+export interface ApiSnapshotLine {
+  source_package_id: string | null
+  label: string
+  item_details: string | null
+  quantity: number | null
+  weight: number | null
+  net_weight?: number | null
+  gross_weight?: number | null
+  length?: number | null
+  width?: number | null
+  height?: number | null
+}
+
+/**
  * The trucking inbox: work handed over from the other two modules and not yet
  * turned into a job. Both halves are EXPLICIT hand-offs — logistics orders
  * flagged sent_to_trucking, and import consignments with sent_to_trucking_at.
@@ -402,7 +423,7 @@ export interface ApiOpenRequest {
   customer?: string | null
   mo_no?: string | null
   instrument_number?: string | null
-  snapshot: unknown
+  snapshot: ApiSnapshotLine[]
 }
 
 export async function getOpenRequests(): Promise<ApiOpenRequest[]> {

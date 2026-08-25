@@ -3,7 +3,7 @@ import { ChevronRight } from 'lucide-react'
 
 /** Collapsible section — same role as Streamlit's st.expander(). */
 export function Disclosure({ title, children, defaultOpen = false }: {
-  title: string
+  title: ReactNode
   children: ReactNode
   defaultOpen?: boolean
 }) {

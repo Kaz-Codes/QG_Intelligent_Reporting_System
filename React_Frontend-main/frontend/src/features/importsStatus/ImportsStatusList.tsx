@@ -495,40 +495,43 @@ export function ImportsStatusList() {
               {reopeningId === r.id ? 'Reopening…' : 'Reopen'}
             </button>
           )}
-          {/* Send is offered only on FOB — on other incoterms the supplier
-              arranges the onward legs, so there is nothing to hand over. Each
-              button DISABLES once its own hand-off is recorded: sending is a
+          {/* Send is USABLE only on FOB — on other incoterms the supplier
+              arranges the onward legs, so there is nothing to hand over. The
+              buttons render ALWAYS (never hidden), disabled with a title
+              explaining why on a non-FOB row — a control that vanishes reads
+              as missing, not as "not applicable here". Each button also
+              DISABLES once its own hand-off is recorded: sending is a
               one-way act, and re-sending would only move the timestamp. */}
-          {r.incoterm === 'FOB' && (
-            <>
-              <button
-                onClick={() => void handleSend(r, 'logistics')}
-                disabled={!!r.sentToLogisticsAt || sendingKey === `${r.id}:logistics` || r.isLocked}
-                title={r.sentToLogisticsAt
-                  ? `Sent to Logistics ${new Date(r.sentToLogisticsAt).toLocaleString()}`
-                  : r.isLocked ? 'Closed — reopen it first' : 'Send to Logistics (shipping & clearing)'}
-                className={`rounded border px-2.5 py-1 text-[11px] disabled:cursor-not-allowed ${
-                  r.sentToLogisticsAt
-                    ? 'border-[var(--color-healthy)] text-[var(--color-healthy)] opacity-70'
-                    : 'border-line hover:border-muted disabled:opacity-40'}`}
-              >
-                {sendingKey === `${r.id}:logistics` ? 'Sending…' : r.sentToLogisticsAt ? '✓ Logistics' : 'Send → Logistics'}
-              </button>
-              <button
-                onClick={() => void handleSend(r, 'trucking')}
-                disabled={!!r.sentToTruckingAt || sendingKey === `${r.id}:trucking` || r.isLocked}
-                title={r.sentToTruckingAt
-                  ? `Sent to Trucking ${new Date(r.sentToTruckingAt).toLocaleString()}`
-                  : r.isLocked ? 'Closed — reopen it first' : 'Send to Trucking (inland movement)'}
-                className={`rounded border px-2.5 py-1 text-[11px] disabled:cursor-not-allowed ${
-                  r.sentToTruckingAt
-                    ? 'border-[var(--color-healthy)] text-[var(--color-healthy)] opacity-70'
-                    : 'border-line hover:border-muted disabled:opacity-40'}`}
-              >
-                {sendingKey === `${r.id}:trucking` ? 'Sending…' : r.sentToTruckingAt ? '✓ Trucking' : 'Send → Trucking'}
-              </button>
-            </>
-          )}
+          <button
+            onClick={() => void handleSend(r, 'logistics')}
+            disabled={!!r.sentToLogisticsAt || sendingKey === `${r.id}:logistics` || r.isLocked || r.incoterm !== 'FOB'}
+            title={r.incoterm !== 'FOB'
+              ? 'Only FOB consignments can be handed onward — on other incoterms the supplier arranges shipping and inland movement.'
+              : r.sentToLogisticsAt
+                ? `Sent to Logistics ${new Date(r.sentToLogisticsAt).toLocaleString()}`
+                : r.isLocked ? 'Closed — reopen it first' : 'Send to Logistics (shipping & clearing)'}
+            className={`rounded border px-2.5 py-1 text-[11px] disabled:cursor-not-allowed ${
+              r.sentToLogisticsAt
+                ? 'border-[var(--color-healthy)] text-[var(--color-healthy)] opacity-70'
+                : 'border-line hover:border-muted disabled:opacity-40'}`}
+          >
+            {sendingKey === `${r.id}:logistics` ? 'Sending…' : r.sentToLogisticsAt ? '✓ Logistics' : 'Send → Logistics'}
+          </button>
+          <button
+            onClick={() => void handleSend(r, 'trucking')}
+            disabled={!!r.sentToTruckingAt || sendingKey === `${r.id}:trucking` || r.isLocked || r.incoterm !== 'FOB'}
+            title={r.incoterm !== 'FOB'
+              ? 'Only FOB consignments can be handed onward — on other incoterms the supplier arranges shipping and inland movement.'
+              : r.sentToTruckingAt
+                ? `Sent to Trucking ${new Date(r.sentToTruckingAt).toLocaleString()}`
+                : r.isLocked ? 'Closed — reopen it first' : 'Send to Trucking (inland movement)'}
+            className={`rounded border px-2.5 py-1 text-[11px] disabled:cursor-not-allowed ${
+              r.sentToTruckingAt
+                ? 'border-[var(--color-healthy)] text-[var(--color-healthy)] opacity-70'
+                : 'border-line hover:border-muted disabled:opacity-40'}`}
+          >
+            {sendingKey === `${r.id}:trucking` ? 'Sending…' : r.sentToTruckingAt ? '✓ Trucking' : 'Send → Trucking'}
+          </button>
           <button
             onClick={() => navigate(`/imports-status/${r.id}/history`)}
             title="View change history"

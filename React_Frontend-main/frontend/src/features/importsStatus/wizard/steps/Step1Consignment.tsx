@@ -6,6 +6,7 @@ import {
 } from '../../schema'
 import { Field, Input, Select } from './fields'
 import { useMasters } from '../MastersContext'
+import { Disclosure } from '@/components/Disclosure'
 
 const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED']
 const ORIGINS = ['China', 'Germany', 'Italy', 'Japan', 'Korea, Republic of', 'Sweden', 'Türkiye', 'United States']
@@ -152,6 +153,9 @@ export function Step1Consignment() {
             const item = items?.[i] as ConsignmentItem | undefined
             const reqType = item?.requisitionType
             const pending = item ? itemPendingFields(item) : []
+            const hasWeightData = !!(
+              item?.netWeight || item?.grossWeight || item?.length || item?.width || item?.height
+            )
             return (
               <div key={f.id} className="rounded-lg border border-line bg-canvas-alt/40">
                 <div className="flex items-center gap-2 border-b border-line/60 px-3 py-2">
@@ -200,26 +204,39 @@ export function Step1Consignment() {
                     </Field>
                   </div>
 
-                  <p className="mb-2.5 mt-4 text-[10.5px] font-semibold uppercase tracking-wide text-muted">
-                    Weight &amp; dimensions
-                    <span className="ml-1.5 font-normal normal-case text-muted">— fill before handing an FOB consignment to trucking</span>
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                    <Field label="Net weight (kg)">
-                      <Input type="number" min="0" step="any" {...register(`items.${i}.netWeight`)} placeholder="Optional" />
-                    </Field>
-                    <Field label="Gross weight (kg)">
-                      <Input type="number" min="0" step="any" {...register(`items.${i}.grossWeight`)} placeholder="Optional" />
-                    </Field>
-                    <Field label="Length (cm)">
-                      <Input type="number" min="0" step="any" {...register(`items.${i}.length`)} placeholder="Optional" />
-                    </Field>
-                    <Field label="Width (cm)">
-                      <Input type="number" min="0" step="any" {...register(`items.${i}.width`)} placeholder="Optional" />
-                    </Field>
-                    <Field label="Height (cm)">
-                      <Input type="number" min="0" step="any" {...register(`items.${i}.height`)} placeholder="Optional" />
-                    </Field>
+                  <div className="mt-4">
+                    <Disclosure
+                      title={
+                        <span className="flex items-center gap-2">
+                          <span className="text-[10.5px] font-semibold uppercase tracking-wide text-muted">
+                            Weight &amp; dimensions (required before sending to trucking)
+                          </span>
+                          {hasWeightData && (
+                            <span className="rounded border border-brand/30 bg-brand/10 px-1.5 py-0.5 text-[10px] font-medium text-brand">
+                              Has data
+                            </span>
+                          )}
+                        </span>
+                      }
+                    >
+                      <div className="grid gap-3 pb-3 sm:grid-cols-2 lg:grid-cols-5">
+                        <Field label="Net weight (kg)">
+                          <Input type="number" min="0" step="any" {...register(`items.${i}.netWeight`)} placeholder="Optional" />
+                        </Field>
+                        <Field label="Gross weight (kg)">
+                          <Input type="number" min="0" step="any" {...register(`items.${i}.grossWeight`)} placeholder="Optional" />
+                        </Field>
+                        <Field label="Length (cm)">
+                          <Input type="number" min="0" step="any" {...register(`items.${i}.length`)} placeholder="Optional" />
+                        </Field>
+                        <Field label="Width (cm)">
+                          <Input type="number" min="0" step="any" {...register(`items.${i}.width`)} placeholder="Optional" />
+                        </Field>
+                        <Field label="Height (cm)">
+                          <Input type="number" min="0" step="any" {...register(`items.${i}.height`)} placeholder="Optional" />
+                        </Field>
+                      </div>
+                    </Disclosure>
                   </div>
 
                   <p className="mb-2.5 mt-4 text-[10.5px] font-semibold uppercase tracking-wide text-muted">Requisition</p>

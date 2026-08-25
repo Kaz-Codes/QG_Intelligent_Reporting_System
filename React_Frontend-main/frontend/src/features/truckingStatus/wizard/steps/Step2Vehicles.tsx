@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react'
 import { useFieldArray, useFormContext, useWatch } from 'react-hook-form'
 import { Plus, Trash2 } from 'lucide-react'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { getImportConsignmentOptions } from '@/lib/truckingStatusData'
+import { getOpenRequests, type ApiSnapshotLine } from '@/lib/api/trucking'
 import {
   CONTAINER_TYPES,
   VEHICLE_TRACKING_STATUSES,
@@ -241,10 +243,87 @@ function ItemAllocation({
   )
 }
 
+/**
+ * Read-only weight/dimension reference for the import consignment this job
+ * was taken from — imports already captures net/gross weight and dimensions
+ * per item (app/cross_module.py::_import_snapshot), so the operator reads
+ * them here while deciding how to split cargo across vehicles instead of
+ * re-keying figures that exist upstream. Never written onto a vehicle's own
+ * netWeight/grossWeight — a vehicle is not an item line, and one item can
+ * split across several trucks, so there is no single right vehicle to
+ * silently fill.
+ *
+ * Fetched fresh from the still-open request rather than read off the job's
+ * own `takenSnapshot` field: that snapshot is only populated once the job is
+ * first saved, and its backend schema (TakenSourceSnapshotSchema) doesn't
+ * carry these five fields at all. So this has something to show only for a
+ * brand-new job mid-creation from Take Action, before the request drops off
+ * the open-requests queue — exactly the "pre-fill" moment it's meant for.
+ */
+function ImportWeightReference({ source, sourceRef }: { source?: string; sourceRef?: string }) {
+  const [lines, setLines] = useState<ApiSnapshotLine[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    if (source !== 'from-import-fob' || !sourceRef) {
+      setLines([])
+      return
+    }
+    getOpenRequests()
+      .then((rows) => {
+        if (cancelled) return
+        const match = rows.find((r) => r.source === source && r.source_ref === sourceRef)
+        setLines(match?.snapshot ?? [])
+      })
+      .catch(() => { if (!cancelled) setLines([]) })
+    return () => { cancelled = true }
+  }, [source, sourceRef])
+
+  const withDims = lines.filter((l) =>
+    l.net_weight != null || l.gross_weight != null || l.length != null || l.width != null || l.height != null)
+  if (withDims.length === 0) return null
+
+  return (
+    <div className="rounded-lg border border-line bg-canvas-alt/40 p-3">
+      <p className="mb-2 text-xs font-semibold text-muted">
+        From imports — reference only, not written onto any vehicle
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-muted">
+            <tr>
+              <th className="py-1 pr-3">Item</th>
+              <th className="py-1 pr-3">Net wt (kg)</th>
+              <th className="py-1 pr-3">Gross wt (kg)</th>
+              <th className="py-1 pr-3">L (cm)</th>
+              <th className="py-1 pr-3">W (cm)</th>
+              <th className="py-1 pr-3">H (cm)</th>
+            </tr>
+          </thead>
+          <tbody className="text-ink">
+            {withDims.map((l, i) => (
+              <tr key={i} className="border-t border-line/60">
+                <td className="py-1 pr-3 font-medium">{l.label}</td>
+                <td className="py-1 pr-3 tabular-nums">{l.net_weight ?? '—'}</td>
+                <td className="py-1 pr-3 tabular-nums">{l.gross_weight ?? '—'}</td>
+                <td className="py-1 pr-3 tabular-nums">{l.length ?? '—'}</td>
+                <td className="py-1 pr-3 tabular-nums">{l.width ?? '—'}</td>
+                <td className="py-1 pr-3 tabular-nums">{l.height ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export function Step2Vehicles() {
   const { register, control, setValue } = useFormContext<TruckingDraft>()
   const { fields, append, remove } = useFieldArray({ control, name: 'vehicles' })
 
+  const source = useWatch({ control, name: 'source' })
+  const sourceRef = useWatch({ control, name: 'sourceRef' })
   const movementType = useWatch({ control, name: 'movementType' })
   const showContainers = usesContainers(movementType)
   const isInbound = movementType === 'Inbound'
@@ -273,6 +352,8 @@ export function Step2Vehicles() {
           <Plus size={16} /> Add vehicle
         </Button>
       </div>
+
+      <ImportWeightReference source={source} sourceRef={sourceRef} />
 
       {fields.map((field, i) => (
         <div key={field.id} className="rounded-lg border border-line p-4">

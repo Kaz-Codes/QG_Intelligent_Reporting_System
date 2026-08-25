@@ -22,6 +22,15 @@ from app.trucking.models import TruckingConsignment
 # taken by a trucking job) and does the reverse lookup (which trucking jobs
 # came from a given order / consignment). The heavy per-vehicle package refs
 # are left as stored data; this is the record-level linkage.
+#
+# Each open request carries a per-line SNAPSHOT (see _logistics_snapshot /
+# _import_snapshot) the "New Trucking Job" form pre-fills from. An import
+# line's snapshot now carries net_weight, gross_weight, length, width and
+# height alongside the existing quantity/weight fields — imports already
+# captures these on the consignment item, so the trucking operator can read
+# them instead of re-keying figures that exist upstream. Read-only reference
+# data only: nothing here writes them onto a vehicle, since a vehicle is not
+# an item line and the two are not 1:1.
 #-----------------------------------------------------
 
 
@@ -81,6 +90,11 @@ def _import_snapshot(consignment):
             "item_details": item.specification,
             "quantity": _num(item.quantity),
             "weight": None,
+            "net_weight": _num(item.net_weight),
+            "gross_weight": _num(item.gross_weight),
+            "length": _num(item.length),
+            "width": _num(item.width),
+            "height": _num(item.height),
         })
     return snapshot
 
