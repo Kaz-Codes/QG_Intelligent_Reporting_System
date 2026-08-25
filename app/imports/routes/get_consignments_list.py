@@ -58,9 +58,13 @@ def get_consignments_list(
             sent_only=sent_only
         )
 
-        # Serializeing this page of consignments
+        # Serializeing this page of consignments. change_history is left out
+        # here — the list never renders it (see /history) — and
+        # fetch_consignments_page doesn't eager-load it either, so this stays
+        # one query for the whole page rather than one extra per row.
         serialized_consignments = [
-            serialize_consignment(consignment, db) for consignment in consignments
+            serialize_consignment(consignment, db, include_change_history=False)
+            for consignment in consignments
         ]
 
         return {

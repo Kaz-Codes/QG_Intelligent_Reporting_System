@@ -307,11 +307,28 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
-    # Set once the order has been handed to the trucking module.
+    # DEPRECATED in favour of sent_to_trucking_at below — a bool only answers
+    # whether the order was ever handed off, not when, so "how long did
+    # logistics hold this?" was unanswerable (the same gap imports' own model
+    # comment raised about sent_to_logistics_at / sent_to_trucking_at, which
+    # is why those are timestamps and not booleans). Kept, and still set
+    # alongside the timestamp on every hand-off, so nothing that already
+    # reads this column breaks.
     sent_to_trucking: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False
+    )
+
+    # Set once the order has been handed to the trucking module — NULL means
+    # never sent. Stamped alongside sent_to_trucking (helpers.
+    # stamp_trucking_handoff) whenever it turns true; left as-is if the
+    # hand-off is later unchecked, so the record of when it was last sent
+    # survives rather than being erased.
+    sent_to_trucking_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True
     )
 
     # A feed of remark entries: {id, text, authored_by, authored_at, system}.

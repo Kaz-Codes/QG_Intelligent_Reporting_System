@@ -75,15 +75,24 @@ def build_system_remarks(consignment):
 # never ties its serializer and helpers into a circle.
 #---------------------------------------
 
-def serialize_consignment(consignment):
+def serialize_consignment(consignment, include_change_history=True):
     data = {
         column.key: getattr(consignment, column.key)
         for column in inspect(consignment).mapper.column_attrs
     }
 
     data["vehicles"] = serialize_many(consignment.vehicles)
-    data["change_history"] = serialize_many(consignment.change_history)
     data["system_remarks"] = build_system_remarks(consignment)
+
+    # The list screen never renders change history — it has its own
+    # /change-history route — so the list route skips it here, and
+    # fetch_consignments_page (helpers.py) doesn't eager-load it either.
+    # Without both halves of that split, accessing consignment.change_history
+    # below would lazy-load one extra query per row on every page of the
+    # list. The detail fetch (fetch_consignment) still eager-loads it, so
+    # this stays free there.
+    if include_change_history:
+        data["change_history"] = serialize_many(consignment.change_history)
 
     data["created_by"] = consignment.created_by.username if consignment.created_by else None
     data["deleted_by"] = consignment.deleted_by.username if consignment.deleted_by else None

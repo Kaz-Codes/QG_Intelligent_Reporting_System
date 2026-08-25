@@ -298,6 +298,16 @@ customer, MO/batch, incoterm, shipping, the named expenditure columns +
 `LogisticsItem`, `LogisticsPackage`, `LogisticsContainer` children, plus
 `LogisticsStatusHistory` and `LogisticsChangeHistory`.
 
+`sent_to_trucking` (bool) is **deprecated in favour of `sent_to_trucking_at`**
+(nullable timestamp, indexed) — a bool alone can't say how long logistics held
+an order before handing it off, the same gap imports' own `sent_to_logistics_at`
+/ `sent_to_trucking_at` exist to close. `helpers.stamp_trucking_handoff` sets
+the timestamp alongside the bool whenever it turns true (on create or update);
+the bool is kept and still set too, so nothing reading it breaks. Unchecking the
+hand-off does not clear the timestamp — it records when it was last sent, not
+whether it is currently sent. The open-requests query (`cross_module.py`) still
+filters on the bool, unchanged, for now.
+
 FE-driven nested collections that are always written whole are stored as **JSON**
 rather than their own tables: per-item `rfd_history`, per-package `allocations`
 (cross-batch: `{item_id, source_order_id, quantity}`), and the header

@@ -74,10 +74,10 @@ def _submission_errors(consignment):
     return submission_errors(consignment)
 
 
-def serialize_consignment(consignment, db):
+def serialize_consignment(consignment, db, include_change_history=True):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
-    return {
+    data = {
         "id" : consignment.id,
         "branch" : serialize_master(consignment.branch),
         "supplier" : serialize_master(consignment.supplier),
@@ -89,7 +89,6 @@ def serialize_consignment(consignment, db):
         "items" : serialize_many(consignment.items),
         "eta_revisions" : serialize_many(consignment.eta_revisions),
         "status_updates" : serialize_many(consignment.status_updates),
-        "change_history" : serialize_many(consignment.change_history),
         "payments" : serialize_many(consignment.payments),
 
         "created_by" : consignment.created_by.username if consignment.created_by else None,
@@ -149,6 +148,19 @@ def serialize_consignment(consignment, db):
         "deleted_by_id" : consignment.deleted_by_id if consignment.deleted_by_id else None,
         "deleted_by" : consignment.deleted_by.username if consignment.deleted_by else None
     }
+
+    # The list screen never renders change history — it has its own /history
+    # route — so the list route skips it here, and fetch_consignments_page
+    # (app/imports/helpers.py) doesn't eager-load it either. Without both
+    # halves of that split, accessing consignment.change_history below would
+    # lazy-load ONE extra query per row on every page of the list, pulling
+    # each consignment's entire unbounded history into a response that never
+    # uses it. The detail fetch (fetch_consignment) still eager-loads it, so
+    # this stays free there.
+    if include_change_history:
+        data["change_history"] = serialize_many(consignment.change_history)
+
+    return data
 
 #---------------------------------------------
 # A SINGLE DYNAMIC FUNCTION THAT

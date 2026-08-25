@@ -183,10 +183,12 @@ def fetch_consignments_page(db, include_deleted, movement_type, source,
         select(func.count(TruckingConsignment.id)).where(*conditions)
     ).scalar()
 
-    # the page itself, newest first
+    # the page itself, newest first. change_history is deliberately NOT
+    # eager-loaded here — the list serializer never reads it
+    # (include_change_history=False), so loading it would just be an unused
+    # query on every page. The detail fetch above still loads it.
     query = select(TruckingConsignment).where(*conditions).options(
         selectinload(TruckingConsignment.vehicles),
-        selectinload(TruckingConsignment.change_history),
         joinedload(TruckingConsignment.created_by),
         joinedload(TruckingConsignment.deleted_by)
     ).order_by(

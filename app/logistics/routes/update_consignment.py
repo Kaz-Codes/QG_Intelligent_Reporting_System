@@ -10,6 +10,7 @@ from app.logistics.helpers import (
     new_children_to_add, updated_children, delete_missing,
     add_in_consignment_change_history, add_in_status_change_history,
     create_child_objects, fetch_consignment, resolve_customer_id,
+    stamp_trucking_handoff,
 )
 from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment, serialize_many
@@ -100,6 +101,10 @@ def update_consignment(
 
         # Applying header updates
         apply_updates(updation_dict, consignment)
+
+        # sent_to_trucking is one of the header fields apply_updates just set;
+        # this stamps its companion timestamp when it just turned true.
+        stamp_trucking_handoff(updation_dict, consignment)
 
         # Re-derive the master link AFTER the header updates, so a changed
         # customer name moves customer_id with it.

@@ -46,6 +46,15 @@ if TYPE_CHECKING:
 
 class TruckingConsignment(Base, TimestampMixin):
     __tablename__ = "trucking_consignments"
+    __table_args__ = (
+        # cross_module.derive_open_requests checks, for every still-open
+        # logistics order / FOB consignment, whether some trucking job has
+        # already taken it — a NOT EXISTS on exactly this (source,
+        # source_ref) pair, run once per open request. Composite so that
+        # lookup uses an index instead of a sequential scan; source alone
+        # would not be selective enough (three values, most rows share one).
+        Index("ix_trucking_consignments_source_ref", "source", "source_ref"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
 

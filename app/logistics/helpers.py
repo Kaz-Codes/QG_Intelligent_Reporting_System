@@ -53,6 +53,12 @@ def create_consignment_object(consignment_data, user):
 
     consignment_data_dict["created_by_id"] = user.id
 
+    # The wizard never creates an order with the box already checked
+    # (DRAFT_DEFAULT_VALUES starts it false), but the schema allows it — stamp
+    # the same as an update turning it on, so this path can't skip it.
+    if consignment_data_dict.get("sent_to_trucking"):
+        consignment_data_dict["sent_to_trucking_at"] = datetime.now(timezone.utc)
+
     consignment = LogisticsConsignment(**consignment_data_dict)
     return consignment
 
@@ -173,13 +179,15 @@ def fetch_consignments_page(db, include_deleted, status, order_type,
         select(func.count(LogisticsConsignment.id)).where(*conditions)
     ).scalar()
 
-    # the page itself, newest first
+    # the page itself, newest first. change_history is deliberately NOT
+    # eager-loaded here — the list serializer never reads it
+    # (include_change_history=False), so loading it would just be an unused
+    # query on every page. The detail fetch above still loads it.
     query = select(LogisticsConsignment).where(*conditions).options(
         selectinload(LogisticsConsignment.items),
         selectinload(LogisticsConsignment.packages),
         selectinload(LogisticsConsignment.containers),
         selectinload(LogisticsConsignment.status_updates),
-        selectinload(LogisticsConsignment.change_history),
         joinedload(LogisticsConsignment.created_by),
         joinedload(LogisticsConsignment.deleted_by)
     ).order_by(
@@ -448,6 +456,25 @@ def add_in_status_change_history(updation_dict, consignment, user, db):
         )
 
         db.add(status_change)
+
+
+#----------------------------------
+# STAMP THE TRUCKING HAND-OFF TIMESTAMP
+#
+# sent_to_trucking (bool) is getting a companion sent_to_trucking_at
+# (nullable timestamp), mirroring imports' sent_to_logistics_at /
+# sent_to_trucking_at — a bare bool can't answer "how long did logistics
+# hold this?" (see the deprecation comment on the column in models.py). The
+# bool is left exactly as it was — nothing that still reads it breaks — this
+# only ADDS the timestamp, stamped on the TRANSITION to true. Unchecking
+# later does not clear it, so the record of when it was last sent survives;
+# re-checking after that stamps a fresh time, a genuine new hand-off.
+#----------------------------------
+
+def stamp_trucking_handoff(updation_dict, consignment):
+    change = updation_dict.get("sent_to_trucking")
+    if change and change.get("new_value"):
+        consignment.sent_to_trucking_at = datetime.now(timezone.utc)
 
 
 #---------------------------------

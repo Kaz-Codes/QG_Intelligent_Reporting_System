@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, cast, String
 from sqlalchemy.orm import selectinload, joinedload
 
 from app.logistics.models import LogisticsConsignment
@@ -38,15 +38,20 @@ def _num(v):
     return float(v) if v is not None else None
 
 
-def _taken_pairs(db):
-    # (source, source_ref) of every trucking job that has taken a request, so
-    # taken requests drop out of the open list.
-    rows = db.execute(
-        select(TruckingConsignment.source, TruckingConsignment.source_ref)
+def _not_taken(source, ref_column):
+    # NOT EXISTS a trucking job already keyed to this (source, source_ref)
+    # pair — the SQL equivalent of pulling every trucking (source,
+    # source_ref) into a Python set and checking membership per row, which is
+    # what this used to do (_taken_pairs, now gone). source_ref is a
+    # TruckingConsignment column, so the id on our side is cast to match its
+    # type (String) rather than the other way round.
+    return ~(
+        select(TruckingConsignment.id)
         .where(TruckingConsignment.is_deleted == False)
-        .where(TruckingConsignment.source_ref.isnot(None))
-    ).all()
-    return {(source, ref) for source, ref in rows}
+        .where(TruckingConsignment.source == source)
+        .where(TruckingConsignment.source_ref == cast(ref_column, String))
+        .exists()
+    )
 
 
 #--------------------------------
@@ -104,13 +109,13 @@ def _import_snapshot(consignment):
 #--------------------------------
 
 def derive_open_requests(db):
-    taken = _taken_pairs(db)
     requests = []
 
     log_orders = db.execute(
         select(LogisticsConsignment)
         .where(LogisticsConsignment.is_deleted == False)
         .where(LogisticsConsignment.sent_to_trucking == True)
+        .where(_not_taken("from-logistics", LogisticsConsignment.id))
         .options(
             selectinload(LogisticsConsignment.items),
             selectinload(LogisticsConsignment.packages),
@@ -120,8 +125,6 @@ def derive_open_requests(db):
 
     for order in log_orders:
         ref = str(order.id)
-        if ("from-logistics", ref) in taken:
-            continue
         label = " ".join(p for p in [order.department, order.order_type] if p).strip()
         requests.append({
             "source": "from-logistics",
@@ -142,6 +145,7 @@ def derive_open_requests(db):
         select(Consignment)
         .where(Consignment.is_deleted == False)
         .where(Consignment.sent_to_trucking_at.is_not(None))
+        .where(_not_taken("from-import-fob", Consignment.id))
         .options(
             selectinload(Consignment.items),
             joinedload(Consignment.supplier),
@@ -151,8 +155,6 @@ def derive_open_requests(db):
 
     for consignment in imports_sent:
         ref = str(consignment.id)
-        if ("from-import-fob", ref) in taken:
-            continue
         requests.append({
             "source": "from-import-fob",
             "source_ref": ref,

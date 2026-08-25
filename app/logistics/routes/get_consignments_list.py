@@ -54,9 +54,13 @@ def get_consignments_list(
             None if job_kind == "all" else job_kind
         )
 
-        # Serializeing this page of orders
+        # Serializeing this page of orders. change_history is left out here —
+        # the list never renders it (see /change-history) — and
+        # fetch_consignments_page doesn't eager-load it either, so this stays
+        # one query for the whole page rather than one extra per row.
         serialized_consignments = [
-            serialize_consignment(consignment) for consignment in consignments
+            serialize_consignment(consignment, include_change_history=False)
+            for consignment in consignments
         ]
 
         return {
