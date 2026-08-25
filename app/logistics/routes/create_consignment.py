@@ -11,6 +11,9 @@ from app.logistics.helpers import (
 )
 from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.post("/")
 def create_consignment(
@@ -57,7 +60,7 @@ def create_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.create_consignment")
         db.rollback()
 
         raise HTTPException(

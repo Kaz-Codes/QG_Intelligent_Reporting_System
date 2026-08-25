@@ -5,6 +5,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_TRUCKING
 from app.cross_module import derive_open_requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # OPEN TRUCKING REQUESTS
@@ -38,7 +41,7 @@ def open_requests(request : Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.open_requests")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

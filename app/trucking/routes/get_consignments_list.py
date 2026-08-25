@@ -8,6 +8,9 @@ from app.trucking.helpers import fetch_consignments_page
 from app.trucking.serializers import serialize_consignment
 from typing import Optional
 from fastapi import Query
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.get("/")
 def get_consignments_list(
@@ -67,7 +70,7 @@ def get_consignments_list(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.get_consignments_list")
         db.rollback()
 
         raise HTTPException(

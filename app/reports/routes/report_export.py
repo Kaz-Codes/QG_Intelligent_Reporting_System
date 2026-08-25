@@ -13,6 +13,9 @@ from app.reports.helpers import (
 )
 from app.reports.serializers import serialize_rows, ROW_KEYS
 from app.accounts.permissions import CAN_MAKE_REPORTS
+import logging
+
+logger = logging.getLogger(__name__)
 
 # A deliberate download can be large, but not unbounded — a mis-set filter must
 # not pull every table into memory. Rows past this are dropped (and flagged in
@@ -131,7 +134,7 @@ def reports_export(
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.report_export")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:

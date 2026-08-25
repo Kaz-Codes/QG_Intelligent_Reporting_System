@@ -15,6 +15,9 @@ from app.dashboard.period import resolve_period, serialize_period
 from app.dashboard.imports.serializers import serialize_imports_dashboard
 from typing import Optional
 from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.get("/imports")
 def imports_dashboard(
@@ -125,7 +128,7 @@ def imports_dashboard(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.imports.routes.imports_dashboard")
         db.rollback()
 
         raise HTTPException(

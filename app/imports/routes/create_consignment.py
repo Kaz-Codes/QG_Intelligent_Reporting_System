@@ -8,6 +8,9 @@ from app.accounts.permissions import CAN_ADD_IMPORTS
 from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived
 
 from app.imports.serializers import serialize_consignment
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.post("/")
 def create_consignment(
@@ -56,7 +59,7 @@ def create_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.imports.routes.create_consignment")
         db.rollback()
 
         raise HTTPException(

@@ -8,6 +8,9 @@ from app.imports.helpers import fetch_consignment, verify_entry_ownership
 from app.imports.serializers import serialize_consignment
 from app.enums import Incoterm
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #-----------------------------------------------------
@@ -87,7 +90,7 @@ def _send(request, consignment_id, field, label):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.imports.routes.send_consignment")
         db.rollback()
 
         raise HTTPException(

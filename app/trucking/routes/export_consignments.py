@@ -7,6 +7,9 @@ from app.accounts.permissions import CAN_VIEW_TRUCKING
 from app.trucking.helpers import fetch_consignments_page
 from app.export_utils import xlsx_response
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # EXPORT THE FILTERED TRUCKING JOBS TO EXCEL
@@ -82,7 +85,7 @@ def export_consignments(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.export_consignments")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

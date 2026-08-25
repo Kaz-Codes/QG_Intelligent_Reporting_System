@@ -29,6 +29,9 @@ from app.dashboard.whole.helpers import (
     TRUCKING_DATE_FIELDS, LOGISTICS_DATE_DEFAULT,
 )
 from app.dashboard.whole.routes.router import router
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Shared with the Inventory dashboard's own (fixed) dead-stock window — see
 # period.DEAD_STOCK_WINDOW_DAYS and overview_dashboard.py's identical constant.
@@ -148,7 +151,7 @@ def overview_references(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.whole.routes.overview_references")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

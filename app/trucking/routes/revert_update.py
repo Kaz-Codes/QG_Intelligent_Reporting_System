@@ -11,6 +11,9 @@ from app.trucking.helpers import (
 )
 from app.trucking.serializers import serialize_consignment
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.put("/revert-update/{consignment_id}/{change_history_id}")
 def revert_update(
@@ -91,7 +94,7 @@ def revert_update(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.revert_update")
         db.rollback()
 
         raise HTTPException(

@@ -9,6 +9,9 @@ from app.accounts.permissions import CAN_VIEW_IMPORTS
 from app.imports.models import Consignment, ConsignmentItem
 from app.masters.models import Branch, Supplier
 from app.enums import Status
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # THE LIST SCREEN'S FILTER DROPDOWNS
@@ -105,7 +108,7 @@ def filter_options(request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.imports.routes.filter_options")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

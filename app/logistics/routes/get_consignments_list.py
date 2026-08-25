@@ -9,6 +9,9 @@ from app.logistics.serializers import serialize_consignment
 from typing import Optional
 from datetime import date
 from fastapi import Query
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.get("/")
 def get_consignments_list(
@@ -73,7 +76,7 @@ def get_consignments_list(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.get_consignments_list")
         db.rollback()
 
         raise HTTPException(

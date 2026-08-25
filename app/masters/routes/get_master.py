@@ -7,6 +7,9 @@ from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ONE MASTER RECORD (EVERY ROLE)
@@ -39,7 +42,7 @@ async def get_master(master : str, row_id : int, request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.get_master")
         db.rollback()
 
         raise HTTPException(

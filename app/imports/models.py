@@ -66,11 +66,6 @@ class Consignment(Base, TimestampMixin):
         nullable=True
     )
 
-    requisition_date: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
     # Works is typed in by hand, not picked from a master, so it is free
     # text rather than a foreign key. The sheet's "Works" column is the
     # branch and fills branch_id above.

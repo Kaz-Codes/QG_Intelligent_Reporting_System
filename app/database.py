@@ -16,7 +16,17 @@ DATABASE_URL = (
     f"{os.getenv('DB_NAME')}"
 )
 
-engine = create_engine(DATABASE_URL, json_serializer=lambda v: json.dumps(v, default=str))
+# pool_pre_ping guards against connections the DB or a firewall dropped while
+# idle overnight — without it the first request each morning gets a dead
+# connection back from the pool and fails as a generic 500.
+engine = create_engine(
+    DATABASE_URL,
+    json_serializer=lambda v: json.dumps(v, default=str),
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_size=10,
+    max_overflow=20,
+)
 
 SessionLocal = sessionmaker(bind=engine)
 

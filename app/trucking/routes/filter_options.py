@@ -8,6 +8,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_TRUCKING
 from app.trucking.models import TruckingConsignment
 from app.enums import MovementType
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # THE LIST SCREEN'S FILTER DROPDOWNS
@@ -69,7 +72,7 @@ def filter_options(request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.filter_options")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

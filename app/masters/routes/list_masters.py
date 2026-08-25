@@ -9,6 +9,9 @@ from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ONE MASTER LIST (EVERY ROLE)
@@ -81,7 +84,7 @@ async def list_masters(master : str,
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.list_masters")
         db.rollback()
 
         raise HTTPException(

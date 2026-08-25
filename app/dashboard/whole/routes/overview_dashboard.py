@@ -15,6 +15,9 @@ from app.dashboard.whole.helpers import (
 )
 from app.dashboard.whole.serializers import serialize_overview
 from app.dashboard.whole.routes.router import router
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Default cut-off for a stock line to count as dead. Exposed as a query param
 # rather than fixed: how long stock must sit unissued before it is written off
@@ -151,7 +154,7 @@ def overview_dashboard(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.whole.routes.overview_dashboard")
         db.rollback()
 
         raise HTTPException(

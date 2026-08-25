@@ -21,6 +21,9 @@ from app.dashboard.references import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.dashboard.imports.helpers import fetch_filtered_consigments, fetch_shaft_lines
 from app.dashboard.imports import calculations as calc
 from app.dashboard.imports.routes.router import router
+import logging
+
+logger = logging.getLogger(__name__)
 
 # key -> a function taking the filtered consignments and returning that page.
 #
@@ -114,7 +117,7 @@ def imports_references(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.imports.routes.imports_references")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

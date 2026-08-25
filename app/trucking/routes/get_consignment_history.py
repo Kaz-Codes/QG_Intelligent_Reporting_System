@@ -6,6 +6,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_TRUCKING
 from app.trucking.helpers import fetch_consignment_history, fetch_consignment
 from app.trucking.serializers import serialize_consignment_history
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.get("/change-history/{consignment_id}/{consignment_history_id}")
 def get_consignment_history(
@@ -52,7 +55,7 @@ def get_consignment_history(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.get_consignment_history")
         db.rollback()
 
         raise HTTPException(

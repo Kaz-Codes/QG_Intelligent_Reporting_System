@@ -13,6 +13,9 @@ from app.reports.helpers import (
 )
 from app.reports.serializers import serialize_rows
 from app.accounts.permissions import CAN_MAKE_REPORTS
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #-----------------------------------------------------
@@ -91,7 +94,7 @@ def reports_data(
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.report_data")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:

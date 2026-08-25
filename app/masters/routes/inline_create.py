@@ -7,6 +7,9 @@ from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ADD A MASTER IN THE MIDDLE OF DATA ENTRY
@@ -80,7 +83,7 @@ async def inline_create(master : str, payload : dict, request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.inline_create")
         db.rollback()
 
         raise HTTPException(

@@ -5,6 +5,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import require_admin
 from app.logistics.helpers import fetch_consignment
 from app.logistics.serializers import serialize_consignment
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.post("/undo-delete/{consignment_id}")
 def undo_delete(
@@ -59,7 +62,7 @@ def undo_delete(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.undo_delete")
         db.rollback()
 
         raise HTTPException(

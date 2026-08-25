@@ -5,6 +5,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from app.accounts.helpers import check_existence, serialize_user
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ADMIN CAN ACTIVATE OR DEACTIVATE AN ALREADY
@@ -41,7 +44,7 @@ async def change_status(id : int, is_active: bool, request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.accounts.routes.change_status")
         db.rollback()
 
         raise HTTPException(

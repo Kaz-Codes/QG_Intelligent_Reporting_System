@@ -6,6 +6,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_LOGISTICS
 from app.logistics.helpers import fetch_consignment
 from app.logistics.serializers import serialize_consignment
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.get("/{consignment_id}")
 def get_consignment(
@@ -43,7 +46,7 @@ def get_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.get_consignment")
         db.rollback()
 
         raise HTTPException(

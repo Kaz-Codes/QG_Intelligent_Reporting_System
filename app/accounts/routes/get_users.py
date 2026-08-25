@@ -7,6 +7,9 @@ from fastapi import Request, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.accounts.helpers import serialize_user
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ADMIN CAN VIEW ALL USER ACCOUNTS
@@ -43,7 +46,7 @@ async def get_all_users(request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.accounts.routes.get_users")
         db.rollback()
 
         raise HTTPException(

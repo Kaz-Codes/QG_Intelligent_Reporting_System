@@ -8,6 +8,9 @@ from app.logs.models import ActivityLog
 from app.logs.routes.router import router
 from fastapi import Request, HTTPException
 from sqlalchemy import select
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # THE STORED LOG HISTORY (ADMIN ONLY)
@@ -55,7 +58,7 @@ async def list_logs(request: Request,
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logs.routes.list_logs")
         db.rollback()
 
         raise HTTPException(

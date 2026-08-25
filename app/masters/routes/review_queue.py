@@ -9,6 +9,9 @@ from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # THE REVIEW QUEUE (EVERY ROLE)
@@ -75,7 +78,7 @@ async def review_queue(request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.review_queue")
         db.rollback()
 
         raise HTTPException(

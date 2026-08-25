@@ -7,6 +7,9 @@ from app.accounts.permissions import CAN_VIEW_IMPORTS
 from app.imports.helpers import fetch_all_consignment_history, fetch_consignment
 from app.imports.serializers import serialize_consignment_history
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.get("/change-history/{consignment_id}")
 def get_consignment_history_list(
@@ -69,7 +72,7 @@ def get_consignment_history_list(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.imports.routes.get_consignment_history_list")
         db.rollback()
 
         raise HTTPException(

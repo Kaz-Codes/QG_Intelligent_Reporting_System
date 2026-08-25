@@ -29,6 +29,9 @@ from app.dashboard.logistics.helpers import (
     NOT_STATED, UNCLASSIFIED,
 )
 from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #=====================================================
@@ -126,7 +129,7 @@ def shipments_dashboard(
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.logistics.routes.logistics_dashboard")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
@@ -218,7 +221,7 @@ def packing_dashboard(
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.logistics.routes.logistics_dashboard")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
@@ -341,7 +344,7 @@ def transport_dashboard(
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.logistics.routes.logistics_dashboard")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:

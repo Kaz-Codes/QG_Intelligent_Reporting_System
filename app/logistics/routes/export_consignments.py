@@ -8,6 +8,9 @@ from app.logistics.helpers import fetch_consignments_page
 from app.export_utils import xlsx_response
 from typing import Optional
 from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # EXPORT THE FILTERED LOGISTICS ORDERS TO EXCEL
@@ -98,7 +101,7 @@ def export_consignments(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.export_consignments")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

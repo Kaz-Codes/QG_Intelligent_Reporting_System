@@ -32,6 +32,9 @@ from app.dashboard.logistics.helpers import (
     fetch_undated_orders,
 )
 from app.dashboard.logistics.routes.router import router
+import logging
+
+logger = logging.getLogger(__name__)
 
 KEYS = {
     "shipments": ("orders", "delivered",
@@ -152,7 +155,7 @@ def logistics_references(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.logistics.routes.logistics_references")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

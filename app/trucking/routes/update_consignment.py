@@ -12,6 +12,9 @@ from app.trucking.helpers import (
 )
 from app.trucking.models import TruckingVehicle
 from app.trucking.serializers import serialize_consignment, serialize_many
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -115,7 +118,7 @@ def update_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.update_consignment")
         db.rollback()
 
         raise HTTPException(

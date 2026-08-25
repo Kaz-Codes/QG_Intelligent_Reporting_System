@@ -26,6 +26,9 @@ from app.dashboard.inventory.helpers import (
 from app.dashboard.inventory.serializers import serialize_rows
 from app.dashboard.inventory import calculations as calc
 from app.dashboard.inventory.routes.router import router
+import logging
+
+logger = logging.getLogger(__name__)
 
 # `q` is the OPEN PANEL's own search term — distinct from the `search` query
 # param below, which narrows which stock rows are fetched at all.
@@ -129,7 +132,7 @@ def inventory_references(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.inventory.routes.inventory_references")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

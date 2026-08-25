@@ -6,6 +6,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_IMPORTS
 from app.cross_module import find_trucking_jobs
 from app.trucking.serializers import serialize_consignment as serialize_trucking
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # TRUCKING JOBS FOR AN IMPORT CONSIGNMENT
@@ -37,7 +40,7 @@ def get_trucking_jobs(request : Request, consignment_id : int):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.imports.routes.get_trucking_jobs")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

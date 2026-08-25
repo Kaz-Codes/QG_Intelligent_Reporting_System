@@ -7,6 +7,9 @@ from app.masters.routes.router import router
 from app.masters.serializers import serialize_item_for_entry
 from fastapi import Request, HTTPException
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # SEARCH ITEMS FOR THE CONSIGNMENT WIZARD
@@ -50,7 +53,7 @@ def item_search(request: Request,
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.item_search")
         db.rollback()
 
         raise HTTPException(

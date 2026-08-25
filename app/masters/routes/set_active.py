@@ -7,6 +7,9 @@ from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # DEACTIVATE OR REACTIVATE A MASTER
@@ -61,7 +64,7 @@ def _set_active(master, row_id, active, request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.set_active")
         db.rollback()
 
         raise HTTPException(

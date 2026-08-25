@@ -5,6 +5,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import require_admin
 from app.trucking.helpers import fetch_consignment
 from app.trucking.serializers import serialize_consignment
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #-----------------------------------------------------
@@ -62,7 +65,7 @@ def reopen_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.trucking.routes.reopen_consignment")
         db.rollback()
 
         raise HTTPException(

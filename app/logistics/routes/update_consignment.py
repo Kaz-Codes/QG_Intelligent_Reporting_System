@@ -13,6 +13,9 @@ from app.logistics.helpers import (
 )
 from app.logistics.models import LogisticsItem, LogisticsPackage, LogisticsContainer
 from app.logistics.serializers import serialize_consignment, serialize_many
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -146,7 +149,7 @@ def update_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.update_consignment")
         db.rollback()
 
         raise HTTPException(

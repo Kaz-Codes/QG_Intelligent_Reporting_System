@@ -8,6 +8,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_LOGISTICS
 from app.logistics.models import LogisticsConsignment
 from app.enums import LogisticsStatus, OrderType
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # THE LIST SCREEN'S FILTER DROPDOWNS
@@ -81,7 +84,7 @@ def filter_options(request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.filter_options")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

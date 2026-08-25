@@ -9,6 +9,9 @@ from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # EDIT A MASTER RECORD (ADMIN, MANAGER)
@@ -77,7 +80,7 @@ async def update_master(master : str, row_id : int, payload : dict, request: Req
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.update_master")
         db.rollback()
 
         raise HTTPException(

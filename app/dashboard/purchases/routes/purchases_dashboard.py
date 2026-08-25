@@ -15,6 +15,9 @@ from app.dashboard.purchases.calculations import (
 )
 from typing import Optional
 from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/purchases")
@@ -100,7 +103,7 @@ def purchases_dashboard(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.purchases.routes.purchases_dashboard")
         db.rollback()
 
         raise HTTPException(

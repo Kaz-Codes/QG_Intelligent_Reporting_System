@@ -7,6 +7,9 @@ from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from sqlalchemy import select
 from app.accounts.helpers import serialize_user, apply_account_access
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ADMIN CAN CREATE A NEW ACCOUNT
@@ -54,7 +57,7 @@ async def create_user(user_schema : UserSchema, request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.accounts.routes.create_user")
         db.rollback()
 
         raise HTTPException(

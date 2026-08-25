@@ -7,6 +7,9 @@ from app.masters.registry import get_master_config
 from app.masters.routes.router import router
 from app.masters.serializers import serialize
 from fastapi import Request, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ADD A MASTER RECORD (ADMIN, MANAGER)
@@ -73,7 +76,7 @@ async def create_master(master : str, payload : dict, request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.masters.routes.create_master")
         db.rollback()
 
         raise HTTPException(

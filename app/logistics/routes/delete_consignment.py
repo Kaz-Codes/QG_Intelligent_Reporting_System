@@ -6,6 +6,9 @@ from app.auth.authorize_user import require_admin
 from app.logistics.helpers import fetch_consignment
 from app.logistics.serializers import serialize_consignment
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.delete("/{consignment_id}")
 def delete_consignment(
@@ -56,7 +59,7 @@ def delete_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.delete_consignment")
         db.rollback()
 
         raise HTTPException(

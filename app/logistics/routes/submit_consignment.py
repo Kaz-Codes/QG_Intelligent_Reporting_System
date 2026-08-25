@@ -6,6 +6,9 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_LOGISTICS, CAN_EDIT_LOGISTICS
 from app.logistics.helpers import fetch_consignment, verify_entry_ownership, submission_errors, is_closed
 from app.logistics.serializers import serialize_consignment
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #-----------------------------------------------------
@@ -85,7 +88,7 @@ def submit_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.submit_consignment")
         db.rollback()
 
         raise HTTPException(

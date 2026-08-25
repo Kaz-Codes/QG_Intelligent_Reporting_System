@@ -10,6 +10,9 @@ from app.imports.helpers import updated_fields, updated_payments, updated_items,
 from app.imports.helpers import fetch_consignment
 from app.imports.models import ConsignmentItem, Payment
 from app.imports.serializers import serialize_consignment, serialize_many
+import logging
+
+logger = logging.getLogger(__name__)
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -144,7 +147,7 @@ def update_consignment(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.imports.routes.update_consignment")
         db.rollback()
 
         raise HTTPException(

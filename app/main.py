@@ -134,19 +134,19 @@ app = FastAPI(title="Supply Chain ERP")
 # CORS. The token lives in a cookie, so the browser only sends it when the
 # request carries credentials, and that in turn means the allowed origins
 # have to be named exactly (a wildcard is refused by the browser once
-# credentials are allowed). Add the front end's real address here.
-# ALLOWED_ORIGINS = [
-#     "http://localhost:5173",
-#     "http://127.0.0.1:5173",
-#     "http://127.0.0.1:5179",
-#     "http://localhost:3000",
-#     "http://127.0.0.1:3000",
-#     "/"
-# ]
+# credentials are allowed) — allow_origins=["*"] with allow_credentials=True
+# would let any origin ride the cookie into an authenticated request. Set
+# ALLOWED_ORIGINS in .env to a comma-separated list of the front end's real
+# addresses; an empty/unset var means no origin is allowed.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

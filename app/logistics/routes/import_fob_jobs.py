@@ -5,6 +5,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_LOGISTICS
 from app.cross_module import derive_import_fob_jobs
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #-----------------------------------------------------
@@ -41,7 +44,7 @@ def import_fob_jobs(request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.logistics.routes.import_fob_jobs")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
 

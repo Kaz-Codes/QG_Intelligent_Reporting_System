@@ -17,6 +17,9 @@ from app.dashboard.inventory.calculations import (
 )
 from typing import Optional
 from datetime import date
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/inventory")
@@ -117,7 +120,7 @@ def inventory_dashboard(
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.dashboard.inventory.routes.inventory_dashboard")
         db.rollback()
 
         raise HTTPException(

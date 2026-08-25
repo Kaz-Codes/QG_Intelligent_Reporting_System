@@ -8,6 +8,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.reports.helpers import selected_types, build_options
 from app.accounts.permissions import CAN_MAKE_REPORTS
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 #-----------------------------------------------------
@@ -39,7 +42,7 @@ def reports_options(
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.report_options")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:

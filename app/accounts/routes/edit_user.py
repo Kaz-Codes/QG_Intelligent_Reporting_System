@@ -7,6 +7,9 @@ from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from sqlalchemy import select
 from app.accounts.helpers import check_existence, serialize_user, apply_account_access
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # ADMIN CAN EDIT THE DETAILS OF AN ALREADY
@@ -58,7 +61,7 @@ async def edit_user(id : int, user_schema : UserSchema, request: Request):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.accounts.routes.edit_user")
         db.rollback()
 
         raise HTTPException(

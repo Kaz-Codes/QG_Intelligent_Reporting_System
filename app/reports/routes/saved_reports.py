@@ -10,6 +10,9 @@ from app.reports.helpers import (
 )
 from app.reports.serializers import serialize_saved
 from app.accounts.permissions import CAN_MAKE_REPORTS
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _can_modify(user, saved):
@@ -34,7 +37,7 @@ def list_saved_reports(request: Request):
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.saved_reports")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
@@ -60,7 +63,7 @@ def create_saved_report(payload: SavedReportSchema, request: Request):
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.saved_reports")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
@@ -88,7 +91,7 @@ def get_saved_report(report_id: int, request: Request):
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.saved_reports")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
@@ -119,7 +122,7 @@ def update_saved_report(report_id: int, payload: SavedReportSchema, request: Req
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.saved_reports")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
@@ -146,7 +149,7 @@ def delete_saved_report(report_id: int, request: Request):
         db.rollback()
         raise
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.reports.routes.saved_reports")
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
