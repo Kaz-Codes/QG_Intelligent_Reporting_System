@@ -49,6 +49,47 @@ export const fetchClearingAgents = () => fetchMaster<MasterOption>('agent')
 export const fetchPorts = () => fetchMaster<PortOption>('port')
 export const fetchTransporters = () => fetchMaster<MasterOption>('transporter')
 
+/**
+ * One row of `GET /masters/item-search` — the item catalogue's typeahead.
+ *
+ * Deliberately NOT cached like the small masters above: the catalogue is far
+ * too large to ship whole, which is why it has a search endpoint of its own.
+ * The backend matches on name OR code, so the same call serves either field.
+ */
+export interface ItemSearchResult {
+  id: number
+  item_code: string
+  name: string
+  default_specification: string | null
+  default_unit_of_measurement: string | null
+  category: string | null
+  hs_codes: string[]
+}
+
+export async function searchItems(q: string, limit = 10): Promise<ItemSearchResult[]> {
+  const params = new URLSearchParams()
+  if (q.trim()) params.set('q', q.trim())
+  params.set('limit', String(limit))
+  const res = await apiFetch<MastersEnvelope<ItemSearchResult>>(
+    `/masters/item-search?${params.toString()}`,
+  )
+  return res.data ?? []
+}
+
+/** The master row whose code is EXACTLY what was typed, or null.
+ *
+ *  The search is a fuzzy `ilike`, so it happily returns near misses; the
+ *  autofill lock must only ever fire on a real, unambiguous hit.
+ *  `items.item_code` is unique, so an exact match is at most one row. */
+export function exactCodeMatch(
+  results: ItemSearchResult[],
+  code: string | undefined | null,
+): ItemSearchResult | null {
+  if (!code?.trim()) return null
+  const needle = code.trim().toLowerCase()
+  return results.find((r) => r.item_code?.trim().toLowerCase() === needle) ?? null
+}
+
 /** Exact, case-insensitive name -> id. A typed value that doesn't match
  *  anything in the master (a typo, or a name not yet in the system) resolves
  *  to undefined — the caller omits that id from the payload rather than

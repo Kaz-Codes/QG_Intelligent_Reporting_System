@@ -5,7 +5,7 @@ from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
 
 from app.enums import Status
-from app.masters.models import Branch, Supplier
+from app.masters.models import Branch, Item, Supplier
 from sqlalchemy import select
 from datetime import datetime, timezone, date
 from sqlalchemy.inspection import inspect
@@ -776,6 +776,77 @@ REQUISITION_REQUIRED = {
 # importsStatus/schema.ts (superRefine, keyed off the lowercase
 # requisitionType) makes the same field optional. Keep both in sync.
 ITEM_CODE_NOT_REQUIRED_FOR = {"Others"}
+
+
+#---------------------------------------
+# THE ITEM MASTER IS THE AUTHORITY ON NAME AND SPECIFICATION
+#
+# A line whose item_code matches an ACTIVE master item takes that item's name
+# (and specification) FROM THE MASTER, overwriting whatever the payload sent.
+# One code cannot describe two different things, or item-wise reporting stops
+# agreeing with itself — which is the same reason free text is banned for
+# anything reported on.
+#
+# The wizard also locks those two inputs the moment a code matches
+# (Step1Consignment's ItemDetailFields), but that is a convenience for the
+# person typing. THIS is the guarantee: a hand-rolled request, an older
+# client or a replayed payload all come through here.
+#
+# Run on every WRITE (create and update), not inside submission_errors —
+# that function is called on every READ too, to fill `missing_fields` in the
+# serializer, and mutating rows there would dirty the session on a plain list
+# fetch. Same call sites as recompute_derived, for the same reason.
+#
+# A code matching nothing is left completely alone. That covers the "Others"
+# requisition type, where item_code is optional to begin with (see
+# ITEM_CODE_NOT_REQUIRED_FOR), and the loaded rows carrying a generated
+# IMP-<hash> code the catalogue never held (loading/imports/item_codes.py).
+# Both are legitimately free text.
+#
+# SPECIFICATION IS ONLY OVERWRITTEN WHERE THE MASTER STATES ONE. Writing an
+# empty value over a specification the operator typed, to agree with a master
+# that does not have one, would destroy information to enforce nothing.
+#
+# Interaction with rule 12 ("the line stores its own copy; changing the master
+# later never rewrites past consignments"): the line still holds its own
+# snapshot and nothing rewrites history in place. But a line RE-SAVED after
+# its master changed does now pick up the new values, because this runs on
+# every write. That is the intended trade for codes and names never
+# disagreeing.
+#---------------------------------------
+
+def apply_item_master_values(consignment, db):
+    codes = {
+        item.item_code.strip().lower()
+        for item in consignment.items
+        if not item.is_deleted and item.item_code and item.item_code.strip()
+    }
+
+    if not codes:
+        return
+
+    # One query for the whole consignment rather than one per line.
+    rows = db.execute(
+        select(Item)
+        .where(Item.is_active == True)
+        .where(func.lower(Item.item_code).in_(codes))
+    ).scalars().all()
+
+    by_code = {row.item_code.strip().lower(): row for row in rows}
+
+    for item in consignment.items:
+        if item.is_deleted or not item.item_code or not item.item_code.strip():
+            continue
+
+        master = by_code.get(item.item_code.strip().lower())
+
+        if master is None:
+            continue
+
+        item.item_name = master.name
+
+        if master.default_specification:
+            item.specification = master.default_specification
 
 
 #---------------------------------------

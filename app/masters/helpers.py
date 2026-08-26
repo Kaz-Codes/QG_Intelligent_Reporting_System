@@ -44,13 +44,21 @@ def parse_payload(schema, payload):
 
 
 #--------------------------------
-# SEARCH ITEMS BY NAME FOR DATA ENTRY
+# SEARCH ITEMS BY NAME OR CODE FOR DATA ENTRY
 #
-# Feeds the item name typeahead on the consignment wizard.
-# As the operator types a name, the matching active items
-# come back with everything the form auto-fills: the code,
-# the default specification and unit, and the H.S. codes
+# Feeds the item typeahead on the consignment wizard.
+# As the operator types, the matching active items come
+# back with everything the form auto-fills: the code, the
+# default specification and unit, and the H.S. codes
 # (an item can have several, so it is a list).
+#
+# Matches the CODE as well as the name. It was name-only,
+# which left the wizard's item-code field with nothing to
+# search against — and the code is the half an operator
+# usually has in front of them, off a requisition or an
+# invoice. Both are matched with one OR rather than a
+# second endpoint, so a typeahead can be pointed at either
+# field and behave the same.
 #
 # Unverified items are included, because an item created
 # inline a moment ago must be findable straight away. Only
@@ -61,7 +69,13 @@ def search_items(db, q, limit):
     query = select(Item).where(Item.is_active == True)
 
     if q:
-        query = query.where(Item.name.ilike("%" + q.strip() + "%"))
+        pattern = "%" + q.strip() + "%"
+        query = query.where(
+            or_(
+                Item.name.ilike(pattern),
+                Item.item_code.ilike(pattern),
+            )
+        )
 
     query = query.options(
         selectinload(Item.hs_codes)

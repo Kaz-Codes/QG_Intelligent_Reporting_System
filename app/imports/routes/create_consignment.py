@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS
-from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived
+from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values
 
 from app.imports.serializers import serialize_consignment
 import logging
@@ -40,6 +40,11 @@ def create_consignment(
         # Record who entered any landed-cost figure supplied at entry.
         for item in consignment_items:
             stamp_landed_cost_audit(item, user, item.elc is not None, item.alc is not None)
+
+        # A line whose code is in the item master takes its name and
+        # specification from there, whatever the payload said. The wizard
+        # locks those inputs too; this is the part that actually guarantees it.
+        apply_item_master_values(consignment, db)
 
         # Store the derived money totals + per-line variance.
         recompute_derived(consignment)

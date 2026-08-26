@@ -1,4 +1,5 @@
-import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
+import { useEffect, useState } from 'react'
+import { useFormContext, useFieldArray, useWatch, Controller } from 'react-hook-form'
 import {
   type ConsignmentDraft, type ConsignmentItem,
   REQUISITION_TYPES, REQUISITION_FIELDS, CONSIGNMENT_TYPES, UNITS_OF_MEASURE, INCOTERMS,
@@ -7,6 +8,8 @@ import {
 import { Field, Input, Select } from './fields'
 import { useMasters } from '../MastersContext'
 import { Disclosure } from '@/components/Disclosure'
+import { SearchableSelect, type SearchableOption } from '@/components/ui/SearchableSelect'
+import { searchItems, exactCodeMatch, type ItemSearchResult } from '@/lib/api/masters'
 
 const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED']
 const ORIGINS = ['China', 'Germany', 'Italy', 'Japan', 'Korea, Republic of', 'Sweden', 'Türkiye', 'United States']
@@ -21,30 +24,176 @@ const REQ_LEAD: Record<string, string> = {
   others: 'Describe what this item is for',
 }
 
+const FROM_MASTER_HINT = 'From item master — locked'
+const LOCKED_INPUT_CLASS = 'bg-canvas-alt text-muted'
+
+/** Module scope so the identity is stable — SearchableSelect restarts its
+ *  debounced search whenever `loadOptions` changes. Searches name OR code
+ *  (see masters/helpers.py::search_items), so typing either finds the row. */
+async function loadItemOptions(query: string): Promise<SearchableOption<ItemSearchResult>[]> {
+  const rows = await searchItems(query)
+  return rows.map((row) => ({
+    value: row.item_code,
+    label: row.item_code,
+    hint: row.name,
+    data: row,
+  }))
+}
+
 /**
- * Item code, required for every item except "Others" — those aren't drawn
- * from the item master, so there's often no code to give. Its own component
- * so `useWatch` can scope to this one item's requisitionType without
- * re-rendering the whole item list on every keystroke (the pattern used for
- * per-row reactive reads elsewhere, e.g. trucking's PackageAllocation).
+ * One item row's identity, quantity and unit fields.
+ *
+ * Extracted from the row `.map()` because the three identity fields are now
+ * interdependent — the code decides whether the name and specification are
+ * editable — and a hook cannot be called inside a loop. The grid order is
+ * unchanged from when these were written inline.
+ *
+ * ITEM CODE IS THE AUTHORITY. Enter a code that matches an ACTIVE master item
+ * and the name and specification are filled from that master and locked: one
+ * code cannot describe two different things, or item-wise reporting stops
+ * agreeing with itself. Locking is a convenience for the person typing — the
+ * SERVER re-applies the same values on every write, so a payload that skips
+ * the form cannot get past it (see imports/helpers.py::apply_item_master_values).
+ *
+ * A code that matches NOTHING locks nothing. That covers two real cases and
+ * both must keep working: the "Others" requisition type, where item_code is
+ * optional entirely (ITEM_CODE_NOT_REQUIRED_FOR on the backend), and legacy
+ * lines carrying a generated `IMP-<hash>` code the catalogue never had
+ * (loading/imports/item_codes.py). Hence allowFreeText on the code field.
+ *
+ * SPECIFICATION LOCKS ONLY IF THE MASTER HAS ONE. Forcing an empty value over
+ * a specification the operator typed, to agree with a master that does not
+ * state one, would destroy information to enforce nothing.
  *
  * MIRRORED ON THE BACKEND: app/imports/helpers.py (submission_errors,
- * ITEM_CODE_NOT_REQUIRED_FOR) makes the same field optional, keyed off the
- * capitalised requisition type. Keep both in sync.
+ * ITEM_CODE_NOT_REQUIRED_FOR) makes the code optional for "Others", keyed off
+ * the capitalised requisition type. Keep both in sync.
  */
-function ItemCodeField({ index, error }: { index: number; error?: string }) {
-  const { register, control } = useFormContext<ConsignmentDraft>()
+function ItemDetailFields({ index }: { index: number }) {
+  const {
+    register, control, setValue, getValues, formState: { errors },
+  } = useFormContext<ConsignmentDraft>()
+
+  const itemCode = useWatch({ control, name: `items.${index}.itemCode` })
   const requisitionType = useWatch({ control, name: `items.${index}.requisitionType` })
-  const optional = requisitionType === 'others'
+  const codeOptional = requisitionType === 'others'
+
+  const [master, setMaster] = useState<ItemSearchResult | null>(null)
+
+  // No code means no lookup and no lock — the Others / non-master path stays
+  // exactly as free-text as it was.
+  useEffect(() => {
+    const code = (itemCode ?? '').trim()
+    if (!code) { setMaster(null); return }
+
+    let cancelled = false
+    const timer = setTimeout(() => {
+      searchItems(code)
+        .then((rows) => { if (!cancelled) setMaster(exactCodeMatch(rows, code)) })
+        .catch(() => { if (!cancelled) setMaster(null) })
+    }, 250)
+
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [itemCode])
+
+  const lockName = master !== null
+  const lockSpec = !!master?.default_specification
+
+  // Write the master's values onto the row. Guarded on a real difference: the
+  // lookup re-runs as the code is typed and would otherwise mark the form
+  // dirty on every pass, which the stepper's unsaved-changes prompt reads.
+  useEffect(() => {
+    if (!master) return
+
+    if (getValues(`items.${index}.itemName`) !== (master.name ?? '')) {
+      setValue(`items.${index}.itemName`, master.name ?? '', { shouldDirty: true })
+    }
+
+    const spec = master.default_specification
+    if (spec && getValues(`items.${index}.specification`) !== spec) {
+      setValue(`items.${index}.specification`, spec, { shouldDirty: true })
+    }
+  }, [master, index, setValue, getValues])
+
+  const typedCode = (itemCode ?? '').trim()
 
   return (
-    <Field label="Item code" required={!optional} error={error}>
-      <Input
-        {...register(`items.${index}.itemCode`)}
-        placeholder={optional ? 'Optional for Others' : undefined}
-        autoComplete="off"
-      />
-    </Field>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Field
+        label="Item name" required span
+        error={errors.items?.[index]?.itemName?.message}
+        hint={lockName ? FROM_MASTER_HINT : undefined}
+      >
+        <Input
+          list={lockName ? undefined : 'dl-items'}
+          {...register(`items.${index}.itemName`)}
+          readOnly={lockName}
+          className={lockName ? LOCKED_INPUT_CLASS : undefined}
+          placeholder="Search item master…"
+          autoComplete="off"
+        />
+      </Field>
+
+      <Field label="Placeholder name" hint="Optional nickname" span>
+        <Input {...register(`items.${index}.placeholderName`)} placeholder="e.g. “blue drum”" autoComplete="off" />
+      </Field>
+
+      <Field
+        label="Item code" required={!codeOptional}
+        error={errors.items?.[index]?.itemCode?.message}
+        hint={typedCode && !lockName ? 'Not in item master — name stays free text' : undefined}
+      >
+        <Controller
+          control={control}
+          name={`items.${index}.itemCode`}
+          render={({ field }) => (
+            <SearchableSelect<ItemSearchResult>
+              value={field.value ?? ''}
+              onChange={field.onChange}
+              loadOptions={loadItemOptions}
+              // The picked row is already the full master record, so the
+              // fields fill immediately instead of waiting on the debounce.
+              onSelectOption={(option) => { if (option.data) setMaster(option.data) }}
+              allowFreeText
+              placeholder={codeOptional ? 'Optional for Others' : 'Type a code or name…'}
+              emptyMessage="No matching item — the code will be kept as typed"
+            />
+          )}
+        />
+      </Field>
+
+      <Field label="H.S. code" hint="Optional now">
+        <Input {...register(`items.${index}.hsCode`)} placeholder="0000.00.00" className="tabular-nums" autoComplete="off" />
+      </Field>
+
+      <Field
+        label="Specification" span
+        hint={lockSpec ? FROM_MASTER_HINT : undefined}
+      >
+        <Input
+          {...register(`items.${index}.specification`)}
+          readOnly={lockSpec}
+          className={lockSpec ? LOCKED_INPUT_CLASS : undefined}
+          placeholder="Optional"
+          autoComplete="off"
+        />
+      </Field>
+
+      <Field label="Quantity" required error={errors.items?.[index]?.quantity?.message}>
+        <Input type="number" min="0" step="any" {...register(`items.${index}.quantity`)} />
+      </Field>
+
+      <Field label="Unit of measure" required error={errors.items?.[index]?.uom?.message}>
+        <Select {...register(`items.${index}.uom`)}>
+          <option value="">Select…</option>
+          {UNITS_OF_MEASURE.map((u) => <option key={u}>{u}</option>)}
+        </Select>
+      </Field>
+
+      <Field label="Batch number">
+        <Input {...register(`items.${index}.batchNo`)} placeholder="Add later" autoComplete="off" />
+      </Field>
+    </div>
   )
 }
 
@@ -176,33 +325,7 @@ export function Step1Consignment() {
 
                 <div className="p-3">
                   <p className="mb-2.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted">Item</p>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <Field label="Item name" required span error={errors.items?.[i]?.itemName?.message}>
-                      <Input list="dl-items" {...register(`items.${i}.itemName`)} placeholder="Search item master…" autoComplete="off" />
-                    </Field>
-                    <Field label="Placeholder name" hint="Optional nickname" span>
-                      <Input {...register(`items.${i}.placeholderName`)} placeholder="e.g. “blue drum”" autoComplete="off" />
-                    </Field>
-                    <ItemCodeField index={i} error={errors.items?.[i]?.itemCode?.message} />
-                    <Field label="H.S. code" hint="Optional now">
-                      <Input {...register(`items.${i}.hsCode`)} placeholder="0000.00.00" className="tabular-nums" autoComplete="off" />
-                    </Field>
-                    <Field label="Specification" span>
-                      <Input {...register(`items.${i}.specification`)} placeholder="Optional" autoComplete="off" />
-                    </Field>
-                    <Field label="Quantity" required error={errors.items?.[i]?.quantity?.message}>
-                      <Input type="number" min="0" step="any" {...register(`items.${i}.quantity`)} />
-                    </Field>
-                    <Field label="Unit of measure" required error={errors.items?.[i]?.uom?.message}>
-                      <Select {...register(`items.${i}.uom`)}>
-                        <option value="">Select…</option>
-                        {UNITS_OF_MEASURE.map((u) => <option key={u}>{u}</option>)}
-                      </Select>
-                    </Field>
-                    <Field label="Batch number">
-                      <Input {...register(`items.${i}.batchNo`)} placeholder="Add later" autoComplete="off" />
-                    </Field>
-                  </div>
+                  <ItemDetailFields index={i} />
 
                   <div className="mt-4">
                     <Disclosure
