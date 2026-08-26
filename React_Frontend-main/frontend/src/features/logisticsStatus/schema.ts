@@ -521,6 +521,90 @@ export function packingSavings(pkg: LogisticsPackage): number | null {
   return pkg.quotedPackingCost - pkg.actualPackingCost
 }
 
+/**
+ * One package cost read off RAW form state.
+ *
+ * The Packing step registers these inputs without `valueAsNumber`, so what is
+ * actually in the form is a STRING — and `''` once the field is cleared. An
+ * absent cost has to stay absent all the way through the roll-up below, so
+ * this returns null rather than coercing a blank to 0.
+ */
+function packageCost(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * The order's packing cost, rolled up from its packages.
+ *
+ * The Expenditures step has an order-level `packingCost` the operator types by
+ * hand, while Packing already holds a quoted and an actual figure per package.
+ * This is what reconciles the two — display-layer aggregation only. Nothing
+ * here is stored: the model's own comment says these totals are worked out on
+ * the front end and never persisted, and that stays true.
+ *
+ * A MISSING COST IS NOT ZERO. A package nobody has costed yet is not a package
+ * that cost nothing, so it is left out of the total and counted in the basis
+ * instead. Folding it in as 0 would understate the actual and, by exactly the
+ * same amount, overstate the saving — which is the one direction this figure
+ * must never be wrong in.
+ *
+ * SAVINGS ARE COMPARED LIKE FOR LIKE. It is NOT `quoted - actual` across the
+ * whole order: with 7 packages quoted and 3 costed that subtracts two
+ * different populations and reports the four uncosted quotes as pure profit.
+ * Only packages priced BOTH ways contribute, and `savingsBasis` says how many
+ * that was.
+ *
+ * Every total therefore ships with the count it was computed over, and is null
+ * rather than 0 when that count is zero — the same rule the dashboards follow,
+ * for the same reason: a confident Rs 0 reads as a fact, not as an absence.
+ */
+export interface PackingCostRollup {
+  /** Packages on the order, costed or not. */
+  packages: number
+  quoted: number | null
+  quotedBasis: number
+  actual: number | null
+  actualBasis: number
+  /** Positive is money saved, negative is an overrun. */
+  savings: number | null
+  savingsBasis: number
+  /** Every package states an actual cost, so `actual` is final, not partial. */
+  actualComplete: boolean
+}
+
+export function packingCostRollup(packages: LogisticsPackage[]): PackingCostRollup {
+  let quoted = 0
+  let quotedBasis = 0
+  let actual = 0
+  let actualBasis = 0
+  let savings = 0
+  let savingsBasis = 0
+
+  const rows = packages ?? []
+
+  for (const pkg of rows) {
+    const q = packageCost(pkg?.quotedPackingCost)
+    const a = packageCost(pkg?.actualPackingCost)
+
+    if (q !== null) { quoted += q; quotedBasis += 1 }
+    if (a !== null) { actual += a; actualBasis += 1 }
+    if (q !== null && a !== null) { savings += q - a; savingsBasis += 1 }
+  }
+
+  return {
+    packages: rows.length,
+    quoted: quotedBasis > 0 ? quoted : null,
+    quotedBasis,
+    actual: actualBasis > 0 ? actual : null,
+    actualBasis,
+    savings: savingsBasis > 0 ? savings : null,
+    savingsBasis,
+    actualComplete: rows.length > 0 && actualBasis === rows.length,
+  }
+}
+
 /** Quantity of one item allocated across ALL packages (local and cross-batch). */
 export function allocatedQuantity(itemId: string, packages: LogisticsPackage[]): number {
   return packages.reduce(
