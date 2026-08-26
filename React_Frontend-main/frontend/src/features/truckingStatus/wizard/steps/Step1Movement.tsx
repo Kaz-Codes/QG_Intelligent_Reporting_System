@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
+import { useFormContext, useFieldArray, useWatch, Controller } from 'react-hook-form'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { fetchTransporters, type MasterOption } from '@/lib/api/masters'
+import { fetchTransporters } from '@/lib/api/masters'
+import { useMasterOptions, toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
+import { SearchableSelect, NotInMasterNote } from '@/components/ui/SearchableSelect'
 import {
   MOVEMENT_TYPES,
   SHIFTING_TYPES,
@@ -30,13 +31,9 @@ export function Step1Movement() {
   // imports wizard uses for branch/supplier/port/agent) would be one context
   // for one consumer. The backend resolves the typed name to transporter_id
   // itself on save (helpers.resolve_transporter_id) — this list only powers
-  // the suggestion dropdown.
-  const [transporters, setTransporters] = useState<MasterOption[]>([])
-  useEffect(() => {
-    let cancelled = false
-    fetchTransporters().then((rows) => { if (!cancelled) setTransporters(rows) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
+  // the dropdown.
+  const { rows: transporters, loading: transportersLoading } = useMasterOptions(fetchTransporters)
+  const transporterName = useWatch({ control, name: 'transporterName' })
   const sourceRef = useWatch({ control, name: 'sourceRef' })
   const takenAt = useWatch({ control, name: 'takenAt' })
   const { fields: itemFields, append: appendItem, remove: removeItem } = useFieldArray({
@@ -77,12 +74,33 @@ export function Step1Movement() {
         {errors.executionDate && <p className="text-xs text-risk">{errors.executionDate.message}</p>}
       </div>
 
+      {/* Transporter master, but FREE TEXT IS STILL ALLOWED ON PURPOSE. The
+          job stores transporter_name alongside transporter_id, so a name with
+          no master row behind it is kept exactly as typed and simply left
+          unlinked (helpers.resolve_transporter_id sets the id to NULL rather
+          than inventing a master row from a typo). Legacy jobs predate the
+          Transporter master entirely, and must keep opening and saving. */}
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="transporterName">Transporter Name</Label>
-        <Input id="transporterName" list="dl-transporters" autoComplete="off" {...register('transporterName')} />
-        <datalist id="dl-transporters">
-          {transporters.map((t) => <option key={t.id} value={t.name} />)}
-        </datalist>
+        <Controller
+          control={control}
+          name="transporterName"
+          render={({ field }) => (
+            <SearchableSelect
+              id="transporterName"
+              value={field.value ?? ''}
+              onChange={field.onChange}
+              options={toOptions(transporters)}
+              allowFreeText
+              disabled={transportersLoading}
+              placeholder={transportersLoading ? 'Loading transporters…' : 'Search or type a transporter…'}
+              emptyMessage="No matching transporter — it will be kept as typed"
+            />
+          )}
+        />
+        {!transportersLoading && !isKnownMasterValue(transporters, transporterName) && (
+          <NotInMasterNote master="transporter master" stored="text" />
+        )}
         {errors.transporterName && <p className="text-xs text-risk">{errors.transporterName.message}</p>}
       </div>
 

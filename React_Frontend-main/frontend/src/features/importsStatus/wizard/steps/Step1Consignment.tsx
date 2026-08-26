@@ -8,8 +8,9 @@ import {
 import { Field, Input, Select } from './fields'
 import { useMasters } from '../MastersContext'
 import { Disclosure } from '@/components/Disclosure'
-import { SearchableSelect, type SearchableOption } from '@/components/ui/SearchableSelect'
+import { SearchableSelect, NotInMasterNote, type SearchableOption } from '@/components/ui/SearchableSelect'
 import { searchItems, exactCodeMatch, type ItemSearchResult } from '@/lib/api/masters'
+import { toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
 
 const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED']
 const ORIGINS = ['China', 'Germany', 'Italy', 'Japan', 'Korea, Republic of', 'Sweden', 'Türkiye', 'United States']
@@ -210,6 +211,7 @@ export function Step1Consignment() {
   const items = watch('items')
   const requiredDelay = requiredVsEtaDelay({ requiredDate: watch('requiredDate'), eta: watch('eta') })
   const { branches, suppliers, loading: mastersLoading } = useMasters()
+  const supplierName = watch('supplier')
 
   return (
     <div className="space-y-5">
@@ -229,14 +231,38 @@ export function Step1Consignment() {
             </Select>
           </Field>
 
+          {/* Supplier master. FREE TEXT IS STILL ACCEPTED so an in-progress
+              draft is never blocked mid-typing — but unlike logistics'
+              customer or trucking's transporter, a consignment stores
+              supplier_ID ONLY (imports/models.py) with no name column beside
+              it. There is physically nowhere to keep an unmatched name, so
+              one cannot survive the save; NotInMasterNote says exactly that
+              rather than letting the field look accepted and come back empty.
+              The old hint here claimed such a name "is kept", which was not
+              true of any save. */}
           <Field
             label="Supplier" htmlFor="supplier" required error={errors.supplier?.message}
-            hint={mastersLoading ? 'Loading suppliers…' : 'From supplier master — a name that doesn’t match yet is kept, but won’t link until it’s added there'}
+            hint={mastersLoading ? 'Loading suppliers…' : undefined}
           >
-            <Input id="supplier" list="dl-suppliers" {...register('supplier')} placeholder="Start typing…" autoComplete="off" />
-            <datalist id="dl-suppliers">
-              {suppliers.map((s) => <option key={s.id} value={s.name} />)}
-            </datalist>
+            <Controller
+              control={control}
+              name="supplier"
+              render={({ field }) => (
+                <SearchableSelect
+                  id="supplier"
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  options={toOptions(suppliers)}
+                  allowFreeText
+                  disabled={mastersLoading}
+                  placeholder="Search suppliers…"
+                  emptyMessage="No matching supplier"
+                />
+              )}
+            />
+            {!mastersLoading && !isKnownMasterValue(suppliers, supplierName) && (
+              <NotInMasterNote master="supplier master" stored="none" />
+            )}
           </Field>
 
           <Field label="Country of origin" htmlFor="origin" required error={errors.origin?.message}>

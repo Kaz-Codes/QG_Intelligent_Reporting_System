@@ -1,9 +1,12 @@
-import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
+import { useFormContext, useFieldArray, useWatch, Controller } from 'react-hook-form'
 import { useParams } from 'react-router-dom'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { daysBetween, emptyContainer, type LogisticsDraft } from '../../schema'
 import { isContainerNumberTaken } from '@/lib/logisticsStatusData'
+import { SearchableSelect, NotInMasterNote } from '@/components/ui/SearchableSelect'
+import { fetchPorts } from '@/lib/api/masters'
+import { useMasterOptions, toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
 
 const normContainer = (s: string) => s.replace(/\s+/g, '').toUpperCase()
 
@@ -28,10 +31,15 @@ export function Step3Shipping() {
   const { register, control, formState: { errors } } = useFormContext<LogisticsDraft>()
   const { id } = useParams()
   const { fields: containerFields, append: appendContainer, remove: removeContainer } = useFieldArray({ control, name: 'containers' })
-  const [cro, actualArrival, orderType, watchedContainers] = useWatch({
+  const [cro, actualArrival, orderType, watchedContainers, pol, pod] = useWatch({
     control,
-    name: ['croArrivalDate', 'actualArrivalDate', 'orderType', 'containers'],
+    name: ['croArrivalDate', 'actualArrivalDate', 'orderType', 'containers', 'pol', 'pod'],
   })
+
+  // Not filtered by port_type the way imports filters them: a logistics order
+  // has no mode_of_shipment to filter against, so every port is offered.
+  const { rows: ports, loading: portsLoading } = useMasterOptions(fetchPorts)
+  const portOptions = toOptions(ports, (p) => p.port_type)
 
   const arrivalDelay = daysBetween(cro, actualArrival)
 
@@ -120,14 +128,57 @@ export function Step3Shipping() {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
+          {/* Port master, FREE TEXT STILL ALLOWED. Unlike imports — which
+              stores port IDs — a logistics order stores `pol`/`pod` as plain
+              STRING columns (logistics/models.py), so whatever is typed is
+              persisted verbatim whether or not the master knows it. Loaded
+              orders carry port names that predate the Port master, and they
+              must keep opening and saving unchanged. */}
           <Label htmlFor="pol">POL (Port of Loading)</Label>
-          <Input id="pol" {...register('pol')} />
+          <Controller
+            control={control}
+            name="pol"
+            render={({ field }) => (
+              <SearchableSelect
+                id="pol"
+                value={field.value ?? ''}
+                onChange={field.onChange}
+                options={portOptions}
+                allowFreeText
+                disabled={portsLoading}
+                placeholder={portsLoading ? 'Loading ports…' : 'Search or type a port…'}
+                emptyMessage="No matching port — it will be kept as typed"
+              />
+            )}
+          />
+          {!portsLoading && !isKnownMasterValue(ports, pol) && (
+            <NotInMasterNote master="port master" stored="text" />
+          )}
           {errors.pol && <p className="text-xs text-risk">{errors.pol.message}</p>}
         </div>
 
         <div className="flex flex-col gap-1.5">
+          {/* Same as POL above — a plain string column, so free text persists. */}
           <Label htmlFor="pod">POD (Port of Discharge)</Label>
-          <Input id="pod" {...register('pod')} />
+          <Controller
+            control={control}
+            name="pod"
+            render={({ field }) => (
+              <SearchableSelect
+                id="pod"
+                value={field.value ?? ''}
+                onChange={field.onChange}
+                options={portOptions}
+                allowFreeText
+                disabled={portsLoading}
+                placeholder={portsLoading ? 'Loading ports…' : 'Search or type a port…'}
+                emptyMessage="No matching port — it will be kept as typed"
+              />
+            )}
+          />
+          {!portsLoading && !isKnownMasterValue(ports, pod) && (
+            <NotInMasterNote master="port master" stored="text" />
+          )}
           {errors.pod && <p className="text-xs text-risk">{errors.pod.message}</p>}
         </div>
 

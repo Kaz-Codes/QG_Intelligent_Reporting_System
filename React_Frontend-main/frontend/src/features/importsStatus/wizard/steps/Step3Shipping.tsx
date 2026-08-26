@@ -1,8 +1,10 @@
-import { useFormContext, useWatch } from 'react-hook-form'
+import { useFormContext, useWatch, Controller } from 'react-hook-form'
 import { type ConsignmentDraft, SHIPMENT_MODES, transitDays } from '../../schema'
 import { Field, Input, Select, Callout, CarriedContext, PendingBanner } from './fields'
 import { useMasters } from '../MastersContext'
 import type { PortOption } from '@/lib/api/masters'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
+import { toOptions } from '@/lib/api/useMasterOptions'
 
 /** Which master port_type a shipment mode's ports are filtered to. Land and
  *  courier moves aren't tracked by a dedicated port_type on the master (only
@@ -57,18 +59,47 @@ export function Step3Shipping() {
             </Select>
           </Field>
 
+          {/* Searchable, but deliberately NOT free text — the one pair of
+              master fields in this round that stays restricted.
+              A consignment stores loading_port_id / delivery_port_id, foreign
+              keys with no name column beside them, so an unmatched value has
+              nowhere to live and would be dropped on save. These were already
+              a closed <Select> for that reason; this only makes a long port
+              list searchable instead of a scroll. The port-type and used_as
+              filtering below is also a real constraint (a sea consignment
+              must not offer an airport) that free text would defeat. */}
           <Field label="Port of loading" hint={mode ? undefined : 'Choose a mode to filter ports'}>
-            <Select {...register('portOfLoading')} disabled={!mode || mastersLoading}>
-              <option value="">{mode ? 'Select…' : 'Select mode first'}</option>
-              {loadingPorts.map((p) => <option key={p.id}>{p.name}</option>)}
-            </Select>
+            <Controller
+              control={control}
+              name="portOfLoading"
+              render={({ field }) => (
+                <SearchableSelect
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  options={toOptions(loadingPorts, (p) => p.port_type)}
+                  disabled={!mode || mastersLoading}
+                  placeholder={mode ? 'Search ports…' : 'Select mode first'}
+                  emptyMessage="No matching port for this mode"
+                />
+              )}
+            />
           </Field>
 
           <Field label="Port of delivery">
-            <Select {...register('portOfDelivery')} disabled={!mode || mastersLoading}>
-              <option value="">{mode ? 'Select…' : 'Select mode first'}</option>
-              {deliveryPorts.map((p) => <option key={p.id}>{p.name}</option>)}
-            </Select>
+            <Controller
+              control={control}
+              name="portOfDelivery"
+              render={({ field }) => (
+                <SearchableSelect
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  options={toOptions(deliveryPorts, (p) => p.port_type)}
+                  disabled={!mode || mastersLoading}
+                  placeholder={mode ? 'Search ports…' : 'Select mode first'}
+                  emptyMessage="No matching port for this mode"
+                />
+              )}
+            />
           </Field>
 
           <Field label="Readiness date" hint="Goods ready to ship">

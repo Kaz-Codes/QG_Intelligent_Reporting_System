@@ -1,8 +1,11 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { useFormContext, useFieldArray, useWatch } from 'react-hook-form'
+import { useFormContext, useFieldArray, useWatch, Controller } from 'react-hook-form'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
+import { SearchableSelect, NotInMasterNote } from '@/components/ui/SearchableSelect'
+import { fetchCustomers } from '@/lib/api/masters'
+import { useMasterOptions, toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
 import {
   ORDER_TYPES, DEPARTMENTS, SHIPMENT_MODES, INCOTERMS, emptyItem, itemPendingFields, itemNetWeight, batchDisplayLabel,
   type LogisticsDraft, type LogisticsItem, type LogisticsPackage,
@@ -64,6 +67,8 @@ export function Step1Order() {
   const batchLabel = useWatch({ control, name: 'batchLabel' })
   const moNo = useWatch({ control, name: 'moNo' }) ?? ''
   const packages = (useWatch({ control, name: 'packages' }) ?? []) as LogisticsPackage[]
+  const customerName = useWatch({ control, name: 'customerName' })
+  const { rows: customers, loading: customersLoading } = useMasterOptions(fetchCustomers)
 
   // isNew mirrors the wizard's own definition (a real record already exists
   // vs. still-in-progress creation) — only a new order's batchNo should be
@@ -152,8 +157,38 @@ export function Step1Order() {
           )}
 
           <div className="flex flex-col gap-1.5">
+            {/* Customer master, with FREE TEXT DELIBERATELY STILL ALLOWED —
+                this is the field the whole "don't destroy legacy data" rule
+                was written for. All 1,424 loaded orders carry only a
+                customer_name; the master was seeded from those names later
+                and 67 of them are still unverified duplicates-by-spelling
+                ("CHERAT CEMENT" vs "CHERAT CEMENT LTD."), so an existing
+                order can easily hold a name the master does not match.
+                The order stores BOTH columns: the wizard keeps sending the
+                NAME, and helpers.resolve_customer_id re-derives customer_id
+                from it on create, update and revert — leaving it NULL rather
+                than minting a master row from a typo. Restricting this field
+                would make those orders unsaveable. */}
             <Label htmlFor="customerName">Customer Name</Label>
-            <Input id="customerName" {...register('customerName')} />
+            <Controller
+              control={control}
+              name="customerName"
+              render={({ field }) => (
+                <SearchableSelect
+                  id="customerName"
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  options={toOptions(customers)}
+                  allowFreeText
+                  disabled={customersLoading}
+                  placeholder={customersLoading ? 'Loading customers…' : 'Search or type a customer…'}
+                  emptyMessage="No matching customer — it will be kept as typed"
+                />
+              )}
+            />
+            {!customersLoading && !isKnownMasterValue(customers, customerName) && (
+              <NotInMasterNote master="customer master" stored="text" />
+            )}
             {errors.customerName && <p className="text-xs text-risk">{errors.customerName.message}</p>}
           </div>
 

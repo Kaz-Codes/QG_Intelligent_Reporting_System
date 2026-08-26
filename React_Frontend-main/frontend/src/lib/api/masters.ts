@@ -48,6 +48,10 @@ export const fetchSuppliers = () => fetchMaster<MasterOption>('supplier')
 export const fetchClearingAgents = () => fetchMaster<MasterOption>('agent')
 export const fetchPorts = () => fetchMaster<PortOption>('port')
 export const fetchTransporters = () => fetchMaster<MasterOption>('transporter')
+/** Name only, by decision — see the Customer master's note below. Backs the
+ *  logistics order's customer field, which stores the NAME and lets the
+ *  backend derive customer_id from it (helpers.resolve_customer_id). */
+export const fetchCustomers = () => fetchMaster<MasterOption>('customer')
 
 /**
  * One row of `GET /masters/item-search` — the item catalogue's typeahead.

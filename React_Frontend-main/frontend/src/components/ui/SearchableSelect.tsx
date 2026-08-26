@@ -32,6 +32,34 @@ import { cn } from '@/lib/utils'
  * drops in as `{...field}` without an adapter.
  */
 
+/**
+ * The marker shown beside a master-backed field holding a value the master
+ * does not have. Its companion, so it lives here.
+ *
+ * DATA QUALITY IS MADE VISIBLE, NOT ENFORCED. These fields carry years of
+ * free text — 1,424 loaded logistics orders hold a customer name with no
+ * master row behind it — so an unmatched value is normal, must still save,
+ * and must never quietly mint a master record from a typo.
+ *
+ * `stored` is the honest part, and it differs per field because the three
+ * modules made different storage choices:
+ *   'text' — there is a name column, so what was typed is kept as typed and
+ *            simply is not linked to a master row.
+ *   'none' — the column is a foreign key with nowhere to put a name, so an
+ *            unmatched value cannot survive the save at all. Saying so is the
+ *            whole point: the alternative is a field that looks accepted and
+ *            comes back empty.
+ */
+export function NotInMasterNote({ master, stored }: { master: string; stored: 'text' | 'none' }) {
+  return (
+    <p className="text-xs text-[var(--color-watch)]">
+      {stored === 'text'
+        ? `Not in the ${master} — saved as typed, but not linked to a master record.`
+        : `Not in the ${master} — this will NOT be saved. Pick an existing one, or add it under Masters first.`}
+    </p>
+  )
+}
+
 export interface SearchableOption<T = unknown> {
   /** What goes into the form field when this option is chosen. */
   value: string
