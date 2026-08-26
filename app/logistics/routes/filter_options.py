@@ -6,7 +6,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_LOGISTICS
-from app.logistics.models import LogisticsConsignment
+from app.logistics.models import LogisticsConsignment, LogisticsItem
 from app.enums import LogisticsStatus, OrderType
 import logging
 
@@ -42,6 +42,32 @@ def _stored(db, column):
     }
 
 
+def _stored_item(db, column):
+    """DISTINCT non-null values of one LogisticsItem column.
+
+    Job number lives on the ITEM, not the order, so its options cannot come
+    from _stored above. Scoped the same way the list is: items that are not
+    themselves deleted, belonging to orders that are not deleted — otherwise
+    the dropdown offers a job number that filters to nothing.
+
+    A join is correct HERE (unlike in the list query) because this selects
+    DISTINCT values of one column. There are no order rows to duplicate and
+    no count to corrupt.
+    """
+    return {
+        v for (v,) in db.execute(
+            select(column)
+            .join(
+                LogisticsConsignment,
+                LogisticsItem.consignment_id == LogisticsConsignment.id,
+            )
+            .where(LogisticsConsignment.is_deleted == False)  # noqa: E712
+            .where(LogisticsItem.is_deleted == False)  # noqa: E712
+            .distinct()
+        ).all() if v
+    }
+
+
 def _with_canonical(stored, enum_cls):
     """Canonical values first (in declaration order), then anything else that
     is actually stored, each flagged so the front end can mark the strays."""
@@ -67,6 +93,7 @@ def filter_options(request: Request):
 
         customers = sorted(_stored(db, LogisticsConsignment.customer_name))
         departments = sorted(_stored(db, LogisticsConsignment.department))
+        job_numbers = sorted(_stored_item(db, LogisticsItem.job_no))
 
         return {
             "status_code": 200,
@@ -76,6 +103,8 @@ def filter_options(request: Request):
                 "order_types": order_types,
                 "customers": customers,
                 "departments": departments,
+                # From the ITEM table — see _stored_item.
+                "job_numbers": job_numbers,
             },
         }
 

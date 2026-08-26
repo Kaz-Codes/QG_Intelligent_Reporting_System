@@ -243,6 +243,9 @@ interface OptionsEnvelope {
     order_types: { value: string; canonical: boolean }[]
     customers: string[]
     departments: string[]
+    /** DISTINCT job numbers across the orders' ITEM lines — job_no lives on
+     *  LogisticsItem, not on the order. */
+    job_numbers: string[]
   }
 }
 
@@ -262,6 +265,13 @@ export interface LogisticsQuery {
   status?: string[]
   orderType?: string[]
   customer?: string[]
+  /** Multi-select. Filters the ORDER by its item lines' job_no — the backend
+   *  does this with an EXISTS subquery so an order with several items on the
+   *  same job still comes back once. */
+  jobNumber?: string[]
+  /** Single value, matched partially and case-insensitively against the
+   *  items' detail. A search, not a pick-list, so not an array. */
+  itemName?: string
   gateOutFrom?: string
   gateOutTo?: string
   includeDeleted?: boolean
@@ -281,11 +291,13 @@ function buildQuery(q: LogisticsQuery): URLSearchParams {
   if (q.gateOutTo) params.set('gate_out_to', q.gateOutTo)
   if (q.search?.trim()) params.set('q', q.search.trim())
   if (q.jobKind) params.set('job_kind', q.jobKind)
+  if (q.itemName?.trim()) params.set('item_name', q.itemName.trim())
 
   // Multi-selects go out as repeated params — the backend reads them as IN.
   q.status?.forEach((v) => params.append('status', v))
   q.orderType?.forEach((v) => params.append('order_type', v))
   q.customer?.forEach((v) => params.append('customer', v))
+  q.jobNumber?.forEach((v) => params.append('job_number', v))
 
   return params
 }

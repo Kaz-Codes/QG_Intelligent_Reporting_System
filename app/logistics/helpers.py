@@ -129,9 +129,38 @@ def fetch_consignment(db, consignment_id):
 # filters so the caller can say how many pages there are.
 #-------------------------------------
 
+#-------------------------------------
+# FILTERING ORDERS BY A PROPERTY OF THEIR ITEMS
+#
+# Job number and item detail both live on LogisticsItem, not on the order, so
+# filtering the list by either means asking "does this order have ANY item
+# that matches".
+#
+# EXISTS, NEVER A JOIN. A join to logistics_items multiplies the order row by
+# its matching items: an order with three items on the same job number would
+# appear three times on the page AND be counted three times in the total, so
+# the row count, the page count and the pagination would all disagree with
+# each other. EXISTS asks the same question and returns each order once.
+#
+# Correlated on consignment_id, which is indexed for exactly this (see the
+# model) — without that index every order on the page would scan the whole
+# item table.
+#-------------------------------------
+
+def _has_matching_item(*predicates):
+    return (
+        select(LogisticsItem.id)
+        .where(LogisticsItem.consignment_id == LogisticsConsignment.id)
+        .where(LogisticsItem.is_deleted == False)  # noqa: E712
+        .where(*predicates)
+        .exists()
+    )
+
+
 def fetch_consignments_page(db, include_deleted, status, order_type,
                             customer, gate_out_from, gate_out_to, q,
-                            page, page_size, job_kind=JobKind.STANDARD.value):
+                            page, page_size, job_kind=JobKind.STANDARD.value,
+                            job_number=None, item_name=None):
     # status, order_type and customer are lists (the list screen filters are
     # multi-select), so each is an IN filter, not an equals.
     conditions = []
@@ -156,6 +185,20 @@ def fetch_consignments_page(db, include_deleted, status, order_type,
     # is filtered by the name value directly.
     if customer:
         conditions.append(LogisticsConsignment.customer_name.in_(customer))
+
+    # Both of these filter the ORDER by a property of its ITEMS — see
+    # _has_matching_item for why neither is a join.
+    if job_number:
+        conditions.append(_has_matching_item(LogisticsItem.job_no.in_(job_number)))
+
+    # Partial and case-insensitive: the operator is looking for "bearing", not
+    # reciting a stored value the way the multi-selects do.
+    if item_name and item_name.strip():
+        conditions.append(
+            _has_matching_item(
+                LogisticsItem.item_detail.ilike("%" + item_name.strip() + "%")
+            )
+        )
 
     if gate_out_from:
         conditions.append(LogisticsConsignment.gate_out_date >= gate_out_from)

@@ -22,6 +22,13 @@ def get_consignments_list(
     status : Optional[list[str]] = Query(None),
     order_type : Optional[list[str]] = Query(None),
     customer : Optional[list[str]] = Query(None),
+    # Repeated param -> IN, the same convention as status/order_type/customer.
+    # Job number lives on the ITEM, so this filters orders by their lines —
+    # see helpers._has_matching_item.
+    job_number : Optional[list[str]] = Query(None),
+    # Single free-text value, matched partially and case-insensitively against
+    # the items' detail. Not multi-select: this is a search, not a pick-list.
+    item_name : Optional[str] = None,
     gate_out_from : Optional[date] = None,
     gate_out_to : Optional[date] = None,
     q : Optional[str] = None,
@@ -51,7 +58,8 @@ def get_consignments_list(
         consignments, total = fetch_consignments_page(
             db, include_deleted, status, order_type, customer,
             gate_out_from, gate_out_to, q, page, page_size,
-            None if job_kind == "all" else job_kind
+            None if job_kind == "all" else job_kind,
+            job_number=job_number, item_name=item_name,
         )
 
         # Serializeing this page of orders. change_history is left out here —

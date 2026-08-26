@@ -91,6 +91,11 @@ export function LogisticsStatusList() {
   const [statusFilter, setStatusFilter] = useState<string[]>([])
   const [orderTypeFilter, setOrderTypeFilter] = useState<string[]>([])
   const [customerFilter, setCustomerFilter] = useState<string[]>([])
+  const [jobNumberFilter, setJobNumberFilter] = useState<string[]>([])
+  // Debounced like the main search below, and for the same reason — this one
+  // drives an ILIKE across every order's item lines.
+  const [itemName, setItemName] = useState('')
+  const [debouncedItemName, setDebouncedItemName] = useState('')
   const [gateOutFrom, setGateOutFrom] = useState('')
   const [gateOutTo, setGateOutTo] = useState('')
   const [page, setPage] = useState(1)
@@ -112,6 +117,7 @@ export function LogisticsStatusList() {
   const [statusOptions, setStatusOptions] = useState<string[]>([])
   const [orderTypeOptions, setOrderTypeOptions] = useState<string[]>([])
   const [customerOptions, setCustomerOptions] = useState<string[]>([])
+  const [jobNumberOptions, setJobNumberOptions] = useState<string[]>([])
   const [optionsError, setOptionsError] = useState<string | null>(null)
 
   // Typing shouldn't fire a request per keystroke.
@@ -120,6 +126,11 @@ export function LogisticsStatusList() {
     return () => clearTimeout(timer)
   }, [search])
 
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedItemName(itemName), 300)
+    return () => clearTimeout(timer)
+  }, [itemName])
+
   const loadOptions = useCallback(() => {
     setOptionsError(null)
     fetchLogisticsFilterOptions()
@@ -127,6 +138,7 @@ export function LogisticsStatusList() {
         setStatusOptions((options.statuses ?? []).map((s) => s.value))
         setOrderTypeOptions((options.order_types ?? []).map((t) => t.value))
         setCustomerOptions(options.customers ?? [])
+        setJobNumberOptions(options.job_numbers ?? [])
       })
       .catch((err) => {
         // Never swallow this: a silent failure here shows three empty
@@ -163,6 +175,8 @@ export function LogisticsStatusList() {
     status: statusFilter,
     orderType: orderTypeFilter,
     customer: customerFilter,
+    jobNumber: jobNumberFilter,
+    itemName: debouncedItemName || undefined,
     gateOutFrom: gateOutFrom || undefined,
     gateOutTo: gateOutTo || undefined,
     search: debouncedSearch,
@@ -176,7 +190,8 @@ export function LogisticsStatusList() {
     // list is where the undo button lives, so a deleted order has to be
     // reachable here rather than hidden on a screen of its own.
     includeDeleted: !!user?.isAdmin,
-  }), [page, statusFilter, orderTypeFilter, customerFilter, gateOutFrom, gateOutTo,
+  }), [page, statusFilter, orderTypeFilter, customerFilter, jobNumberFilter,
+       debouncedItemName, gateOutFrom, gateOutTo,
        debouncedSearch, user?.isAdmin])
 
   // Any filter change puts us back on page 1 — staying on page 7 of a result
@@ -185,7 +200,8 @@ export function LogisticsStatusList() {
   useEffect(() => {
     if (firstRender.current) { firstRender.current = false; return }
     setPage(1)
-  }, [statusFilter, orderTypeFilter, customerFilter, gateOutFrom, gateOutTo, debouncedSearch])
+  }, [statusFilter, orderTypeFilter, customerFilter, jobNumberFilter, debouncedItemName,
+      gateOutFrom, gateOutTo, debouncedSearch])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -303,6 +319,20 @@ export function LogisticsStatusList() {
         <MultiSelectFilter label="Order type" options={orderTypeOptions} value={orderTypeFilter} onChange={setOrderTypeFilter} />
         <MultiSelectFilter label="Status" options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
         <MultiSelectFilter label="Customer" options={customerOptions} value={customerFilter} onChange={setCustomerFilter} />
+        {/* Both of these narrow the order by its ITEM lines. Job number is a
+            pick-list of stored values, so it uses the same MultiSelectFilter
+            as the three above; item name is a free search, so it is a text
+            box debounced like the main one. */}
+        <MultiSelectFilter label="Job no." options={jobNumberOptions} value={jobNumberFilter} onChange={setJobNumberFilter} />
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs text-muted">Item name</label>
+          <input
+            value={itemName}
+            onChange={(e) => setItemName(e.target.value)}
+            placeholder="Contains…"
+            className="h-10 min-w-[160px] rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-muted"
+          />
+        </div>
         <div className="flex flex-col gap-1.5">
           <label className="text-xs text-muted">Gate out from</label>
           <input

@@ -74,6 +74,10 @@ def export_consignments(
     status : Optional[list[str]] = Query(None),
     order_type : Optional[list[str]] = Query(None),
     customer : Optional[list[str]] = Query(None),
+    # Item-level filters, same contract as the list — without these the export
+    # would quietly hand back more rows than the screen was showing.
+    job_number : Optional[list[str]] = Query(None),
+    item_name : Optional[str] = None,
     gate_out_from : Optional[date] = None,
     gate_out_to : Optional[date] = None,
     q : Optional[str] = None,
@@ -91,6 +95,7 @@ def export_consignments(
             db, include_deleted, status, order_type, customer,
             gate_out_from, gate_out_to, q, page=1, page_size=1_000_000,
             job_kind=None if job_kind == "all" else job_kind,
+            job_number=job_number, item_name=item_name,
         )
 
         rows = [_row(c) for c in consignments]

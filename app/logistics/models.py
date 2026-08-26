@@ -447,16 +447,35 @@ class LogisticsItem(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
+    # INDEXED, and it matters more than it looks. Postgres does not index a
+    # foreign key automatically, and the list screen's job-number and
+    # item-name filters are EXISTS subqueries correlated on this column (see
+    # helpers._has_matching_item) — one per order on the page. Without the
+    # index each of those scans the whole item table.
     consignment_id: Mapped[int] = mapped_column(
         ForeignKey("logistics_consignments.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
+        index=True
     )
 
+    # Indexed for the list's job-number filter, which matches it with IN.
     job_no: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable=True
+        nullable=True,
+        index=True
     )
 
+    # DELIBERATELY NOT INDEXED, and not an oversight. The list filters this
+    # with ILIKE '%text%', and a btree index cannot serve a leading wildcard —
+    # adding one would cost writes and never be used. The query is still cheap
+    # because the ILIKE runs INSIDE the consignment_id-correlated EXISTS
+    # above, so it only ever examines the handful of items belonging to the
+    # order being tested, never the whole table.
+    #
+    # If this table ever grows to the point where that is not enough, the tool
+    # is a pg_trgm GIN index (`CREATE EXTENSION pg_trgm`), not a btree — it is
+    # left out for now because it needs a superuser-installed extension, which
+    # is a deployment concern this feature does not otherwise have.
     item_detail: Mapped[Optional[str]] = mapped_column(
         String(500),
         nullable=True
