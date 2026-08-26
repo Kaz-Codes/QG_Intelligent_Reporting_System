@@ -8,6 +8,9 @@ from app.logs.manager import manager
 from fastapi import Response, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # LOG IN AND GET A COOKIE
@@ -96,7 +99,7 @@ async def login(credentials: LoginSchema, response: Response):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.auth.login")
         db.rollback()
 
         raise HTTPException(

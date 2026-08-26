@@ -6,6 +6,9 @@ from app.enums import LogAction
 from app.logs.helpers import serialize_log, write_log
 from app.logs.manager import manager
 from fastapi import Request, Response, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------
 # LOG OUT AND DROP THE COOKIE
@@ -51,7 +54,7 @@ async def logout(request: Request, response: Response):
         raise
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.auth.logout")
         db.rollback()
 
         raise HTTPException(

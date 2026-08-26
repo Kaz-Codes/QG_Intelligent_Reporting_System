@@ -5,6 +5,9 @@ from app.logs.helpers import (
     classify_action, parse_entity, serialize_log, write_log,
 )
 from app.logs.manager import manager
+import logging
+
+logger = logging.getLogger(__name__)
 
 #-----------------------------------------------------
 # LOG EVERY ACTION IN ONE PLACE
@@ -95,6 +98,6 @@ async def log_requests(request, call_next):
 
     except Exception as e:
         # Logging must never take a request down with it.
-        print(e)
+        logger.exception("Unhandled error in app.logs.middleware")
 
     return response

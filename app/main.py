@@ -1,4 +1,5 @@
 import os
+import logging
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -47,6 +48,8 @@ import app.auth.logout
 
 from app.logs.middleware import log_requests
 
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 
@@ -83,7 +86,7 @@ def seed_permissions():
         db.commit()
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.main.seed_permissions")
         db.rollback()
 
     finally:
@@ -122,7 +125,7 @@ def seed_admin():
         db.commit()
 
     except Exception as e:
-        print(e)
+        logger.exception("Unhandled error in app.main.seed_admin")
         db.rollback()
 
     finally:
