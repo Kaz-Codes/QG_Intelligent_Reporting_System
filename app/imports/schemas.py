@@ -16,6 +16,10 @@ class ConsignmentItemSchema(BaseModel):
     id : Optional[int] = None
     item_id : Optional[int] = None
     item_name : Optional[str] = Field(None, max_length=255)
+    # The operator's informal label for the line (see the model). Pydantic
+    # drops anything not declared here, so without this the field never
+    # reaches ConsignmentItem(**item_dict) and is silently discarded on save.
+    placeholder_name : Optional[str] = Field(None, max_length=255)
     item_code : Optional[str] = Field(None, max_length=100)
     hs_code : Optional[str] = Field(None, max_length=50)
     specification : Optional[str] = Field(None, max_length=500)

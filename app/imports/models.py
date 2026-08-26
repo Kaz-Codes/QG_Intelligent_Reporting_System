@@ -418,6 +418,17 @@ class ConsignmentItem(Base, TimestampMixin):
         nullable=True
     )
 
+    # The operator's own informal label for this line — "blue drum" — so a
+    # line can be recognised at a glance when the formal item_name is long,
+    # unfamiliar, or one of several near-identical spec variants. It is NOT a
+    # substitute for item_name and is never matched on: nothing resolves an
+    # item master, groups, filters or reports by it. Free text on purpose,
+    # since it names the thing the way the person handling it thinks of it.
+    placeholder_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
     specification: Mapped[Optional[str]] = mapped_column(
         String(500),
         nullable=True
