@@ -19,6 +19,7 @@ import app.trucking.models
 import app.logs.models
 import app.loading.schemas.stores_schemas
 import app.reports.models
+import app.notifications.models
 
 from app.accounts.models import User, Permission
 from app.accounts.permissions import ALL_PERMISSIONS

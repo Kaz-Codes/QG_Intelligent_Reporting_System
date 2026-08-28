@@ -383,3 +383,50 @@ class ItemRank(str, Enum):
     A = "A"
     B = "B"
     C = "C"
+
+
+#--------------------------------
+# NOTIFICATIONS
+#
+# The fixed vocabularies the notification tables and the event catalogue share.
+# Here rather than in app/notifications/ for the same reason every other fixed
+# list is here: they are stored in String columns, so adding a value stays a
+# one-line change with no ALTER TYPE.
+#--------------------------------
+
+class NotificationSeverity(str, Enum):
+    INFO = "info"
+    IMPORTANT = "important"
+    CRITICAL = "critical"
+
+
+# WHO an event is pitched at. Also set per USER, where it acts as a volume
+# control — see app/notifications/routing.py, which owns how the two compare.
+class NotificationTier(str, Enum):
+    OPERATIONAL = "operational"
+    MANAGERIAL = "managerial"
+    EXECUTIVE = "executive"
+
+
+class NotificationModule(str, Enum):
+    IMPORTS = "imports"
+    LOGISTICS = "logistics"
+    TRUCKING = "trucking"
+    INVENTORY = "inventory"
+    SYSTEM = "system"
+
+
+class NotificationChannel(str, Enum):
+    IN_APP = "in_app"
+    WHATSAPP = "whatsapp"
+    EMAIL = "email"
+
+
+# `read` is a terminal state of in-app delivery, not a transport outcome — a
+# row goes pending -> sent when it is deliverable, and sent -> read when the
+# recipient opens it.
+class NotificationDeliveryStatus(str, Enum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    READ = "read"

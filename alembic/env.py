@@ -28,6 +28,7 @@ import app.trucking.models
 import app.logs.models
 import app.loading.schemas.stores_schemas
 import app.reports.models
+import app.notifications.models
 
 target_metadata = Base.metadata
 
