@@ -87,6 +87,10 @@ EVENT_CATALOGUE = {
             "Landed {arrived_on}; demurrage begins {demurrage_starts} if it "
             "is not cleared."
         ),
+        "grouped_title_template": "{count} consignments at demurrage risk",
+        "grouped_body_template": (
+            "{count} consignments are within their last free days at port. Raised as one summary because too many crossed at once — open the Imports list to see them."
+        ),
     },
 
     "imports.clearance_aging": {
@@ -99,6 +103,10 @@ EVENT_CATALOGUE = {
         "body_template": (
             "{reference} has sat at \"{status}\" for {days_in_clearance} days "
             "at {port}, handled by {clearing_agent}."
+        ),
+        "grouped_title_template": "{count} consignments aging in clearance",
+        "grouped_body_template": (
+            "{count} consignments have been in customs clearance longer than the alert threshold. Raised as one summary because too many crossed at once — open the Imports list, filtered to the Clearance stage."
         ),
     },
 
@@ -113,6 +121,10 @@ EVENT_CATALOGUE = {
             "{instrument} {instrument_number} against {reference} "
             "({supplier}) was due {due_date} and is {days_overdue} days "
             "overdue."
+        ),
+        "grouped_title_template": "{count} payments overdue",
+        "grouped_body_template": (
+            "{count} payments are past their retirement date and still unpaid. Raised as one summary because too many crossed at once."
         ),
     },
 
@@ -131,6 +143,10 @@ EVENT_CATALOGUE = {
             "{item_detail} on order {mo_no} for {customer} missed its planned "
             "RFD of {planned_rfd} — now {days_late} days late."
         ),
+        "grouped_title_template": "{count} RFD dates missed",
+        "grouped_body_template": (
+            "{count} order lines have passed their planned RFD without being dispatched. Raised as one summary because too many crossed at once."
+        ),
     },
 
     "logistics.detention_risk": {
@@ -144,6 +160,10 @@ EVENT_CATALOGUE = {
             "Container {container_no} on order {mo_no} for {customer} has "
             "been held {days_held} days. Detention charges begin "
             "{detention_starts}."
+        ),
+        "grouped_title_template": "{count} containers at detention risk",
+        "grouped_body_template": (
+            "{count} containers are approaching their detention window. Raised as one summary because too many crossed at once."
         ),
     },
 
@@ -161,6 +181,10 @@ EVENT_CATALOGUE = {
         "body_template": (
             "{label} was handed to Trucking {days_open} days ago and no job "
             "has taken it."
+        ),
+        "grouped_title_template": "{count} trucking requests unclaimed",
+        "grouped_body_template": (
+            "{count} handed-over requests have gone unclaimed past the alert threshold. Raised as one summary because too many crossed at once."
         ),
     },
 
@@ -180,9 +204,13 @@ EVENT_CATALOGUE = {
         "admin_only": False,
         "title_template": "Below reorder — {item_name} ({specification}) at {branch}",
         "body_template": (
-            "{item_name} ({specification}) at {branch} — {available} "
+            "{item_name} ({specification}) at {branch} — {available_qty} "
             "available, reorder at {reorder_level}. Rank {rank} at this "
             "branch."
+        ),
+        "grouped_title_template": "{count} critical items below reorder level",
+        "grouped_body_template": (
+            "{count} rank A/B items are at or below their reorder level. Raised as one summary because too many crossed at once — open the Inventory dashboard for the itemised list, where each carries its specification."
         ),
     },
 
@@ -197,6 +225,10 @@ EVENT_CATALOGUE = {
             "{item_name} ({specification}) is out of stock at {branch} — "
             "nothing available against a reorder level of {reorder_level}. "
             "Rank {rank} at this branch."
+        ),
+        "grouped_title_template": "{count} critical items out of stock",
+        "grouped_body_template": (
+            "{count} rank A/B items that are actually moving have run to zero available. Raised as one summary because too many crossed at once — open the Inventory dashboard for the itemised list, where each carries its specification."
         ),
     },
 

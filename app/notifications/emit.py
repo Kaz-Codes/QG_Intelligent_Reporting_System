@@ -77,8 +77,34 @@ def render(template, payload, event_type=""):
     return rendered
 
 
+def _templates(entry, variant):
+    """The title/body pair to render, for this variant of the event.
+
+    "grouped" exists for the scanner's runaway guard: when a threshold check
+    would raise hundreds of individual events, it raises ONE summarising them
+    instead. That has to be the SAME event_type — a summary of imports data
+    must stay behind the same permission gate as the individual events — so it
+    is a second pair of templates on the entry, not a second catalogue key.
+
+    An entry with no grouped pair falls back to a plain count, which is
+    accurate but characterless; the entries that can actually run away
+    define their own.
+    """
+    if variant == "grouped":
+        return (
+            entry.get("grouped_title_template", "{count} {event_label} alerts"),
+            entry.get(
+                "grouped_body_template",
+                "{count} {event_label} alerts were raised at once and have "
+                "been grouped into this one.",
+            ),
+        )
+
+    return entry["title_template"], entry["body_template"]
+
+
 def emit(db, event_type, *, payload, entity_type=None, entity_id=None,
-         branch=None, dedupe_key=None):
+         branch=None, dedupe_key=None, variant=None):
     """Record that a business event happened. Always returns None.
 
     `db` IS THE CALLER'S SESSION AND IS DELIBERATELY NOT WRITTEN THROUGH.
@@ -100,6 +126,7 @@ def emit(db, event_type, *, payload, entity_type=None, entity_id=None,
             return None
 
         payload = payload or {}
+        title_template, body_template = _templates(entry, variant)
 
         #-----------------------------------------------------
         # WHY A SEPARATE SESSION, NOT THE CALLER'S
@@ -131,8 +158,8 @@ def emit(db, event_type, *, payload, entity_type=None, entity_id=None,
                 severity=entry["severity"],
                 tier=entry["tier"],
                 module=entry["module"],
-                title=render(entry["title_template"], payload, event_type),
-                body=render(entry["body_template"], payload, event_type),
+                title=render(title_template, payload, event_type),
+                body=render(body_template, payload, event_type),
                 entity_type=entity_type,
                 entity_id=entity_id,
                 branch=branch,

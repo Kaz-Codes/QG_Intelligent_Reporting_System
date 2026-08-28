@@ -7,6 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from app.database import SessionLocal
 from app.notifications.models import NotificationEvent
 from app.notifications.routing import fan_out
+from app.notifications.scanner import run_all
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,20 @@ logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 10
 BATCH_SIZE = 100
+
+# THE THRESHOLD SCAN RUNS ON THE SAME TASK, at a much slower cadence.
+#
+# Every 15 minutes, not every minute: none of these thresholds is
+# minute-sensitive — a payment that went overdue at 09:01 is no less overdue at
+# 09:15 — and 96 passes a day instead of 1,440 is the difference between a
+# background job and a second workload.
+#
+# ONE TASK, NOT TWO, deliberately. A separate scanner task would let a long
+# scan and a fan-out pass hold pooled connections at the same moment, which is
+# the contention this design exists to avoid. Sharing the task serialises them
+# by construction: the scan cannot start while a fan-out is running, and the
+# next fan-out waits for the scan. Neither is latency-critical.
+SCAN_EVERY_N_POLLS = 90  # 90 x 10s = 15 minutes
 
 
 def _claim(db, limit):
@@ -114,26 +129,52 @@ def run_once():
         db.close()
 
 
-async def fanout_loop():
-    """Wake, drain a batch off the event loop, sleep. Runs for the app's life."""
+def run_scan_once():
+    """One threshold-scanner pass. Returns how many events it raised."""
+    db = SessionLocal()
+
+    try:
+        return run_all(db)
+
+    finally:
+        db.close()
+
+
+async def background_loop():
+    """Fan-out every poll, threshold scan every SCAN_EVERY_N_POLLS. App-lifetime."""
     logger.info(
-        "Notification fan-out worker started (every %ss, batches of %s)",
-        POLL_SECONDS, BATCH_SIZE,
+        "Notification worker started (fan-out every %ss in batches of %s, "
+        "threshold scan every %s polls)",
+        POLL_SECONDS, BATCH_SIZE, SCAN_EVERY_N_POLLS,
     )
+
+    polls = 0
 
     while True:
         try:
             await asyncio.sleep(POLL_SECONDS)
+            polls += 1
+
+            # Sync SQLAlchemy, so both of these go to a thread — running them
+            # on the loop would block every concurrent request in the process.
             await run_in_threadpool(run_once)
+
+            if polls % SCAN_EVERY_N_POLLS == 0:
+                await run_in_threadpool(run_scan_once)
 
         except asyncio.CancelledError:
             # Shutdown. Re-raised so the task actually ends.
-            logger.info("Notification fan-out worker stopped")
+            logger.info("Notification worker stopped")
             raise
 
         except Exception:
             # Never let a bad pass kill the loop — that would silently stop
             # every notification in the system until the next restart.
             logger.exception(
-                "Notification fan-out pass failed; continuing"
+                "Notification worker pass failed; continuing"
             )
+
+
+# The N2 name, kept so nothing that imported it breaks. The loop does two jobs
+# now, which is why the canonical name changed.
+fanout_loop = background_loop

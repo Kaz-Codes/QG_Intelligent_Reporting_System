@@ -50,7 +50,7 @@ import app.auth.login
 import app.auth.logout
 
 from app.logs.middleware import log_requests
-from app.notifications.worker import fanout_loop
+from app.notifications.worker import background_loop
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +144,11 @@ def seed_admin():
 #-----------------------------------------------------
 # BACKGROUND WORKERS
 #
-# Notification fan-out runs here rather than inside the request that raised
-# the event, so a consignment save never pays for routing to every recipient
-# and never holds a pooled connection while doing it — see
-# app/notifications/worker.py for the full reasoning.
+# One task runs BOTH notification jobs: fan-out every 10s, and the
+# threshold scanner every 15 minutes. Neither runs inside the request that
+# caused it, so a consignment save never pays for routing to every recipient,
+# and sharing one task keeps the two from holding pooled connections at the
+# same moment — see app/notifications/worker.py for the full reasoning.
 #
 # The task is cancelled on shutdown and awaited, so uvicorn's reload does not
 # leave an orphaned loop polling the database behind the new process.
@@ -155,7 +156,7 @@ def seed_admin():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    worker = asyncio.create_task(fanout_loop())
+    worker = asyncio.create_task(background_loop())
 
     try:
         yield
