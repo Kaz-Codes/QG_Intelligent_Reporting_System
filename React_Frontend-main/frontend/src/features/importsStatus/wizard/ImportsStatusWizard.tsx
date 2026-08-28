@@ -19,8 +19,11 @@ import {
 } from '@/lib/api/importsMap'
 import {
   consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, CLOSED_STATUS,
+  submitRequirements,
   type ConsignmentDraft, type ConsignmentItem, type Payment,
 } from '../schema'
+import { SubmitRequirements } from '@/components/SubmitRequirements'
+import { requirementsTooltip } from '@/lib/submitRequirements'
 import { MastersProvider, useMasters } from './MastersContext'
 import { WizardStepper } from '@/components/ui/WizardStepper'
 import { useStepNavigation } from '@/lib/useStepNavigation'
@@ -278,12 +281,14 @@ function ImportsStatusWizardInner() {
   }
 
   /** Save, then run the strict server-side rule set. Available on every step
-   *  (not just the last), but disabled until the draft actually satisfies
-   *  those rules — see canSubmit below. A 422 comes back with the full list
-   *  of what's missing (submission_errors, mirrored from the same rules the
-   *  draft schema's superRefine describes) — shown inline rather than
-   *  re-deriving the same list client-side and risking the two drifting
-   *  apart. */
+   *  (not just the last), and disabled until the draft satisfies those rules
+   *  — see `outstanding` / `blocked` below, built by submitRequirements(),
+   *  which mirrors app/imports/helpers.py::submission_errors rather than the
+   *  zod submit schema (the two differ; the mismatch is documented there).
+   *
+   *  A 422 is still handled and shown inline: the client-side list predicts
+   *  the server's answer, it does not replace it, and anything that gets past
+   *  the prediction must still be readable rather than silent. */
   function handleSubmit() {
     runWithCloseConfirm(() => void doHandleSubmit(), { isSubmit: true })
   }
@@ -359,6 +364,13 @@ function ImportsStatusWizardInner() {
   const busy = saving || submitting
   const isLastStep = stepDef.step === WIZARD_STEPS.length
 
+  // WATCHED, NOT READ ONCE: the banner and the Submit button have to reflect
+  // what is on screen right now, so this re-evaluates on every edit rather
+  // than only after a save. methods.watch() with no argument subscribes to the
+  // whole draft, which is what these rules read.
+  const outstanding = submitRequirements(methods.watch())
+  const blocked = outstanding.length > 0
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -391,6 +403,14 @@ function ImportsStatusWizardInner() {
                 </div>
               )}
 
+              {/* Shown on EVERY step, so a step 1 gap is visible while the
+                  user is on step 5 rather than only after they hit Submit. */}
+              <SubmitRequirements
+                requirements={outstanding}
+                currentStep={stepDef.step}
+                onGoToStep={goToStep}
+              />
+
               <div className="mt-6 flex items-center justify-between">
                 <Button
                   type="button"
@@ -412,7 +432,16 @@ function ImportsStatusWizardInner() {
                       {saving ? 'Saving…' : 'Save and Next'}
                     </Button>
                   )}
-                  <Button type="button" disabled={busy} onClick={handleSubmit}>
+                  {/* DISABLED WITH A REASON, never hidden — the same
+                      principle as the FOB send buttons. The tooltip names
+                      exactly what is outstanding, so the button explains
+                      itself without the banner having to be open. */}
+                  <Button
+                    type="button"
+                    disabled={busy || blocked}
+                    title={requirementsTooltip(outstanding)}
+                    onClick={handleSubmit}
+                  >
                     {submitting ? 'Submitting…' : 'Submit'}
                   </Button>
                 </div>

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { SubmitRequirement } from '@/lib/submitRequirements'
 
 /**
  * Trucking Status — the third status module, sibling to importsStatus and
@@ -470,4 +471,72 @@ export function usesReferenceNo(movementType: MovementType): boolean {
 /** Container fields apply to inbound (import FOB) only. */
 export function usesContainers(movementType: MovementType): boolean {
   return movementType === 'Inbound'
+}
+
+/* ------------------------------------------------------------------ */
+/* What still blocks Submit                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Outstanding submission requirements, attributed to the step that owns each
+ * field — drives the wizard's requirements banner and the disabled Submit.
+ *
+ * MIRRORS app/trucking/helpers.py::submission_errors.
+ *
+ *
+ * !! THE FRONTEND AND BACKEND DISAGREE ABOUT ONE FIELD, AND IT IS FLAGGED
+ * !! RATHER THAN QUIETLY SETTLED HERE.
+ *
+ * truckingSubmitSchema above says, in as many words:
+ *
+ *     // Shipment reference / IDM is OPTIONAL (confirmed) — no required validation.
+ *
+ * The backend says the opposite:
+ *
+ *     if movement_type and movement_type != "Intrafactory":
+ *         if not reference_no: "Shipment reference / IDM is required for
+ *                               outbound and inbound movements"
+ *
+ * Verified against the real function: Outbound and Inbound both return that
+ * error with reference_no empty; Intrafactory and a NULL movement type do
+ * not. The wizard DEFAULTS to Outbound, so this is not a corner case — it is
+ * the ordinary path, and today it ends in a 422 after the user hits Submit.
+ *
+ * This list follows the BACKEND, because its purpose is to predict what will
+ * actually be refused: naming the requirement up front is strictly better
+ * than a 422 after the fact, whichever side eventually turns out to be right.
+ * Neither rule has been changed. If the field really is optional, the fix
+ * belongs in submission_errors() and is a per-field decision, not something
+ * to settle in a banner.
+ */
+export function submitRequirements(
+  d: z.input<typeof truckingDraftSchema>,
+): SubmitRequirement[] {
+  const out: SubmitRequirement[] = []
+
+  const at = (step: number) => {
+    const def = WIZARD_STEPS.find((s) => s.step === step)
+    return { step, stepLabel: def?.label ?? `Step ${step}` }
+  }
+
+  const need = (step: number, message: string) => out.push({ message, ...at(step) })
+
+  // --- Step 1: Movement & Item --- (see the disagreement noted above)
+  if (d.movementType && d.movementType !== 'Intrafactory' && !d.referenceNo?.trim()) {
+    need(1, 'Shipment reference / IDM is required for outbound and inbound movements')
+  }
+
+  // --- Step 2: Vehicles ---
+  const vehicles = (d.vehicles ?? []).filter(Boolean)
+  if (vehicles.length === 0) need(2, 'At least one vehicle is required')
+
+  if (d.movementType === 'Inbound') {
+    vehicles.forEach((v, i) => {
+      if (!v.containerNo?.trim()) {
+        need(2, `Vehicle ${i + 1}: container no. is required for import FOB`)
+      }
+    })
+  }
+
+  return out
 }

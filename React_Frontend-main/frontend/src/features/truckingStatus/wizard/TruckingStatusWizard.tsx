@@ -13,8 +13,11 @@ import {
   DRAFT_DEFAULT_VALUES,
   WIZARD_STEPS,
   truckingDraftSchema,
+  submitRequirements,
   type TruckingDraft,
 } from '../schema'
+import { SubmitRequirements } from '@/components/SubmitRequirements'
+import { requirementsTooltip } from '@/lib/submitRequirements'
 import { ApiError } from '@/lib/api/client'
 import {
   getTruckingJob, createTruckingJob, updateTruckingJob, submitTruckingJob,
@@ -303,6 +306,13 @@ export function TruckingStatusWizard() {
   const busy = saving || submitting
   const isLastStep = stepDef.step === WIZARD_STEPS.length
 
+  // WATCHED, NOT READ ONCE: the banner and the Submit button have to reflect
+  // what is on screen right now, so this re-evaluates on every edit rather
+  // than only after a save. methods.watch() with no argument subscribes to the
+  // whole draft, which is what these rules read.
+  const outstanding = submitRequirements(methods.watch())
+  const blocked = outstanding.length > 0
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -331,6 +341,14 @@ export function TruckingStatusWizard() {
                 </div>
               )}
 
+              {/* Shown on EVERY step, so a step 1 gap is visible while the
+                  user is on step 5 rather than only after they hit Submit. */}
+              <SubmitRequirements
+                requirements={outstanding}
+                currentStep={stepDef.step}
+                onGoToStep={goToStep}
+              />
+
               <div className="mt-6 flex items-center justify-between">
                 <Button
                   type="button"
@@ -352,7 +370,16 @@ export function TruckingStatusWizard() {
                       {saving ? 'Saving…' : 'Save and Next'}
                     </Button>
                   )}
-                  <Button type="button" disabled={busy} onClick={handleSubmit}>
+                  {/* DISABLED WITH A REASON, never hidden — the same
+                      principle as the FOB send buttons. The tooltip names
+                      exactly what is outstanding, so the button explains
+                      itself without the banner having to be open. */}
+                  <Button
+                    type="button"
+                    disabled={busy || blocked}
+                    title={requirementsTooltip(outstanding)}
+                    onClick={handleSubmit}
+                  >
                     {submitting ? 'Submitting…' : 'Submit'}
                   </Button>
                 </div>

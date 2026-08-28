@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { SubmitRequirement } from '@/lib/submitRequirements'
 
 /**
  * Imports Status — consignment data contract.
@@ -633,5 +634,110 @@ export const itemPendingFields = (item: ConsignmentItem): string[] => {
       if (!item[f]) out.push(labels[f])
     })
   }
+  return out
+}
+
+/* ------------------------------------------------------------------ */
+/* What still blocks Submit                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The outstanding submission requirements, each attributed to the step that
+ * owns the field — drives the wizard's requirements banner and the disabled
+ * Submit button.
+ *
+ *
+ * MIRRORS app/imports/helpers.py::submission_errors, NOT consignmentSubmitSchema
+ * ABOVE, and the two are not the same. The schema carries ONE EXTRA RULE the
+ * backend does not enforce:
+ *
+ *     gateOutDate < eta  ->  "Gate out cannot be before arrival"
+ *
+ * The backend checks only eta < etd. So a consignment with a gate-out before
+ * its arrival date submits perfectly well server-side, and deriving this
+ * banner from the zod schema would disable Submit over something nothing
+ * actually refuses. Predicting the backend is the whole job here, so this
+ * list follows the backend.
+ *
+ * The extra rule is left in consignmentSubmitSchema untouched — it is a real
+ * data-quality check and removing it is a separate decision, flagged rather
+ * than silently resolved.
+ *
+ * Wording is kept close to the backend's own strings so this banner and a 422
+ * that slips through anyway describe the same gap the same way.
+ */
+
+/** A field the user has not provided. Number inputs hand back '' when
+ *  cleared and the draft's preprocessed numbers widen to `unknown` on the
+ *  INPUT side of the schema, so this covers all three spellings of absent.
+ *  Matches the backend's `is None` / falsy checks. */
+const absent = (v: unknown) => v === undefined || v === null || v === ''
+
+export function submitRequirements(
+  d: z.input<typeof consignmentDraftSchema>,
+): SubmitRequirement[] {
+  const out: SubmitRequirement[] = []
+
+  const at = (step: number) => {
+    const def = stepByNumber(step)
+    return { step, stepLabel: def?.label ?? `Step ${step}` }
+  }
+
+  const need = (step: number, message: string) => out.push({ message, ...at(step) })
+
+  // --- Step 1: Consignment ---
+  if (!d.branch) need(1, 'Branch is required')
+  if (!d.supplier) need(1, 'Supplier is required')
+  if (!d.origin) need(1, 'Country of origin is required')
+  if (!d.currency) need(1, 'Currency is required')
+
+  const items = d.items ?? []
+  if (items.length === 0) need(1, 'Add at least one item')
+
+  const REQ_LABELS: Record<string, string> = {
+    referenceNo: 'Reference no.',
+    jobNo: 'Job no.',
+    moNo: 'MO no.',
+    othersDescription: 'Description',
+  }
+
+  items.forEach((item, i) => {
+    const n = i + 1
+    if (!item.itemName) need(1, `Item ${n}: item name is required`)
+    // "Others" lines are not drawn from the item master, so there is often no
+    // code — ITEM_CODE_NOT_REQUIRED_FOR on the backend, keyed off the
+    // capitalised type; the draft holds the lowercase one.
+    if (!item.itemCode && item.requisitionType !== 'others') {
+      need(1, `Item ${n}: item code is required`)
+    }
+    if (absent(item.quantity)) need(1, `Item ${n}: quantity is required`)
+    if (!item.uom) need(1, `Item ${n}: unit of measure is required`)
+
+    if (!item.requisitionType) {
+      need(1, `Item ${n}: requisition type is required`)
+    } else {
+      REQUISITION_FIELDS[item.requisitionType].forEach((f) => {
+        if (!item[f]) {
+          need(1, `Item ${n}: ${REQ_LABELS[f] ?? f} is required for a ${item.requisitionType} item`)
+        }
+      })
+    }
+  })
+
+  // --- Step 2: Finance ---
+  if (!d.paymentInstrument) need(2, 'Payment instrument is required')
+  if (!d.instrumentNo) need(2, 'Instrument number is required')
+  if (!d.works) need(2, 'Works is required')
+  if (absent(d.exchangeRate)) need(2, 'Exchange rate is required')
+  if (!d.rateDate) need(2, 'The date the rate was booked is required')
+
+  // --- Step 5: Status ---
+  if (!d.status) need(5, 'Status is required')
+
+  // --- Step 3: Shipping ---
+  if (d.etd && d.eta && new Date(d.eta) < new Date(d.etd)) {
+    need(3, 'ETA cannot be before ETD')
+  }
+
   return out
 }

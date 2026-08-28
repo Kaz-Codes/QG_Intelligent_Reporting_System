@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { SubmitRequirement } from '@/lib/submitRequirements'
 
 /**
  * Logistics Status schema — step layout (5 steps):
@@ -682,4 +683,72 @@ export function buildRemarksFeed(remarksLog: RemarkEntry[]): RemarkEntry[] {
 
 export function canEditRemark(userRole: string): boolean {
   return userRole === 'admin'
+}
+
+/* ------------------------------------------------------------------ */
+/* What still blocks Submit                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Outstanding submission requirements, attributed to the step that owns each
+ * field — drives the wizard's requirements banner and the disabled Submit.
+ *
+ * MIRRORS app/logistics/helpers.py::submission_errors. Two notes on how it
+ * lines up with the zod schema above:
+ *
+ *  - customerName is enforced by the BASE schema (`z.string().min(1)`), not by
+ *    the submit superRefine, so it never appeared in a submit-time list even
+ *    though the backend requires it at submit. It is included here, because
+ *    the backend will refuse without it.
+ *
+ *  - The backend branches `if Export ... elif Local ...`, so an order with NO
+ *    order type is required to give neither. The zod schema's `else` catches
+ *    everything that is not Export. They agree in practice only because
+ *    orderType is a two-value enum here and the wizard always sets one; a
+ *    NULL order_type exists in loaded rows but cannot be produced by this
+ *    form. Mirrored as the backend has it, so the two cannot diverge if that
+ *    ever changes.
+ */
+
+/** A field the user has not provided. Number inputs hand back '' when
+ *  cleared and the draft's preprocessed numbers widen to `unknown` on the
+ *  INPUT side of the schema, so this covers all three spellings of absent.
+ *  Matches the backend's `is None` / falsy checks. */
+const absent = (v: unknown) => v === undefined || v === null || v === ''
+
+export function submitRequirements(
+  d: z.input<typeof consignmentDraftSchema>,
+): SubmitRequirement[] {
+  const out: SubmitRequirement[] = []
+
+  const at = (step: number) => {
+    const def = WIZARD_STEPS.find((s) => s.step === step)
+    return { step, stepLabel: def?.label ?? `Step ${step}` }
+  }
+
+  const need = (step: number, message: string) => out.push({ message, ...at(step) })
+
+  // --- Step 1: Order Details ---
+  if (!d.customerName?.trim()) need(1, 'Customer name is required')
+
+  if (d.orderType === 'Export') {
+    if (!d.originCountry?.trim()) need(1, 'Country of origin is required for exports')
+  } else if (d.orderType === 'Local') {
+    if (!d.originCity?.trim()) need(1, 'City is required for local orders')
+    if (!d.originProvince?.trim()) need(1, 'Province is required for local orders')
+  }
+
+  const items = d.items ?? []
+  if (items.length === 0) need(1, 'Add at least one item')
+
+  items.forEach((item, i) => {
+    const n = i + 1
+    if (!item.itemDetail) need(1, `Item ${n}: item detail is required`)
+    const qty = Number(item.quantity)
+    if (absent(item.quantity) || Number.isNaN(qty) || qty <= 0) {
+      need(1, `Item ${n}: quantity must be greater than 0`)
+    }
+  })
+
+  return out
 }
