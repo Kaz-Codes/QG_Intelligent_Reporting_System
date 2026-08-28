@@ -65,11 +65,13 @@ EVENT_CATALOGUE = {
         "module": M.IMPORTS.value,
         "permission": CAN_VIEW_IMPORTS,
         "admin_only": False,
-        "title_template": "ETA slipped {days_slipped}d — {reference}",
+        # Variables match the payload the emitter sends exactly — see
+        # imports/routes/update_consignment.py. Renaming one without the
+        # other renders the placeholder literally in the message.
+        "title_template": "ETA slipped {slip_days}d — {consignment_no}",
         "body_template": (
-            "{reference} from {supplier} has moved its ETA at works from "
-            "{previous_eta} to {new_eta} — {days_slipped} days later. "
-            "Destination {branch}."
+            "{consignment_no} from {supplier} has moved its ETA from "
+            "{old_eta} to {new_eta} — {slip_days} days later."
         ),
     },
 

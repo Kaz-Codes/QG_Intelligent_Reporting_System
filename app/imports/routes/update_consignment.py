@@ -10,9 +10,99 @@ from app.imports.helpers import updated_fields, updated_payments, updated_items,
 from app.imports.helpers import fetch_consignment
 from app.imports.models import ConsignmentItem, Payment
 from app.imports.serializers import serialize_consignment, serialize_many
+from app.notifications.emit import emit
+from datetime import date
 import logging
 
 logger = logging.getLogger(__name__)
+
+#-----------------------------------------------------
+# NOTIFY ON A MAJOR ETA SLIP
+#
+# More than a week later than the ETA it replaced. Below that, an ETA moving
+# is ordinary traffic and interrupting an executive with it would train them
+# to ignore the channel.
+#
+# ONLY A SLIP, NEVER A PULL-IN. An ETA moving EARLIER is good news and is not
+# an alert, so the comparison is signed rather than an absolute difference.
+#
+# WATCHES `eta`, NOT `eta_works`. Both are recorded in EtaRevisionHistory, but
+# `eta` is the one that actually moves — 163 of the 164 revisions in the data
+# are against it — and it is already what serializers.build_system_remarks
+# treats as THE ETA chain when it writes "1st ETA ... 2nd ETA ...". Watching
+# both would also mean two notifications for one save whenever a revision
+# touched each of them.
+#-----------------------------------------------------
+
+MAJOR_ETA_SLIP_DAYS = 7
+
+
+def _as_date(value):
+    """Dates arrive as `date` from the ORM but as an ISO string out of JSON."""
+    if isinstance(value, date):
+        return value
+
+    if isinstance(value, str) and value.strip():
+        return date.fromisoformat(value.strip()[:10])
+
+    return None
+
+
+def _notify_major_eta_slip(db, updation_dict, consignment):
+    """Raise imports.eta_slipped_major, if this update slipped the ETA badly.
+
+    WRAPPED, like every emit path. emit() cannot raise, but the work that
+    builds its payload can — a missing supplier relation, an unparseable
+    date — and this runs AFTER the commit. An exception escaping here would
+    turn a consignment that saved perfectly well into a 500 for the operator,
+    which is precisely the coupling notifications are not allowed to have.
+    """
+    try:
+        change = updation_dict.get("eta")
+
+        if not change:
+            return
+
+        old_eta = _as_date(change.get("old_value"))
+        new_eta = _as_date(change.get("new_value"))
+
+        # No previous ETA means this is the first one recorded, not a slip.
+        if old_eta is None or new_eta is None:
+            return
+
+        slip_days = (new_eta - old_eta).days
+
+        if slip_days <= MAJOR_ETA_SLIP_DAYS:
+            return
+
+        emit(
+            db,
+            "imports.eta_slipped_major",
+            payload={
+                # Same reference the reports and list screens show.
+                "consignment_no": consignment.instrument_number or f"IMP-{consignment.id}",
+                "supplier": consignment.supplier.name if consignment.supplier else "unknown supplier",
+                "old_eta": old_eta.isoformat(),
+                "new_eta": new_eta.isoformat(),
+                "slip_days": slip_days,
+            },
+            entity_type="consignment",
+            entity_id=consignment.id,
+            # The indexed column, not a template variable — it is what a feed
+            # is narrowed by.
+            branch=consignment.branch.name if consignment.branch else None,
+            # One notification per consignment per landed-on ETA: re-saving
+            # the same revision, or two people saving it at once, is one
+            # event. Revising AGAIN to a different date is a new one.
+            dedupe_key=f"imports.eta_slipped_major:{consignment.id}:{new_eta.isoformat()}",
+        )
+
+    except Exception:
+        logger.exception(
+            "Could not raise the ETA-slip notification for consignment %s — "
+            "swallowed; the update itself is already committed",
+            getattr(consignment, "id", None),
+        )
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -138,6 +228,12 @@ def update_consignment(
 
         db.commit()
         db.refresh(consignment)
+
+        # AFTER the commit, deliberately. The ETA revision is durable by this
+        # point, so nothing the notification does can undo it — and emit()
+        # holds its own session, so it could not reach this transaction even
+        # if it were still open.
+        _notify_major_eta_slip(db, updation_dict, consignment)
 
         return {
             "status_code":200,
