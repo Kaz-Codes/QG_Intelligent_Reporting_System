@@ -9,7 +9,8 @@ import { useAuth } from '@/features/auth/AuthContext'
 import { PERMISSION_GROUPS, permissionLabel, type Permission } from '@/lib/roleAccess'
 import {
   listUsers, createUser, updateUser, setUserActive,
-  credentialError, MIN_CREDENTIAL_LENGTH, type UserAccount,
+  credentialError, phoneError, MIN_CREDENTIAL_LENGTH, NOTIFICATION_TIERS,
+  type UserAccount, type NotificationTier,
 } from '@/lib/api/users'
 import { listLogs, subscribeToLogs, describeLog, type ActivityLogEntry } from '@/lib/api/logs'
 
@@ -70,6 +71,94 @@ function PermissionChecklist({
   )
 }
 
+/** Tier, phone and WhatsApp consent — the same three controls on the create
+ *  form and the edit panel, so they are one component rather than two copies
+ *  that eventually disagree about the rules.
+ *
+ *  THE CHECKBOX IS DISABLED WITHOUT A PHONE NUMBER, because consent to be
+ *  messaged with nothing to message is not a state worth storing. That is UX
+ *  only: the backend refuses the same combination with a 400 (see
+ *  app/accounts/helpers.py), which is the actual boundary. */
+function NotificationSettings({
+  idPrefix, tier, onTier, phone, onPhone, optedIn, onOptedIn, optedInAt,
+}: {
+  idPrefix: string
+  tier: NotificationTier
+  onTier: (v: NotificationTier) => void
+  phone: string
+  onPhone: (v: string) => void
+  optedIn: boolean
+  onOptedIn: (v: boolean) => void
+  optedInAt?: string | null
+}) {
+  const hint = NOTIFICATION_TIERS.find((t) => t.value === tier)?.hint
+  const badPhone = phoneError(phone)
+  const hasPhone = phone.trim().length > 0
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${idPrefix}-tier`}>Notification tier</Label>
+        <select
+          id={`${idPrefix}-tier`}
+          value={tier}
+          onChange={(e) => onTier(e.target.value as NotificationTier)}
+          className="h-9 rounded-lg border border-line bg-surface px-2.5 text-sm text-ink focus:border-brand focus:outline-none"
+        >
+          {NOTIFICATION_TIERS.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-muted">
+          Controls which notifications this user receives. Executive receives
+          only material business events.
+        </p>
+        {/* The selected tier's own meaning, which the generic helper text
+            above cannot give — the three options are not "more vs less
+            important", they are progressively NARROWER. */}
+        {hint && <p className="text-[11px] font-medium text-muted">{hint}</p>}
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${idPrefix}-phone`}>Phone number</Label>
+        <Input
+          id={`${idPrefix}-phone`}
+          value={phone}
+          onChange={(e) => onPhone(e.target.value)}
+          placeholder="+923001234567"
+          inputMode="tel"
+          aria-invalid={badPhone ? true : undefined}
+        />
+        <p className="text-[11px] text-muted">Used for WhatsApp alerts in future. Optional.</p>
+        {badPhone && <p className="text-[11px] font-medium text-risk">{badPhone}</p>}
+      </div>
+
+      <label
+        htmlFor={`${idPrefix}-optin`}
+        className={`flex items-start gap-2 text-sm text-ink ${hasPhone ? '' : 'opacity-50'}`}
+        title={hasPhone ? undefined : 'Add a phone number first'}
+      >
+        <input
+          id={`${idPrefix}-optin`}
+          type="checkbox"
+          checked={optedIn && hasPhone}
+          disabled={!hasPhone}
+          onChange={(e) => onOptedIn(e.target.checked)}
+          className="mt-0.5 accent-brand"
+        />
+        <span>
+          Opted in to WhatsApp alerts
+          {optedInAt && (
+            <span className="block text-[11px] text-muted">
+              Consent recorded {new Date(optedInAt).toLocaleDateString()}
+            </span>
+          )}
+        </span>
+      </label>
+    </div>
+  )
+}
+
 function AccessSummary({ isAdmin, permissions }: { isAdmin: boolean; permissions: Permission[] }) {
   if (isAdmin) {
     return (
@@ -119,6 +208,11 @@ export function UserManagement() {
   const [password, setPassword] = useState('')
   const [isAdmin, setIsAdmin] = useState(false)
   const [permissions, setPermissions] = useState<Permission[]>([])
+  // Matches the column default, so a new account starts receiving everything
+  // until somebody deliberately narrows it.
+  const [tier, setTier] = useState<NotificationTier>('operational')
+  const [phone, setPhone] = useState('')
+  const [optedIn, setOptedIn] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -127,6 +221,9 @@ export function UserManagement() {
   const [editPassword, setEditPassword] = useState('')
   const [editIsAdmin, setEditIsAdmin] = useState(false)
   const [editPermissions, setEditPermissions] = useState<Permission[]>([])
+  const [editTier, setEditTier] = useState<NotificationTier>('operational')
+  const [editPhone, setEditPhone] = useState('')
+  const [editOptedIn, setEditOptedIn] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
 
@@ -181,15 +278,24 @@ export function UserManagement() {
       return
     }
 
+    const badPhone = phoneError(phone)
+    if (badPhone) { setError(badPhone); return }
+
     setSubmitting(true)
     try {
       // No client-side logging: the backend's request middleware records this
       // POST against the acting user, so refresh() below picks it up.
-      await createUser({ username, password, isAdmin, permissions })
+      await createUser({
+        username, password, isAdmin, permissions,
+        notificationTier: tier, phoneNumber: phone, whatsappOptedIn: optedIn,
+      })
       setUsername('')
       setPassword('')
       setIsAdmin(false)
       setPermissions([])
+      setTier('operational')
+      setPhone('')
+      setOptedIn(false)
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the account')
@@ -204,6 +310,9 @@ export function UserManagement() {
     setEditPassword(u.password)
     setEditIsAdmin(u.isAdmin)
     setEditPermissions(u.permissions)
+    setEditTier(u.notificationTier)
+    setEditPhone(u.phoneNumber)
+    setEditOptedIn(u.whatsappOptedIn)
     setEditError(null)
 
     // This one account's own history — GET /logs/?user_id=…
@@ -226,6 +335,9 @@ export function UserManagement() {
       return
     }
 
+    const badPhone = phoneError(editPhone)
+    if (badPhone) { setEditError(badPhone); return }
+
     setSavingEdit(true)
     try {
       // PUT /users/{id} replaces the whole account, so username/password go
@@ -236,6 +348,9 @@ export function UserManagement() {
         isAdmin: editIsAdmin,
         permissions: editPermissions,
         isActive: u.isActive,
+        notificationTier: editTier,
+        phoneNumber: editPhone,
+        whatsappOptedIn: editOptedIn,
       })
       setEditingId(null)
       await refresh()
@@ -330,6 +445,19 @@ export function UserManagement() {
                         onChange={setEditPermissions}
                         disabled={editIsAdmin}
                       />
+
+                      <div className="border-t border-line pt-3">
+                        <NotificationSettings
+                          idPrefix={`edit-${u.id}`}
+                          tier={editTier}
+                          onTier={setEditTier}
+                          phone={editPhone}
+                          onPhone={setEditPhone}
+                          optedIn={editOptedIn}
+                          onOptedIn={setEditOptedIn}
+                          optedInAt={u.whatsappOptedInAt}
+                        />
+                      </div>
                       {/* This account's own activity — GET /logs/?user_id= */}
                       <div className="rounded-lg border border-line bg-surface p-3">
                         <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
@@ -377,6 +505,17 @@ export function UserManagement() {
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
+                        {/* Which notifications this account receives, at a
+                            glance. Titled with the tier's meaning, because the
+                            label alone reads as seniority rather than as the
+                            ceiling it actually is. */}
+                        <span
+                          className="shrink-0 rounded-full bg-canvas-alt px-2 py-0.5 text-[11px] font-medium text-muted"
+                          title={NOTIFICATION_TIERS.find((t) => t.value === u.notificationTier)?.hint}
+                        >
+                          {NOTIFICATION_TIERS.find((t) => t.value === u.notificationTier)?.label
+                            ?? u.notificationTier}
+                        </span>
                         <AccessSummary isAdmin={u.isAdmin} permissions={u.permissions} />
                         <button
                           type="button"
@@ -433,6 +572,18 @@ export function UserManagement() {
                 <div className="flex flex-col gap-1.5">
                   <Label>Permissions</Label>
                   <PermissionChecklist idPrefix="new" value={permissions} onChange={setPermissions} disabled={isAdmin} />
+                </div>
+
+                <div className="border-t border-line pt-3">
+                  <NotificationSettings
+                    idPrefix="new"
+                    tier={tier}
+                    onTier={setTier}
+                    phone={phone}
+                    onPhone={setPhone}
+                    optedIn={optedIn}
+                    onOptedIn={setOptedIn}
+                  />
                 </div>
 
                 {error && <p className="animate-scale-in rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{error}</p>}

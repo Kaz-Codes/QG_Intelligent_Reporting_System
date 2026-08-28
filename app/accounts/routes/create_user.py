@@ -6,7 +6,9 @@ from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import require_admin
 from fastapi import Request, HTTPException
 from sqlalchemy import select
-from app.accounts.helpers import serialize_user, apply_account_access
+from app.accounts.helpers import (
+    serialize_user, apply_account_access, apply_notification_settings,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,10 @@ async def create_user(user_schema : UserSchema, request: Request):
 
     try:
         request_user_data = authenticate(request)
-        require_admin(request_user_data, db)
+        # require_admin hands back the acting user, which
+        # apply_notification_settings needs to decide whether the tier may be
+        # set — see the note in helpers.py.
+        acting_user = require_admin(request_user_data, db)
 
         # check whether username already exists
         user_exists = db.execute(
@@ -42,6 +47,10 @@ async def create_user(user_schema : UserSchema, request: Request):
         )
         # Checkbox -> admin (no permissions), otherwise the chosen permissions.
         apply_account_access(db, user, user_schema.is_admin, user_schema.permissions)
+        # Tier, phone and WhatsApp consent. Applied before the flush so a
+        # rejected tier or a consent with no number fails the whole create
+        # rather than leaving a half-configured account behind.
+        apply_notification_settings(db, user, user_schema, acting_user)
 
         db.add(user)
         db.commit()
