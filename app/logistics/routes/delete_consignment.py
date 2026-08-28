@@ -1,4 +1,7 @@
 from app.logistics.routes.router import router
+from app.notifications.lifecycle import notify_deleted, format_money
+from app.logistics.helpers import order_reference
+from app.dashboard.logistics.calculations import total_logistics_cost
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
@@ -45,6 +48,16 @@ def delete_consignment(
 
         db.commit()
         db.refresh(consignment)
+
+        # AFTER the commit, carrying enough to identify what vanished — the
+        # row is hidden from every list from here on.
+        notify_deleted(
+            db, "logistics", consignment.id,
+            reference=order_reference(consignment),
+            party=consignment.customer_name or "unknown customer",
+            value=format_money(total_logistics_cost(consignment)),
+            deleted_by=user.username,
+        )
 
         consignment = fetch_consignment(db, consignment.id)
 

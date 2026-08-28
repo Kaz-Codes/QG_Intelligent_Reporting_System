@@ -51,5 +51,9 @@ def serialize_delivery(delivery):
         "read_at": _iso(delivery.read_at),
         "is_read": delivery.read_at is not None,
         "created_at": _iso(delivery.created_at),
+        # NULL for a delivery that stands on its own; shared by every delivery
+        # the fan-out put in the same run, which is what lets the panel
+        # collapse them into one expandable entry. See routing.assign_group_keys.
+        "group_key": delivery.group_key,
         "event": serialize_event(delivery.event),
     }

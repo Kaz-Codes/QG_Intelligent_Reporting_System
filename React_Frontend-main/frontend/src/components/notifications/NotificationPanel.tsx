@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertCircle, Ban, BellOff, CheckCheck, ExternalLink, Loader2, X } from 'lucide-react'
+import {
+  AlertCircle, Ban, BellOff, CheckCheck, ChevronDown, ExternalLink, Layers,
+  Loader2, X,
+} from 'lucide-react'
 
 import {
   type ApiNotification,
@@ -91,9 +94,61 @@ const OPEN_FAILURE: Record<Exclude<EntityAvailability, 'ok'>, OpenFailure> = {
 // input and is not re-sorted here.
 //-----------------------------------------------------
 
+/**
+ * ONE ENTRY IN THE PANEL: either a single notification, or a COLLAPSED RUN of
+ * them sharing a group_key.
+ *
+ * The backend decides which deliveries belong to a run — more than ten
+ * info-tier notifications from one module in one hour for this user (see
+ * routing.py::assign_group_keys). All this does is render that decision:
+ * consecutive rows carrying the same key become one expandable entry instead
+ * of ten rows burying everything underneath them.
+ *
+ * The individual deliveries are still real and still here. A collapsed run
+ * expands to the actual rows, each with its own read state and its own
+ * "Open record" — nothing is summarised away.
+ */
+type PanelEntry =
+  | { kind: 'single'; key: string; row: ApiNotification }
+  | { kind: 'group'; key: string; rows: ApiNotification[] }
+
+function collapseGroups(rows: ApiNotification[]): PanelEntry[] {
+  const entries: PanelEntry[] = []
+
+  for (const row of rows) {
+    const last = entries[entries.length - 1]
+
+    if (
+      row.group_key &&
+      last?.kind === 'group' &&
+      last.key === row.group_key
+    ) {
+      last.rows.push(row)
+      continue
+    }
+
+    if (row.group_key) {
+      entries.push({ kind: 'group', key: row.group_key, rows: [row] })
+      continue
+    }
+
+    entries.push({ kind: 'single', key: `d-${row.id}`, row })
+  }
+
+  // A "run" of one is just a notification. Rendering it behind a "1 update"
+  // header would hide the actual message to save no space at all — which can
+  // happen legitimately at an hour boundary, when a group's tail lands in the
+  // next hour and starts a new key.
+  return entries.map((e) =>
+    e.kind === 'group' && e.rows.length === 1
+      ? { kind: 'single' as const, key: `d-${e.rows[0].id}`, row: e.rows[0] }
+      : e,
+  )
+}
+
 interface DayGroup {
   label: string
-  rows: ApiNotification[]
+  entries: PanelEntry[]
 }
 
 interface Section {
@@ -102,15 +157,21 @@ interface Section {
   groups: DayGroup[]
 }
 
+function entryDate(entry: PanelEntry): string | null {
+  return entry.kind === 'single' ? entry.row.created_at : entry.rows[0].created_at
+}
+
 function groupByDay(rows: ApiNotification[]): DayGroup[] {
   const groups: DayGroup[] = []
 
-  for (const row of rows) {
-    const label = dayGroupLabel(row.created_at)
+  // Collapsed FIRST, then split by day: a run is created inside a single clock
+  // hour, so it cannot straddle two days and this ordering is safe.
+  for (const entry of collapseGroups(rows)) {
+    const label = dayGroupLabel(entryDate(entry))
     const last = groups[groups.length - 1]
 
-    if (last && last.label === label) last.rows.push(row)
-    else groups.push({ label, rows: [row] })
+    if (last && last.label === label) last.entries.push(entry)
+    else groups.push({ label, entries: [entry] })
   }
 
   return groups
@@ -270,6 +331,87 @@ function NotificationRow({
           </span>
         )}
       </span>
+    </div>
+  )
+}
+
+/**
+ * A COLLAPSED RUN — "12 consignments updated in Imports", expanding to the
+ * rows themselves.
+ *
+ * Collapsed by default: the whole point is that these were drowning the
+ * panel. The header is a summary, not a notification — it has no read state
+ * of its own, because the deliveries underneath it each keep theirs. Marking
+ * the run read means marking those, which is what "Mark all read" already
+ * does; there is deliberately no third notion of a read group.
+ */
+function GroupedRun({
+  rows,
+  onSelect,
+  onOpen,
+  failures,
+  openingId,
+}: {
+  rows: ApiNotification[]
+  onSelect: (row: ApiNotification) => void
+  onOpen: (row: ApiNotification) => void
+  failures: Record<number, OpenFailure>
+  openingId: number | null
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const unread = rows.filter((r) => !r.is_read).length
+  const module = moduleLabel(rows[0].event.module)
+
+  return (
+    <div className="border-b border-line/60">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className={cn(
+          'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-canvas-alt',
+          unread > 0 && 'bg-brand-soft/25',
+        )}
+      >
+        <Layers size={15} className="shrink-0 text-muted" />
+
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-ink">
+            {rows.length} updates in {module}
+          </span>
+          <span className="mt-0.5 block text-[11px] text-muted">
+            {unread > 0 ? `${unread} unread · ` : ''}
+            {relativeTime(rows[rows.length - 1].created_at)} –{' '}
+            {relativeTime(rows[0].created_at)}
+          </span>
+        </span>
+
+        <ChevronDown
+          size={14}
+          className={cn(
+            'shrink-0 text-muted transition-transform duration-200',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
+
+      {/* Indented so an expanded run reads as belonging to its header rather
+          than as the list resuming. */}
+      {expanded && (
+        <div className="border-l-2 border-line pl-1">
+          {rows.map((row) => (
+            <NotificationRow
+              key={row.id}
+              row={row}
+              onSelect={onSelect}
+              onOpen={onOpen}
+              failure={failures[row.id]}
+              opening={openingId === row.id}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -486,16 +628,27 @@ export function NotificationPanel({
                   <h4 className="px-4 pb-1 pt-2.5 text-[11px] font-semibold text-muted">
                     {group.label}
                   </h4>
-                  {group.rows.map((row) => (
-                    <NotificationRow
-                      key={row.id}
-                      row={row}
-                      onSelect={handleSelect}
-                      onOpen={(r) => void handleOpen(r)}
-                      failure={failures[row.id]}
-                      opening={openingId === row.id}
-                    />
-                  ))}
+                  {group.entries.map((entry) =>
+                    entry.kind === 'group' ? (
+                      <GroupedRun
+                        key={entry.key}
+                        rows={entry.rows}
+                        onSelect={handleSelect}
+                        onOpen={(r) => void handleOpen(r)}
+                        failures={failures}
+                        openingId={openingId}
+                      />
+                    ) : (
+                      <NotificationRow
+                        key={entry.key}
+                        row={entry.row}
+                        onSelect={handleSelect}
+                        onOpen={(r) => void handleOpen(r)}
+                        failure={failures[entry.row.id]}
+                        opening={openingId === entry.row.id}
+                      />
+                    ),
+                  )}
                 </div>
               ))}
             </section>

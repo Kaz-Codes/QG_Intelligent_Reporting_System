@@ -630,6 +630,19 @@ def is_closed(consignment):
 # the front end only sees these if it calls the submit endpoint.
 #---------------------------------------
 
+#---------------------------------------
+# HOW AN ORDER IS NAMED IN A MESSAGE
+#
+# The MO number is what the list and the wizard show as the order's reference;
+# LOG-{id} is the fallback for a draft that has not been given one. One
+# definition, so a notification names an order the same way as the screen the
+# reader opens next.
+#---------------------------------------
+
+def order_reference(consignment):
+    return consignment.mo_no or f"LOG-{consignment.id}"
+
+
 def submission_errors(consignment):
     errors = []
 

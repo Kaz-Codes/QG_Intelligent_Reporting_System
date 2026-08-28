@@ -1,4 +1,7 @@
 from app.logistics.routes.router import router
+from app.notifications.lifecycle import notify_status_changed, notify_completed
+from app.logistics.helpers import order_reference
+from app.enums import LogisticsStatus
 from app.logistics.schemas import LogisticsConsignmentSchema
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
@@ -17,6 +20,56 @@ from app.logistics.serializers import serialize_consignment, serialize_many
 import logging
 
 logger = logging.getLogger(__name__)
+
+#---------------------------------------
+# THE LIFECYCLE STATUS EVENT
+#
+# Fires on the CHANGE, not on the save: updation_dict only carries a field the
+# diff engine found actually different, so a wizard step posting the whole
+# draft back with an unchanged status produces nothing.
+#
+# COMPLETION SUPPRESSES THE PAIRED STATUS CHANGE — reaching "Delivered" IS a
+# status change, and emitting both would say the same thing twice, one line
+# apart. The completion is the more informative, so it is emitted instead.
+#---------------------------------------
+
+def _notify_status_lifecycle(db, updation_dict, consignment):
+    try:
+        change = updation_dict.get("current_status")
+
+        if not change:
+            return
+
+        old_status = change.get("old_value")
+        new_status = change.get("new_value")
+
+        if not new_status or old_status == new_status:
+            return
+
+        reference = order_reference(consignment)
+        party = consignment.customer_name or "unknown customer"
+
+        if new_status == LogisticsStatus.DELIVERED.value:
+            notify_completed(
+                db, "logistics", consignment.id,
+                reference=reference, party=party, status=new_status,
+            )
+            return
+
+        notify_status_changed(
+            db, "logistics", consignment.id,
+            reference=reference,
+            old_status=old_status,
+            new_status=new_status,
+        )
+
+    except Exception:
+        logger.exception(
+            "Could not raise the lifecycle notification for order %s — "
+            "swallowed; the update itself is already committed",
+            getattr(consignment, "id", None),
+        )
+
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -140,6 +193,9 @@ def update_consignment(
         db.refresh(consignment)
 
         consignment = fetch_consignment(db, consignment.id)
+
+        # AFTER the commit — see the note on the function.
+        _notify_status_lifecycle(db, updation_dict, consignment)
 
         return {
             "status_code":200,

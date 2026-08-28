@@ -233,6 +233,195 @@ EVENT_CATALOGUE = {
     },
 
     #--------------------------------
+    # LIFECYCLE — THE HIGH-VOLUME EVENTS, AND WHY GROUPING EXISTS
+    #
+    # Everything above this line is an EXCEPTION: something went wrong, or is
+    # about to. These twelve are the opposite — the ordinary life of a record:
+    # it started, it changed state, it finished, it vanished. They fire on
+    # normal work going normally.
+    #
+    # THAT MAKES THEM AN ORDER OF MAGNITUDE MORE FREQUENT. At roughly 5,000
+    # consignments a year plus their status changes, this is ~50-150 events a
+    # day against the exception catalogue's 30-80 — and unlike the exception
+    # events, the number grows with how busy the business is rather than with
+    # how much is going wrong.
+    #
+    # THEY ARE THE REASON DELIVERY GROUPING EXISTS. A user who would receive
+    # more than GROUPING_THRESHOLD info-tier notifications from one module in
+    # an hour gets them collapsed into a single expandable entry instead —
+    # see routing.py::assign_group_key. That mechanism is general, keyed on
+    # (user, module, severity); it is not special-cased for these events, it
+    # just happens to be these that make it necessary.
+    #
+    # TIERS ARE THE OTHER HALF OF THE VOLUME ANSWER. `created` and
+    # `status_changed` are OPERATIONAL, which in this system means they reach
+    # operational users and stop there (routing.py: a user receives an event
+    # when user_tier <= event_tier). A director is not pinged because a clerk
+    # started a consignment. `deleted` is important/managerial because a
+    # record disappearing without explanation is exactly what a supervisor
+    # should hear about.
+    #
+    # NOT EVERY CHANGE IS A LIFECYCLE EVENT. Field edits, draft saves and
+    # every other generic create/update/delete stay in app/logs/ where they
+    # belong. Only four moments qualify: started, changed state, finished,
+    # vanished.
+    #
+    # Payload keys are deliberately IDENTICAL across the three modules
+    # (`reference`, `party`, `old_status`, `new_status`, `status`, `value`,
+    # `deleted_by`) so app/notifications/lifecycle.py can build all twelve
+    # from one place. Only the wording differs.
+    #--------------------------------
+
+    #--- imports lifecycle ---
+
+    "imports.created": {
+        "severity": S.INFO.value,
+        "tier": T.OPERATIONAL.value,
+        "module": M.IMPORTS.value,
+        "permission": CAN_VIEW_IMPORTS,
+        "admin_only": False,
+        "title_template": "New consignment {reference}",
+        "body_template": "{reference} from {party} has been created.",
+    },
+
+    "imports.status_changed": {
+        "severity": S.INFO.value,
+        "tier": T.OPERATIONAL.value,
+        "module": M.IMPORTS.value,
+        "permission": CAN_VIEW_IMPORTS,
+        "admin_only": False,
+        "title_template": "{reference} — {new_status}",
+        "body_template": "{reference} moved from {old_status} to {new_status}.",
+    },
+
+    "imports.completed": {
+        "severity": S.INFO.value,
+        "tier": T.MANAGERIAL.value,
+        "module": M.IMPORTS.value,
+        "permission": CAN_VIEW_IMPORTS,
+        "admin_only": False,
+        "title_template": "{reference} completed",
+        "body_template": "{reference} from {party} has reached {status}.",
+    },
+
+    "imports.deleted": {
+        "severity": S.IMPORTANT.value,
+        "tier": T.MANAGERIAL.value,
+        "module": M.IMPORTS.value,
+        "permission": CAN_VIEW_IMPORTS,
+        "admin_only": False,
+        "title_template": "Consignment {reference} deleted",
+        "body_template": (
+            "{reference} from {party}, valued {value}, was deleted by "
+            "{deleted_by}. It is hidden from the list but not destroyed — an "
+            "admin can restore it."
+        ),
+    },
+
+    #--- logistics lifecycle ---
+
+    "logistics.created": {
+        "severity": S.INFO.value,
+        "tier": T.OPERATIONAL.value,
+        "module": M.LOGISTICS.value,
+        "permission": CAN_VIEW_LOGISTICS,
+        "admin_only": False,
+        "title_template": "New order {reference}",
+        "body_template": "{reference} for {party} has been created.",
+    },
+
+    "logistics.status_changed": {
+        "severity": S.INFO.value,
+        "tier": T.OPERATIONAL.value,
+        "module": M.LOGISTICS.value,
+        "permission": CAN_VIEW_LOGISTICS,
+        "admin_only": False,
+        "title_template": "{reference} — {new_status}",
+        "body_template": "{reference} moved from {old_status} to {new_status}.",
+    },
+
+    "logistics.completed": {
+        "severity": S.INFO.value,
+        "tier": T.MANAGERIAL.value,
+        "module": M.LOGISTICS.value,
+        "permission": CAN_VIEW_LOGISTICS,
+        "admin_only": False,
+        "title_template": "{reference} delivered",
+        "body_template": "{reference} for {party} has reached {status}.",
+    },
+
+    "logistics.deleted": {
+        "severity": S.IMPORTANT.value,
+        "tier": T.MANAGERIAL.value,
+        "module": M.LOGISTICS.value,
+        "permission": CAN_VIEW_LOGISTICS,
+        "admin_only": False,
+        "title_template": "Order {reference} deleted",
+        "body_template": (
+            "{reference} for {party}, valued {value}, was deleted by "
+            "{deleted_by}. It is hidden from the list but not destroyed — an "
+            "admin can restore it."
+        ),
+    },
+
+    #--- trucking lifecycle ---
+    #
+    # TRUCKING HAS NO STORED JOB-LEVEL STATUS. Tracking is per vehicle, and
+    # the job-level reading is a rollup over them — see
+    # trucking/helpers.py::job_tracking_status, which mirrors the front end's
+    # own trackingRollup (the least-advanced vehicle). So `status_changed`
+    # here means that rollup moved, and `completed` means every active
+    # vehicle reached Delivered. Both are stated in the wording rather than
+    # pretending the job carries a status of its own.
+
+    "trucking.created": {
+        "severity": S.INFO.value,
+        "tier": T.OPERATIONAL.value,
+        "module": M.TRUCKING.value,
+        "permission": CAN_VIEW_TRUCKING,
+        "admin_only": False,
+        "title_template": "New trucking job {reference}",
+        "body_template": "{reference} with {party} has been created.",
+    },
+
+    "trucking.status_changed": {
+        "severity": S.INFO.value,
+        "tier": T.OPERATIONAL.value,
+        "module": M.TRUCKING.value,
+        "permission": CAN_VIEW_TRUCKING,
+        "admin_only": False,
+        "title_template": "{reference} — {new_status}",
+        "body_template": (
+            "{reference}: its vehicles have moved from {old_status} to "
+            "{new_status}."
+        ),
+    },
+
+    "trucking.completed": {
+        "severity": S.INFO.value,
+        "tier": T.MANAGERIAL.value,
+        "module": M.TRUCKING.value,
+        "permission": CAN_VIEW_TRUCKING,
+        "admin_only": False,
+        "title_template": "{reference} delivered",
+        "body_template": "{reference} with {party}: every vehicle has {status}.",
+    },
+
+    "trucking.deleted": {
+        "severity": S.IMPORTANT.value,
+        "tier": T.MANAGERIAL.value,
+        "module": M.TRUCKING.value,
+        "permission": CAN_VIEW_TRUCKING,
+        "admin_only": False,
+        "title_template": "Trucking job {reference} deleted",
+        "body_template": (
+            "{reference} with {party}, valued {value}, was deleted by "
+            "{deleted_by}. It is hidden from the list but not destroyed — an "
+            "admin can restore it."
+        ),
+    },
+
+    #--------------------------------
     # SYSTEM
     #--------------------------------
 

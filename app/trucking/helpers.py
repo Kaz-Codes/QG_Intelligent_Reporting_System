@@ -523,6 +523,49 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 # say. While closed it cannot be edited by anyone until an admin reopens it.
 #---------------------------------------
 
+#---------------------------------------
+# THE JOB-LEVEL TRACKING STATUS
+#
+# Trucking stores none (see above), so this DERIVES one: the least advanced
+# status among the active vehicles, following the VehicleTrackingStatus order.
+# A job is only "Delivered" once every truck is; it reads "On road" while the
+# slowest one still is.
+#
+# MIRRORS THE DEFINITION THE FRONT END ALREADY USES — trackingRollup's
+# `slowestStage` in features/truckingStatus/schema.ts, which takes the minimum
+# index over the same ordered list. It is written here rather than invented
+# because the lifecycle notifications need a job-level status VALUE, and the
+# only existing backend rollup (serializers.build_system_remarks) produces
+# prose for a human, not a value to compare against. Two rollups that
+# disagreed about what a job's status is would be exactly the kind of drift
+# this codebase has been bitten by before, so if one of these changes, change
+# both.
+#
+# None when the job has no active vehicles: there is nothing to roll up, which
+# is different from "not started yet".
+#---------------------------------------
+
+def job_tracking_status(consignment):
+    active_vehicles = [v for v in consignment.vehicles if not v.is_deleted]
+
+    if not active_vehicles:
+        return None
+
+    order = [s.value for s in VehicleTrackingStatus]
+
+    # An unrecognised stored value sorts to the front (index -1 -> treated as
+    # least advanced), so a junk status can never make a job look finished.
+    def rank(vehicle):
+        try:
+            return order.index(vehicle.tracking_status)
+        except ValueError:
+            return -1
+
+    least = min(active_vehicles, key=rank)
+
+    return least.tracking_status
+
+
 def is_closed(consignment):
     if consignment.record_state != "submitted":
         return False
@@ -544,6 +587,18 @@ def is_closed(consignment):
 # messages; empty means complete enough to submit. Opt-in: the front end only
 # sees these if it calls the submit endpoint.
 #---------------------------------------
+
+#---------------------------------------
+# HOW A JOB IS NAMED IN A MESSAGE
+#
+# The shipment reference / IDM is what identifies a job on the list; TRK-{id}
+# is the fallback, and it is needed more often here than in the other two
+# modules because reference_no is genuinely optional on an intrafactory move.
+#---------------------------------------
+
+def job_reference(consignment):
+    return consignment.reference_no or f"TRK-{consignment.id}"
+
 
 def submission_errors(consignment):
     errors = []

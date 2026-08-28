@@ -180,6 +180,23 @@ class NotificationDelivery(Base, TimestampMixin):
         # Not redundant with the composite above: the retention job deletes by
         # age across all users, which cannot use a user_id-leading index.
         Index("ix_notification_deliveries_created_at", "created_at"),
+
+        # THE GROUPING LOOKUP: "how many deliveries has each of these users
+        # had in the last hour", asked once per event by the fan-out worker
+        # (routing.assign_group_keys) and narrowed to a module and severity by
+        # a join to notification_events.
+        #
+        # (user_id, created_at) and NOT the composite above: that one is
+        # (user_id, read_at, created_at), and read_at sitting in the middle
+        # makes it useless for a plain time-range scan per user — Postgres
+        # cannot skip a middle column to range-scan the third.
+        #
+        # NOT partial on group_key IS NOT NULL, which was the first instinct
+        # and is exactly backwards: the count has to include the UNGROUPED
+        # deliveries, because they are what pushes a user over the threshold
+        # in the first place. A partial index there would only ever see the
+        # rows that had already been grouped.
+        Index("ix_notification_deliveries_user_created", "user_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -226,6 +243,27 @@ class NotificationDelivery(Base, TimestampMixin):
         DateTime(timezone=True),
         nullable=True
     )
+
+    #--- delivery grouping ---
+    #
+    # NULL for the great majority of deliveries, which stand on their own.
+    # Set by the fan-out worker when this recipient is already over the
+    # threshold for (user, module, severity) within the hour, so the panel can
+    # collapse the run into one expandable entry — "12 consignments updated in
+    # Imports" — instead of burying everything else under it.
+    #
+    # THE GROUPING IS A PRESENTATION DECISION RECORDED ON THE ROW, NOT A
+    # DIFFERENT KIND OF ROW. Every grouped delivery is still a full delivery:
+    # its own read state, its own event, its own click-through. That is why
+    # this is a nullable column rather than a separate "digest" table — a
+    # digest row would have to duplicate what it summarises, and reading one
+    # would not mark the underlying notifications read.
+    #
+    # Assigned at FAN-OUT rather than at emit, because whether something needs
+    # grouping is a fact about one recipient's hour, not about the event: the
+    # same consignment update is the eleventh thing for a clerk watching that
+    # module and the first for anybody else.
+    group_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     event: Mapped["NotificationEvent"] = relationship(back_populates="deliveries")
 

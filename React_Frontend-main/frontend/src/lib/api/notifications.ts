@@ -51,6 +51,12 @@ export interface ApiNotification {
   read_at: string | null
   is_read: boolean
   created_at: string | null
+  /** Shared by every delivery the fan-out put in the same run, when this user
+   *  was already over the hourly threshold for that module and severity.
+   *  NULL for the great majority, which stand on their own. A shared key is
+   *  what lets the panel collapse a run into one expandable entry — see
+   *  app/notifications/routing.py::assign_group_keys. */
+  group_key: string | null
   event: ApiNotificationEvent
 }
 

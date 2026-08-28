@@ -1,14 +1,16 @@
 import logging
+from datetime import datetime, timezone
 
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.orm import selectinload
 
 from app.accounts.models import User
 from app.enums import (
-    NotificationChannel, NotificationDeliveryStatus, NotificationTier,
+    NotificationChannel, NotificationDeliveryStatus, NotificationSeverity,
+    NotificationTier,
 )
 from app.notifications.catalogue import get_event
-from app.notifications.models import NotificationDelivery
+from app.notifications.models import NotificationDelivery, NotificationEvent
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,94 @@ def recipients_for(db, event_type):
 
 
 #--------------------------------
+# DELIVERY GROUPING
+#
+# More than GROUPING_THRESHOLD info-tier notifications from ONE module to ONE
+# user inside an hour stop being information and become a wall. So past that
+# point the rest of the hour's run is tagged with a shared group_key, and the
+# panel renders the run as a single expandable entry — "12 consignments
+# updated in Imports" — instead of twelve rows burying everything else.
+#
+# GENERAL, NOT A SPECIAL CASE FOR THE LIFECYCLE EVENTS. The key is
+# (user, module, severity, hour) and nothing in here names an event type. The
+# lifecycle events are merely what made it necessary (see the catalogue note);
+# any future high-volume event gets the same treatment for free.
+#
+# WHY info ONLY. Severity is the whole point of severity: an important or
+# critical notification is one somebody is meant to act on individually, and
+# collapsing ten of those into "10 things happened" would hide exactly the
+# ones that must not be hidden. Volume is only a problem for the events that
+# are individually unremarkable.
+#
+# WHY AT FAN-OUT AND NOT AT EMIT. Whether something needs grouping is a fact
+# about one recipient's last hour, not about the event — the same consignment
+# update is the eleventh thing for the clerk watching that module and the
+# first for everybody else. emit() does not know who the recipients are (it
+# deliberately does not fan out), so it could not make this decision even if
+# it wanted to.
+#
+# THE HOUR IS A FLOOR, NOT A TRAILING WINDOW. A trailing hour would give every
+# user a slightly different group boundary that moves with each new event, so
+# a run could never settle into one stable key. Flooring to the clock hour
+# means every delivery in the same hour shares a key by construction, at the
+# cost of a run that straddles xx:59 becoming two groups — which is visible
+# and harmless, where an unstable key would be neither.
+#--------------------------------
+
+GROUPING_THRESHOLD = 10
+
+GROUPED_SEVERITIES = {NotificationSeverity.INFO.value}
+
+
+def _hour_floor(moment):
+    return moment.replace(minute=0, second=0, microsecond=0)
+
+
+def assign_group_keys(db, event, user_ids, now=None):
+    """Which of these recipients should have this delivery grouped.
+
+    Returns {user_id: group_key} holding ONLY the users already at or past the
+    threshold for this (module, severity) inside the current hour. Everyone
+    else is absent and gets a normal, ungrouped delivery.
+
+    ONE QUERY FOR THE WHOLE RECIPIENT LIST, not one per user. Fan-out already
+    runs per event; asking per recipient would make a thirty-person fan-out
+    thirty round trips holding a pooled connection, which is the cost this
+    whole subsystem is arranged to avoid.
+    """
+    if not user_ids or event.severity not in GROUPED_SEVERITIES:
+        return {}
+
+    now = now or datetime.now(timezone.utc)
+    hour_start = _hour_floor(now)
+
+    # Counts this user's EXISTING deliveries this hour for the same module and
+    # severity. The event being fanned out now is not among them yet, so the
+    # comparison is >= threshold: the eleventh delivery is the first grouped
+    # one when ten already exist.
+    counts = db.execute(
+        select(NotificationDelivery.user_id, func.count(NotificationDelivery.id))
+        .join(
+            NotificationEvent,
+            NotificationEvent.id == NotificationDelivery.event_id,
+        )
+        .where(NotificationDelivery.user_id.in_(user_ids))
+        .where(NotificationDelivery.created_at >= hour_start)
+        .where(NotificationEvent.module == event.module)
+        .where(NotificationEvent.severity == event.severity)
+        .group_by(NotificationDelivery.user_id)
+    ).all()
+
+    stamp = hour_start.strftime("%Y%m%d%H")
+
+    return {
+        user_id: f"{user_id}:{event.module}:{event.severity}:{stamp}"
+        for user_id, count in counts
+        if count >= GROUPING_THRESHOLD
+    }
+
+
+#--------------------------------
 # FAN-OUT
 #
 # Turns one event into one delivery row per recipient. Called by the
@@ -192,6 +282,10 @@ def fan_out(db, event, on_delivered=None):
         )
         return 0
 
+    # Which of these recipients is already drowning in this module's info
+    # traffic this hour — see the note above assign_group_keys.
+    group_keys = assign_group_keys(db, event, [u.id for u in recipients])
+
     db.execute(
         insert(NotificationDelivery),
         [
@@ -200,11 +294,20 @@ def fan_out(db, event, on_delivered=None):
                 "user_id": user.id,
                 "channel": NotificationChannel.IN_APP.value,
                 "status": NotificationDeliveryStatus.PENDING.value,
+                # NULL for almost everybody; a shared key for the users over
+                # the threshold, which is what lets the panel collapse the run.
+                "group_key": group_keys.get(user.id),
             }
             for user in recipients
         ],
     )
     db.commit()
+
+    if group_keys:
+        logger.info(
+            "Notification event %s (%s) grouped for %s of %s recipient(s)",
+            event.id, event.event_type, len(group_keys), len(recipients),
+        )
 
     if on_delivered is not None:
         try:

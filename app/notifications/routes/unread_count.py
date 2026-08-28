@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, distinct, func, select
 
 from app.database import SessionLocal
 from app.notifications.helpers import current_user
@@ -39,8 +39,23 @@ async def unread_count(request: Request):
     try:
         user = current_user(request, db)
 
+        # COUNTS PANEL ENTRIES, NOT ROWS. A grouped run shows as one entry, so
+        # it must count as one — a badge reading 14 over a panel showing 3
+        # things is the kind of small disagreement that makes people stop
+        # trusting the number. DISTINCT over the group key, falling back to the
+        # row's own id for the ungrouped majority, gives exactly that.
+        #
+        # Still one query over the same index range as before; the DISTINCT
+        # adds a heap fetch per unread row, which for a per-user unread set is
+        # nothing. If that ever stops being true the fix is to carry the count
+        # on the group, not to go back to counting rows.
+        entry = func.coalesce(
+            NotificationDelivery.group_key,
+            cast(NotificationDelivery.id, String),
+        )
+
         count = db.execute(
-            select(func.count(NotificationDelivery.id))
+            select(func.count(distinct(entry)))
             .where(NotificationDelivery.user_id == user.id)
             .where(NotificationDelivery.read_at.is_(None))
         ).scalar() or 0

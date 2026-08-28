@@ -1,4 +1,6 @@
 from app.trucking.routes.router import router
+from app.notifications.lifecycle import notify_deleted, format_money
+from app.trucking.helpers import job_reference
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
@@ -45,6 +47,21 @@ def delete_consignment(
 
         db.commit()
         db.refresh(consignment)
+
+        # AFTER the commit. Value is the ACTUAL freight where one has been
+        # recorded, falling back to the quote — a job deleted before it was
+        # invoiced still has a number worth stating.
+        notify_deleted(
+            db, "trucking", consignment.id,
+            reference=job_reference(consignment),
+            party=consignment.transporter_name or "no transporter named",
+            value=format_money(
+                consignment.actual_freight
+                if consignment.actual_freight is not None
+                else consignment.quoted_freight
+            ),
+            deleted_by=user.username,
+        )
 
         consignment = fetch_consignment(db, consignment.id)
 

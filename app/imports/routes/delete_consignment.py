@@ -1,4 +1,6 @@
 from app.imports.routes.router import router
+from app.notifications.lifecycle import notify_deleted, format_money
+from app.imports.helpers import consignment_reference
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
@@ -44,7 +46,19 @@ def delete_consignment(
 
         db.commit()
         db.refresh(consignment)
-      
+
+        # AFTER the commit, and carrying enough to identify what vanished —
+        # the row is hidden from every list from here on, so a reader cannot
+        # look any of this up for themselves.
+        notify_deleted(
+            db, "imports", consignment.id,
+            reference=consignment_reference(consignment),
+            party=consignment.supplier.name if consignment.supplier else "unknown supplier",
+            value=format_money(consignment.pkr_total),
+            deleted_by=user.username,
+            branch=consignment.branch.name if consignment.branch else None,
+        )
+
         return {
             "status_code":200,
             "detail":"Consignment deleted",

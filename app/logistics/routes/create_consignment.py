@@ -1,4 +1,6 @@
 from app.logistics.routes.router import router
+from app.notifications.lifecycle import notify_created
+from app.logistics.helpers import order_reference
 from app.logistics.schemas import LogisticsConsignmentSchema
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
@@ -46,6 +48,14 @@ def create_consignment(
         db.add(consignment)
         db.commit()
         db.refresh(consignment)
+
+        # AFTER the commit, and on the CREATE route only — the wizard PUTs the
+        # same draft repeatedly and only this first save is the order starting.
+        notify_created(
+            db, "logistics", consignment.id,
+            reference=order_reference(consignment),
+            party=consignment.customer_name or "unknown customer",
+        )
 
         consignment = fetch_consignment(db, consignment.id)
 

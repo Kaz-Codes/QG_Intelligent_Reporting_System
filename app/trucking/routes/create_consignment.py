@@ -1,4 +1,6 @@
 from app.trucking.routes.router import router
+from app.notifications.lifecycle import notify_created
+from app.trucking.helpers import job_reference
 from app.trucking.schemas import TruckingConsignmentSchema
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
@@ -45,6 +47,13 @@ def create_consignment(
         db.add(consignment)
         db.commit()
         db.refresh(consignment)
+
+        # AFTER the commit, and on the CREATE route only.
+        notify_created(
+            db, "trucking", consignment.id,
+            reference=job_reference(consignment),
+            party=consignment.transporter_name or "no transporter named",
+        )
 
         consignment = fetch_consignment(db, consignment.id)
 

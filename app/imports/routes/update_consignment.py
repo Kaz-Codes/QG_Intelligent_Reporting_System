@@ -7,10 +7,11 @@ from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
 from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values
 
-from app.imports.helpers import fetch_consignment
+from app.imports.helpers import fetch_consignment, consignment_reference, CLOSED_STATUS_VALUE
 from app.imports.models import ConsignmentItem, Payment
 from app.imports.serializers import serialize_consignment, serialize_many
 from app.notifications.emit import emit
+from app.notifications.lifecycle import notify_status_changed, notify_completed
 from datetime import date
 import logging
 
@@ -103,6 +104,67 @@ def _notify_major_eta_slip(db, updation_dict, consignment):
             "swallowed; the update itself is already committed",
             getattr(consignment, "id", None),
         )
+
+#---------------------------------------
+# THE LIFECYCLE STATUS EVENT
+#
+# Fires on the CHANGE, not on the save. `updation_dict` only carries a field
+# when the diff engine found it actually different, so a wizard step that
+# posts the whole draft back with the same status produces nothing here —
+# which is what keeps every draft save from becoming a notification.
+#
+# COMPLETION SUPPRESSES THE PAIRED STATUS CHANGE. Reaching "Arrived at Works"
+# IS a status change, so the naive reading emits both and tells one person the
+# same thing twice, one line apart. The completion is the more informative of
+# the two, so it is emitted INSTEAD.
+#
+# "Order Cancelled" is deliberately NOT a completion. It is terminal — the
+# list groups it under Closed — but the consignment did not finish, it stopped,
+# and calling that "completed" in somebody's feed would misreport what
+# happened. It emits an ordinary status change.
+#---------------------------------------
+
+def _notify_status_lifecycle(db, updation_dict, consignment):
+    try:
+        change = updation_dict.get("current_status")
+
+        if not change:
+            return
+
+        old_status = change.get("old_value")
+        new_status = change.get("new_value")
+
+        if not new_status or old_status == new_status:
+            return
+
+        reference = consignment_reference(consignment)
+        branch = consignment.branch.name if consignment.branch else None
+
+        if new_status == CLOSED_STATUS_VALUE:
+            notify_completed(
+                db, "imports", consignment.id,
+                reference=reference,
+                party=consignment.supplier.name if consignment.supplier else "unknown supplier",
+                status=new_status,
+                branch=branch,
+            )
+            return
+
+        notify_status_changed(
+            db, "imports", consignment.id,
+            reference=reference,
+            old_status=old_status,
+            new_status=new_status,
+            branch=branch,
+        )
+
+    except Exception:
+        logger.exception(
+            "Could not raise the lifecycle notification for consignment %s — "
+            "swallowed; the update itself is already committed",
+            getattr(consignment, "id", None),
+        )
+
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -234,6 +296,7 @@ def update_consignment(
         # holds its own session, so it could not reach this transaction even
         # if it were still open.
         _notify_major_eta_slip(db, updation_dict, consignment)
+        _notify_status_lifecycle(db, updation_dict, consignment)
 
         return {
             "status_code":200,

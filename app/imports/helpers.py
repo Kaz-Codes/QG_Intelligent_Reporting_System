@@ -900,6 +900,20 @@ def stamp_landed_cost_audit(item, user, stamp_elc, stamp_alc):
         item.alc_updated_at = now
 
 
+#---------------------------------------
+# HOW A CONSIGNMENT IS NAMED IN A MESSAGE
+#
+# The payment instrument number is what the list, the reports and the
+# notifications all show as the consignment's reference; IMP-{id} is the
+# fallback for a draft that has not been given one yet. One definition,
+# because a notification naming a consignment differently from the screen the
+# reader then opens is a notification they cannot act on.
+#---------------------------------------
+
+def consignment_reference(consignment):
+    return consignment.instrument_number or f"IMP-{consignment.id}"
+
+
 def submission_errors(consignment):
     errors = []
 

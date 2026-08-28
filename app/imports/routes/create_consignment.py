@@ -1,4 +1,6 @@
 from app.imports.routes.router import router
+from app.notifications.lifecycle import notify_created
+from app.imports.helpers import consignment_reference
 from app.imports.schemas import ConsignmentSchema
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
@@ -52,6 +54,19 @@ def create_consignment(
         db.add(consignment)
         db.commit()
         db.refresh(consignment)
+
+        # AFTER the commit. The record is durable by this point, so nothing
+        # the notification does can undo it — and emit() holds its own
+        # session, so it could not reach this transaction even if it were
+        # still open. Fires on the CREATE route only: the wizard saves the
+        # same draft repeatedly through PUT, and only this first save is the
+        # record starting.
+        notify_created(
+            db, "imports", consignment.id,
+            reference=consignment_reference(consignment),
+            party=consignment.supplier.name if consignment.supplier else "unknown supplier",
+            branch=consignment.branch.name if consignment.branch else None,
+        )
 
         return {
             "status_code":201,

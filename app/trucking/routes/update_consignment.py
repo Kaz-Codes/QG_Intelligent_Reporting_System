@@ -1,4 +1,7 @@
 from app.trucking.routes.router import router
+from app.notifications.lifecycle import notify_status_changed, notify_completed
+from app.trucking.helpers import job_reference, job_tracking_status
+from app.enums import VehicleTrackingStatus
 from app.trucking.schemas import TruckingConsignmentSchema
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
@@ -15,6 +18,59 @@ from app.trucking.serializers import serialize_consignment, serialize_many
 import logging
 
 logger = logging.getLogger(__name__)
+
+#---------------------------------------
+# THE LIFECYCLE STATUS EVENT
+#
+# TRUCKING HAS NO STORED JOB-LEVEL STATUS, so unlike imports and logistics
+# there is no status field in the diff to read. The job's status is a rollup
+# over its vehicles, and this compares that rollup either side of the update:
+# nothing is emitted unless it actually moved.
+#
+# COMPLETION IS "EVERY ACTIVE VEHICLE DELIVERED", which is the trucking
+# analogue of reaching a terminal status. Note it is NOT is_closed(): that
+# additionally requires the job to have been submitted, which is the LOCK
+# rule, not the finished-the-work rule. The trucks arriving is the thing
+# worth telling somebody about, whether or not the paperwork has been filed.
+#
+# Completion suppresses the paired status change, exactly as in the other two
+# modules — reaching Delivered is a rollup move, and emitting both would say
+# the same thing twice.
+#---------------------------------------
+
+def _notify_status_lifecycle(db, consignment, status_before):
+    try:
+        status_after = job_tracking_status(consignment)
+
+        # No vehicles either side, or no movement: nothing happened that a
+        # status notification describes.
+        if status_after is None or status_after == status_before:
+            return
+
+        reference = job_reference(consignment)
+        party = consignment.transporter_name or "no transporter named"
+
+        if status_after == VehicleTrackingStatus.DELIVERED.value:
+            notify_completed(
+                db, "trucking", consignment.id,
+                reference=reference, party=party, status=status_after,
+            )
+            return
+
+        notify_status_changed(
+            db, "trucking", consignment.id,
+            reference=reference,
+            old_status=status_before,
+            new_status=status_after,
+        )
+
+    except Exception:
+        logger.exception(
+            "Could not raise the lifecycle notification for trucking job %s — "
+            "swallowed; the update itself is already committed",
+            getattr(consignment, "id", None),
+        )
+
 
 @router.put("/{consignment_id}")
 def update_consignment(
@@ -41,6 +97,14 @@ def update_consignment(
                 status_code=404,
                 detail="Trucking job not found"
             )
+
+        # THE ROLLUP BEFORE ANY MUTATION. Trucking keeps no job-level status,
+        # so the lifecycle events compare the DERIVED one either side of this
+        # update (job_tracking_status — the least advanced vehicle, mirroring
+        # the front end's trackingRollup). It has to be read here, before the
+        # vehicle updates and before any new vehicle is appended, because both
+        # move the rollup.
+        status_before = job_tracking_status(consignment)
 
         # A closed job (every vehicle delivered) is locked for everyone until
         # an admin reopens it.
@@ -104,6 +168,9 @@ def update_consignment(
         db.refresh(consignment)
 
         consignment = fetch_consignment(db, consignment.id)
+
+        # AFTER the commit — see the note on the function.
+        _notify_status_lifecycle(db, consignment, status_before)
 
         return {
             "status_code":200,
