@@ -1,4 +1,7 @@
-import { apiFetch, BASE_URL } from './client'
+import { ApiError, apiFetch, BASE_URL } from './client'
+import { getConsignment } from './imports'
+import { getLogisticsOrder } from './logistics'
+import { getTruckingJob } from './trucking'
 
 /**
  * Notifications against the real backend — `/notifications`.
@@ -224,13 +227,18 @@ export function moduleLabel(value: string | null | undefined): string {
   return MODULE_LABELS[value] ?? value
 }
 
-/** Where clicking a notification goes, or null if it has no screen.
+/** Where clicking "Open record" goes, or null if the notification has no
+ *  record to open.
  *
- *  `stock_item` deliberately returns null: inventory notifications identify an
- *  item by code AND branch (rank is per branch — see the catalogue), and the
- *  Inventory dashboard has no per-item route to deep-link to. A row that
- *  cannot navigate still marks itself read; it just does not pretend to be a
- *  link. Keep this in step with App.tsx. */
+ *  `stock_item` deliberately returns null. CHECKED: App.tsx has no per-item
+ *  inventory route at all — Inventory is a tab inside /dashboard, and an
+ *  inventory notification identifies its subject by item code AND branch
+ *  (rank is per branch, see the catalogue), which no route takes. So those
+ *  rows mark themselves read and show no action, rather than offering a
+ *  control that goes nowhere. Keep this in step with App.tsx.
+ *
+ *  Null here is what the panel uses to decide whether to render the action at
+ *  all, so the difference is visible BEFORE the click. */
 export function entityPath(event: ApiNotificationEvent): string | null {
   if (event.entity_id == null) return null
 
@@ -243,6 +251,63 @@ export function entityPath(event: ApiNotificationEvent): string | null {
       return `/trucking-status/${event.entity_id}`
     default:
       return null
+  }
+}
+
+//-----------------------------------------------------
+// IS THE RECORD STILL THERE?
+//
+// A notification outlives the thing it is about. The event keeps its rendered
+// title and body for ever (that is the point — see models.py), but the
+// consignment it names can be gone by the time somebody clicks.
+//
+// So "Open record" CHECKS BEFORE IT NAVIGATES, and on failure the panel says
+// so in the row and stays put. The alternative — navigate and let the detail
+// page work it out — does land on a "not found" screen rather than a blank
+// error, because all three detail views handle a 404 properly. But it throws
+// the user out of the panel to tell them there is nothing to see, losing the
+// rest of the list they were working through.
+//
+// NOTE ON SOFT DELETES: a deleted record still resolves 'ok' here, and that
+// is correct. Nothing in this system is hard-deleted (every table has
+// is_deleted) and the detail routes deliberately still serve those rows, so
+// the record genuinely does still exist and is still worth opening — an
+// admin can undo the delete from it. 'missing' therefore means an id that
+// resolves to nothing at all.
+//-----------------------------------------------------
+
+export type EntityAvailability = 'ok' | 'missing' | 'forbidden' | 'error'
+
+export async function checkEntityAvailable(
+  event: ApiNotificationEvent,
+): Promise<EntityAvailability> {
+  const id = event.entity_id
+  if (id == null) return 'missing'
+
+  // The module's own getter, not a re-spelled URL — one definition of where
+  // each record lives.
+  const fetchers: Record<string, (id: number) => Promise<unknown>> = {
+    consignment: getConsignment,
+    logistics_order: getLogisticsOrder,
+    trucking_job: getTruckingJob,
+  }
+
+  const fetcher = event.entity_type ? fetchers[event.entity_type] : undefined
+  if (!fetcher) return 'missing'
+
+  try {
+    await fetcher(id)
+    return 'ok'
+  } catch (err) {
+    if (err instanceof ApiError) {
+      if (err.status === 404) return 'missing'
+      // Permissions are evaluated when the delivery row is WRITTEN, so a
+      // permission revoked afterwards leaves a readable notification pointing
+      // at a record the user may no longer open. Worth telling apart from a
+      // deleted record — they need different things from whoever they ask.
+      if (err.status === 403) return 'forbidden'
+    }
+    return 'error'
   }
 }
 

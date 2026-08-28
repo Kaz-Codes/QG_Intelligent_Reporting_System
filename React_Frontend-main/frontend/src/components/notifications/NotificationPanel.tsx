@@ -1,10 +1,12 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertCircle, BellOff, CheckCheck, Loader2, X } from 'lucide-react'
+import { AlertCircle, Ban, BellOff, CheckCheck, ExternalLink, Loader2, X } from 'lucide-react'
 
 import {
   type ApiNotification,
+  type EntityAvailability,
   type NotificationSeverity,
+  checkEntityAvailable,
   dayGroupLabel,
   entityPath,
   moduleLabel,
@@ -52,6 +54,29 @@ const SEVERITY: Record<
     bar: 'bg-info',
     chip: 'bg-info-bg text-info',
   },
+}
+
+/**
+ * Why a record could not be opened, in the row. Short: it sits in a narrow
+ * panel, and the useful part is WHICH failure it is — a record that no longer
+ * exists needs a different conversation from one the reader is no longer
+ * allowed to see.
+ *
+ * `retryable` decides whether the action survives the failure. A deleted
+ * record and a revoked permission will not fix themselves by clicking again,
+ * so the action is replaced. A network blip will, so there the message
+ * appears BESIDE the action rather than instead of it — otherwise the row
+ * would say "try again" with nothing left to try.
+ */
+interface OpenFailure {
+  message: string
+  retryable: boolean
+}
+
+const OPEN_FAILURE: Record<Exclude<EntityAvailability, 'ok'>, OpenFailure> = {
+  missing: { message: 'This record no longer exists', retryable: false },
+  forbidden: { message: 'You no longer have access to this record', retryable: false },
+  error: { message: 'Could not open this record — try again', retryable: true },
 }
 
 //-----------------------------------------------------
@@ -111,22 +136,60 @@ function buildSections(rows: ApiNotification[]): Section[] {
 // ONE ROW
 //-----------------------------------------------------
 
+/**
+ * CLICKING THE ROW AND OPENING THE RECORD ARE TWO DIFFERENT ACTIONS.
+ *
+ * A notification with no entity — every inventory one, since there is no
+ * per-item route to open (see entityPath) — has exactly one thing a click can
+ * mean, and that is "I have seen this". Marking it read is the whole
+ * interaction.
+ *
+ * A notification that names a record has two, and they must not be collapsed
+ * into one: dismissing something from the list is not the same intent as
+ * leaving the panel to go and look at a consignment, and a user reading
+ * through fifteen alerts should be able to clear them without being navigated
+ * away by the first one they touch.
+ *
+ * So the row marks read, and an explicit "Open record" action marks read AND
+ * navigates. The action is rendered ONLY when there is somewhere to go, which
+ * is what makes the difference visible before the click rather than after it
+ * — no dead control on the rows that cannot go anywhere.
+ *
+ * The row is a div with role="button" rather than a <button>, because a
+ * button nested inside a button is invalid HTML and the nested one stops
+ * being reachable. Keyboard support is therefore explicit, and the inner
+ * action stops propagation so it does not also fire the row's own handler.
+ */
 function NotificationRow({
   row,
   onSelect,
+  onOpen,
+  failure,
+  opening,
 }: {
   row: ApiNotification
   onSelect: (row: ApiNotification) => void
+  onOpen: (row: ApiNotification) => void
+  /** Set once "Open record" has failed — see checkEntityAvailable. */
+  failure?: OpenFailure
+  opening: boolean
 }) {
   const severity = SEVERITY[toSeverity(row.event.severity)]
   const navigable = entityPath(row.event) !== null
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(row)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect(row)
+        }
+      }}
       className={cn(
-        'relative flex w-full gap-3 border-b border-line/60 px-4 py-3 text-left transition-colors',
+        'relative flex w-full cursor-pointer gap-3 border-b border-line/60 px-4 py-3 text-left transition-colors',
         'hover:bg-canvas-alt focus:bg-canvas-alt focus:outline-none',
         !row.is_read && 'bg-brand-soft/25',
       )}
@@ -172,16 +235,42 @@ function NotificationRow({
           {row.event.body}
         </span>
 
-        {/* Stated only when it is true. An inventory notification names an item
-            at a branch and has no screen to open — see entityPath — so it must
-            not look like a dead link. */}
-        {navigable && (
-          <span className="mt-1 block text-[11px] font-semibold text-brand">
-            Open record →
+        {/* THE ACTION, rendered only when there is a record behind it. An
+            inventory notification names an item at a branch and has no screen
+            to open, so it shows nothing here rather than a dead control. */}
+        {navigable && (!failure || failure.retryable) && (
+          <button
+            type="button"
+            // Without this the row's own handler fires too, and the click
+            // would both open the record and read as a plain dismissal.
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpen(row)
+            }}
+            disabled={opening}
+            className={cn(
+              'mt-1.5 inline-flex items-center gap-1 rounded border border-brand/40 px-1.5 py-0.5',
+              'text-[11px] font-semibold text-brand transition-colors',
+              'hover:bg-brand/10 focus:bg-brand/10 focus:outline-none disabled:opacity-60',
+            )}
+          >
+            {opening ? <Loader2 size={11} className="animate-spin" /> : <ExternalLink size={11} />}
+            {opening ? 'Opening…' : 'Open record'}
+          </button>
+        )}
+
+        {/* The record has gone. Said HERE, in the row, rather than by
+            navigating to a "not found" page — the user keeps the rest of the
+            list they were working through. The action is replaced rather than
+            sitting next to this, so it cannot be clicked again to no effect. */}
+        {failure && (
+          <span className="mt-1 flex items-center gap-1 text-[11px] font-medium text-muted">
+            <Ban size={11} className="shrink-0" />
+            {failure.message}
           </span>
         )}
       </span>
-    </button>
+    </div>
   )
 }
 
@@ -235,6 +324,13 @@ export function NotificationPanel({
   const markRead = useMarkRead()
   const markAllRead = useMarkAllRead()
 
+  // Per-delivery, because two rows can point at two different records and
+  // only one of them may be gone. Keyed by delivery id (unique per row), not
+  // by event id — the same event fans out to many users, but a panel only
+  // ever holds this user's own deliveries.
+  const [failures, setFailures] = useState<Record<number, OpenFailure>>({})
+  const [openingId, setOpeningId] = useState<number | null>(null)
+
   const sections = useMemo(() => buildSections(list.rows), [list.rows])
   const hasUnread = list.rows.some((r) => !r.is_read)
 
@@ -250,17 +346,54 @@ export function NotificationPanel({
 
   if (!open) return null
 
+  /** A click on the ROW: mark read, and nothing else. Never navigates, even
+   *  when the notification does name a record — that is what the explicit
+   *  action beside it is for. Fire-and-forget: the mutation rolls its own
+   *  count back on failure. */
   const handleSelect = (row: ApiNotification) => {
-    // Marked read first and unconditionally — a click IS the user seeing it,
-    // whether or not it has anywhere to navigate. Fire-and-forget: the
-    // mutation rolls its own count back on failure, and a failed mark-read
-    // must not block the navigation the user actually asked for.
+    if (!row.is_read) markRead.mutate(row.id)
+  }
+
+  /** A click on "OPEN RECORD": mark read AND go there.
+   *
+   *  Read first, because opening a notification is the strongest possible
+   *  evidence it has been seen, and it must not depend on the record still
+   *  being there — a notification about a consignment somebody has since
+   *  removed is still read.
+   *
+   *  Then check the record actually resolves before leaving the panel. If it
+   *  does not, the row says so and the panel stays open; the user keeps the
+   *  rest of the list. */
+  const handleOpen = async (row: ApiNotification) => {
     if (!row.is_read) markRead.mutate(row.id)
 
     const path = entityPath(row.event)
-    if (path) {
-      onClose()
-      navigate(path)
+    if (!path) return
+
+    setOpeningId(row.id)
+    // Clear any previous failure first, so a retry that succeeds does not
+    // leave a stale "could not open" line behind it.
+    setFailures((current) => {
+      const next = { ...current }
+      delete next[row.id]
+      return next
+    })
+
+    try {
+      const availability = await checkEntityAvailable(row.event)
+
+      if (availability === 'ok') {
+        onClose()
+        navigate(path)
+        return
+      }
+
+      setFailures((current) => ({
+        ...current,
+        [row.id]: OPEN_FAILURE[availability],
+      }))
+    } finally {
+      setOpeningId(null)
     }
   }
 
@@ -354,7 +487,14 @@ export function NotificationPanel({
                     {group.label}
                   </h4>
                   {group.rows.map((row) => (
-                    <NotificationRow key={row.id} row={row} onSelect={handleSelect} />
+                    <NotificationRow
+                      key={row.id}
+                      row={row}
+                      onSelect={handleSelect}
+                      onOpen={(r) => void handleOpen(r)}
+                      failure={failures[row.id]}
+                      opening={openingId === row.id}
+                    />
                   ))}
                 </div>
               ))}
