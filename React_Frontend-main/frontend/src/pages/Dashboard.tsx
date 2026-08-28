@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { SegmentedControl } from '@/components/SegmentedControl'
+import { useAuth } from '@/features/auth/AuthContext'
+import { canViewDashboard } from '@/lib/roleAccess'
 import { useSetPageModule } from '@/components/ActiveModule'
 import { OverviewTab } from '@/features/overview/OverviewTab'
 import { Purchases } from '@/pages/Purchases'
@@ -33,8 +35,45 @@ const TAB_MODULE = {
 } as const
 
 export function Dashboard() {
-  const [tab, setTab] = useState<DashTab>('overview')
+  const { user } = useAuth()
+
+  //-----------------------------------------------------
+  // A TAB IS A NAV ENTRY TOO.
+  //
+  // Each of these five has its OWN backend permission
+  // (can_view_{overview,imports,logistics,purchases,inventory}_dashboard), but
+  // the bar rendered all five to everyone. Reaching this page only means the
+  // account can see AT LEAST ONE of them — pagesForUser gates /dashboard on
+  // "any dashboard permission" — so an inventory-only account was shown four
+  // tabs whose contents it could not load.
+  //
+  // Same rule as the Operations group in TopNav: show what the account can
+  // actually open. And the same caveat — THIS IS NOT ACCESS CONTROL. Each
+  // dashboard endpoint authorizes on its own and returns 403 regardless of
+  // which tabs were drawn; hiding a tab only stops someone being shown a
+  // panel that was going to fail.
+  //-----------------------------------------------------
+  const tabs = DASH_TABS.filter((t) => canViewDashboard(user, t.value))
+
+  // Opens on the first tab the account can see, not unconditionally on
+  // Overview — which is precisely the one a module-scoped account tends not
+  // to have.
+  const [tab, setTab] = useState<DashTab>(tabs[0]?.value ?? 'overview')
   useSetPageModule(TAB_MODULE[tab])
+
+  if (tabs.length === 0) {
+    // Not reachable through the nav (pagesForUser would not have offered
+    // /dashboard), but a direct URL plus a permission change can get here.
+    return (
+      <div className="flex flex-col gap-5">
+        <h1 className="font-display text-3xl font-bold text-navy">Dashboards</h1>
+        <p className="text-sm text-muted">
+          You do not have access to any dashboard. Ask an admin if you think
+          this is wrong.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -43,7 +82,7 @@ export function Dashboard() {
           <h1 className="font-display text-3xl font-bold text-navy">Dashboards</h1>
           <p className="text-sm text-muted">Executive overview, plus each module's own dashboard</p>
         </div>
-        <SegmentedControl options={DASH_TABS} value={tab} onChange={setTab} />
+        <SegmentedControl options={tabs} value={tab} onChange={setTab} />
       </div>
 
       {tab === 'overview' && <OverviewTab />}

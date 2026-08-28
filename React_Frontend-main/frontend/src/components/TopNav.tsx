@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { Moon, Sun, LogOut, ChevronDown } from 'lucide-react'
 import { useAuth } from '@/features/auth/AuthContext'
 import { useTheme } from '@/theme/ThemeContext'
-import { pagesForUser } from '@/lib/roleAccess'
+import { can, pagesForUser } from '@/lib/roleAccess'
 import { PAGE_DEFS, type PageDef } from '@/lib/pages'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { cn } from '@/lib/utils'
@@ -87,7 +87,43 @@ export function TopNav() {
   const { user, logout } = useAuth()
   const { dark, toggle } = useTheme()
   const allowed = pagesForUser(user)
-  const visiblePages = PAGE_DEFS.filter((p) => allowed.includes(p.key))
+
+  //-----------------------------------------------------
+  // THE NAV SHOWS ONLY WHAT THE ACCOUNT CAN ACTUALLY OPEN.
+  //
+  // pagesForUser already decided which top-level entries appear, but Operations
+  // is a GROUP: it was shown whenever an account could reach any one of the
+  // three modules, and then listed all three regardless. Somebody with imports
+  // access only saw Trucking Status, clicked it, and was bounced straight back
+  // by the route guard.
+  //
+  // So the children are filtered too, and a group whose children all
+  // disappear is dropped entirely rather than opening onto an empty menu.
+  //
+  //
+  // THIS IS A CONVENIENCE, NOT A SECURITY CONTROL.
+  //
+  // Hiding a menu item hides nothing: the route is still there, a bookmark
+  // still resolves, and anyone can type the URL. RequirePage still guards
+  // every route and still redirects an account that reaches one it may not
+  // see — that guard is UNCHANGED and must stay, because it is what actually
+  // stops direct URL access. And neither is the real boundary: the BACKEND
+  // authorizes every request on its own (app/auth/authorize_user.py), so a
+  // page reached by any means still returns 403 without the permission.
+  //
+  // Never delete a route guard on the grounds that the nav no longer offers
+  // the link.
+  //-----------------------------------------------------
+  const visiblePages = PAGE_DEFS
+    .filter((p) => allowed.includes(p.key))
+    .map((page) => {
+      if (!page.children) return page
+      return {
+        ...page,
+        children: page.children.filter((child) => can(user, 'view', child.module)),
+      }
+    })
+    .filter((page) => !page.children || page.children.length > 0)
 
   return (
     <header

@@ -3,7 +3,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import type { PageKey } from '@/theme/tokens'
-import { pagesForUser, type Access } from './roleAccess'
+import { can, pagesForUser, type Access, type ModuleKey } from './roleAccess'
 
 export interface PageDef {
   key: PageKey
@@ -13,8 +13,13 @@ export interface PageDef {
   /** Sub-links rendered under this item instead of it being a direct link
    * itself — used for Operations, which groups three independent route trees
    * (Imports Status, Logistics Status, Trucking Status) behind one sidebar
-   * entry. */
-  children?: { label: string; path: string }[]
+   * entry.
+   *
+   * `module` is which data-entry module the link leads to, so the nav can ask
+   * can(user, 'view', module) and drop entries the account cannot open. It is
+   * on the definition rather than inferred from the path because a path is a
+   * string that can be edited without anyone thinking about permissions. */
+  children?: { label: string; path: string; module: ModuleKey }[]
 }
 
 // Single source of truth for the sidebar/routes — mirrors the old
@@ -30,9 +35,9 @@ export const PAGE_DEFS: PageDef[] = [
   {
     key: 'dataEntry', label: 'Operations', path: '/imports-status', icon: ClipboardList,
     children: [
-      { label: 'Imports Status', path: '/imports-status' },
-      { label: 'Logistics Status', path: '/logistics-status' },
-      { label: 'Trucking Status', path: '/trucking-status' },
+      { label: 'Imports Status', path: '/imports-status', module: 'imports' },
+      { label: 'Logistics Status', path: '/logistics-status', module: 'logistics' },
+      { label: 'Trucking Status', path: '/trucking-status', module: 'trucking' },
     ],
   },
   { key: 'masters', label: 'Masters', path: '/masters', icon: Boxes },
@@ -50,5 +55,20 @@ export function defaultPathForUser(access: Access | null | undefined): string {
     if (assistantDef) return assistantDef.path
   }
   const first = PAGE_DEFS.find((p) => allowed.includes(p.key))
-  return first?.path ?? '/login'
+  if (!first) return '/login'
+
+  // A GROUP'S OWN `path` IS ONLY ITS FIRST CHILD, and the account may not be
+  // able to see that one. Operations points at /imports-status, so a
+  // trucking-only account was landed on the imports list — allowed through by
+  // the route guard, since it gates on the `dataEntry` group rather than the
+  // module, and then met with 403s from every request the page made.
+  //
+  // Same cause as the nav filtering in TopNav: a group is not one destination.
+  // Land on the first child the account can actually view.
+  if (first.children) {
+    const child = first.children.find((c) => can(access, 'view', c.module))
+    if (child) return child.path
+  }
+
+  return first.path
 }

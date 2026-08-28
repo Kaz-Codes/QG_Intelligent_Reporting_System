@@ -150,6 +150,39 @@ const DATA_ENTRY_PERMISSIONS: Permission[] = [
   CAN_VIEW_TRUCKING, CAN_ADD_TRUCKING, CAN_EDIT_TRUCKING,
 ]
 
+/**
+ * The five dashboard tabs, each with its OWN backend permission
+ * (can_view_{overview,imports,logistics,purchases,inventory}_dashboard).
+ *
+ * Separate from `can()` because its `module` argument is the three DATA-ENTRY
+ * modules, and these are not those — purchases, inventory and the overview
+ * have no data-entry module at all, and "imports" here means the imports
+ * DASHBOARD, a different permission from CAN_VIEW_IMPORTS. Overloading `can()`
+ * with a second, differently-shaped module vocabulary would make
+ * `can(user, 'view', 'imports')` mean two things depending on the caller.
+ *
+ * It lives here rather than in the Dashboard component for the reason that
+ * matters: permission logic has one home, and a screen asks it a question.
+ */
+export type DashboardKey = 'overview' | 'purchases' | 'inventory' | 'imports' | 'logistics'
+
+const DASHBOARD_TAB_PERMISSIONS: Record<DashboardKey, Permission> = {
+  overview: CAN_VIEW_OVERVIEW_DASHBOARD,
+  purchases: CAN_VIEW_PURCHASES_DASHBOARD,
+  inventory: CAN_VIEW_INVENTORY_DASHBOARD,
+  imports: CAN_VIEW_IMPORTS_DASHBOARD,
+  logistics: CAN_VIEW_LOGISTICS_DASHBOARD,
+}
+
+export function canViewDashboard(
+  access: Access | null | undefined,
+  key: DashboardKey,
+): boolean {
+  if (!access) return false
+  if (access.isAdmin) return true
+  return access.permissions.includes(DASHBOARD_TAB_PERMISSIONS[key])
+}
+
 const ALL_PAGES: PageKey[] = ['assistant', 'dashboard', 'reports', 'dataEntry', 'masters', 'userManagement']
 
 const has = (access: Access, ...names: Permission[]) =>
@@ -191,6 +224,7 @@ export function pagesForUser(access: Access | null | undefined): PageKey[] {
  * "any module", which is what a shared screen (or an older call site) wants.
  */
 export type Action =
+  | 'view'
   | 'enter'
   | 'editAny'
   | 'editOwnDraft'
@@ -212,6 +246,12 @@ export function can(
     modules.some((m) => access.permissions.includes(MODULE_PERMISSIONS[m][key]))
 
   switch (action) {
+    // Added for the nav: an Operations entry renders only if the account can
+    // view THAT module. MODULE_PERMISSIONS already carried the `view` name for
+    // all three, so this is the existing table answering one more question —
+    // not a second permission check living somewhere else.
+    case 'view':
+      return forEach('view')
     case 'enter':
       return forEach('add')
     // Ownership is a server-side rule, so both edit actions ask the same
