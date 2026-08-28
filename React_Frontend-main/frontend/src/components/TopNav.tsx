@@ -5,6 +5,7 @@ import { useAuth } from '@/features/auth/AuthContext'
 import { useTheme } from '@/theme/ThemeContext'
 import { pagesForUser } from '@/lib/roleAccess'
 import { PAGE_DEFS, type PageDef } from '@/lib/pages'
+import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { cn } from '@/lib/utils'
 import logo from '@/assets/qadri_logo_transparent.webp'
 
@@ -126,6 +127,12 @@ export function TopNav() {
           )
         })}
       </nav>
+
+      {/* Only for a signed-in user: the notification feed is per account, and
+          the bell has nothing to count without one. Placed beside the theme
+          toggle rather than in the user block so it stays reachable at the
+          same spot whoever is logged in. */}
+      {user && <NotificationBell />}
 
       <button
         type="button"
