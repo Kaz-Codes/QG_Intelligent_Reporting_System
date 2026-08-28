@@ -160,8 +160,26 @@ def recipients_for(db, event_type):
 # senders read their own pending rows.
 #--------------------------------
 
-def fan_out(db, event):
-    """Create the delivery rows for one event. Returns how many were written."""
+def fan_out(db, event, on_delivered=None):
+    """Create the delivery rows for one event. Returns how many were written.
+
+    `on_delivered(user_ids)` is called with the recipients AFTER the rows are
+    committed, and is how the live websocket push is triggered without this
+    function knowing anything about sockets.
+
+    IT IS A CALLBACK RATHER THAN A PUSH FROM IN HERE for two reasons. This
+    runs in a worker THREAD (sync SQLAlchemy — see worker.py), and the socket
+    sends are async and belong on the event loop; awaiting them from here is
+    not possible and scheduling onto the loop from a thread is a race waiting
+    to be written. And it keeps fan-out testable and transport-agnostic: the
+    delivery rows are the durable record, the push is a courtesy on top, and
+    a failing socket must never affect whether the rows were written.
+
+    Called AFTER the commit, never before, so a push can only ever announce a
+    notification that is genuinely in the database — a socket message for a
+    row that was then rolled back would show a notification the panel loses
+    on its next refresh.
+    """
     recipients = recipients_for(db, event.event_type)
 
     if not recipients:
@@ -187,5 +205,18 @@ def fan_out(db, event):
         ],
     )
     db.commit()
+
+    if on_delivered is not None:
+        try:
+            on_delivered([user.id for user in recipients])
+        except Exception:
+            # The rows are committed and the notification exists. A failure
+            # to announce it live is not a reason to report the fan-out as
+            # failed — the panel picks it up on its next load either way.
+            logger.exception(
+                "Live push failed for notification event %s (%s); the "
+                "delivery rows are written and unaffected",
+                event.id, event.event_type,
+            )
 
     return len(recipients)

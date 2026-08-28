@@ -1,13 +1,16 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from starlette.concurrency import run_in_threadpool
 
 from app.database import SessionLocal
-from app.notifications.models import NotificationEvent
+from app.notifications.manager import manager
+from app.notifications.models import NotificationDelivery, NotificationEvent
 from app.notifications.routing import fan_out
 from app.notifications.scanner import run_all
+from app.notifications.serializers import serialize_event
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,36 @@ BATCH_SIZE = 100
 # next fan-out waits for the scan. Neither is latency-critical.
 SCAN_EVERY_N_POLLS = 90  # 90 x 10s = 15 minutes
 
+#-----------------------------------------------------
+# RETENTION
+#
+# NOTIFICATIONS ARE NOT AN AUDIT TRAIL. app/logs/ is, and it keeps everything
+# for ever on purpose. These rows are a work queue for humans: once somebody
+# has read a notification it has done its whole job, and keeping it for years
+# only grows the two indexes the badge and the panel depend on. Deleting them
+# loses nothing recoverable — the underlying business record is untouched, and
+# the fact that somebody was told is in activity_logs.
+#
+# ONLY READ deliveries are purged, however old. An unread notification is
+# still outstanding work, and silently deleting it would mean nobody ever
+# finds out about the thing it was raised for.
+#
+# ONCE A DAY, tracked by ELAPSED TIME rather than a poll count. A poll count
+# would mean 8,640 consecutive polls, so a server that restarts nightly — or
+# any dev machine — would never once reach it and the table would grow for
+# ever with nothing looking wrong. The trade is that the first pass after any
+# restart runs the cleanup; it is two indexed queries against nothing on a
+# clean table, so that is cheap.
+#-----------------------------------------------------
+
+READ_RETENTION_DAYS = 90
+CLEANUP_INTERVAL = timedelta(days=1)
+
+# Deleted in chunks so a first run against a long-neglected table takes many
+# short transactions instead of one that locks a large range and holds a
+# pooled connection while it does.
+CLEANUP_BATCH_SIZE = 5000
+
 
 def _claim(db, limit):
     """Mark up to `limit` queued events as ours, and return them.
@@ -97,16 +130,30 @@ def _claim(db, limit):
 
 
 def run_once():
-    """One pass. Returns (events processed, delivery rows written)."""
+    """One pass. Returns (events processed, delivery rows written, pushes).
+
+    `pushes` is a list of (user_ids, message) for the caller to send once it
+    is back on the event loop — see the note on fan_out's on_delivered. The
+    message is SERIALIZED HERE, while the session is still open: building it
+    after db.close() would touch a detached instance and raise.
+    """
     db = SessionLocal()
 
     try:
         events = _claim(db, BATCH_SIZE)
         delivered = 0
+        pushes = []
 
         for event in events:
             try:
-                delivered += fan_out(db, event)
+                message = serialize_event(event)
+                delivered += fan_out(
+                    db,
+                    event,
+                    on_delivered=lambda user_ids, m=message: pushes.append(
+                        (user_ids, m)
+                    ),
+                )
             except Exception:
                 # One bad event does not stop the batch. It stays marked as
                 # processed — see _claim on why that is the safer failure.
@@ -122,7 +169,7 @@ def run_once():
                 len(events), delivered,
             )
 
-        return len(events), delivered
+        return len(events), delivered, pushes
 
     finally:
         # Always returned to the pool, however the pass ended.
@@ -140,27 +187,135 @@ def run_scan_once():
         db.close()
 
 
+def _delete_in_batches(db, id_query, model):
+    """Delete everything `id_query` selects, CLEANUP_BATCH_SIZE at a time."""
+    removed = 0
+
+    while True:
+        ids = db.execute(id_query.limit(CLEANUP_BATCH_SIZE)).scalars().all()
+
+        if not ids:
+            break
+
+        db.execute(delete(model).where(model.id.in_(ids)))
+        db.commit()
+
+        removed += len(ids)
+
+        # A short final batch means the query is exhausted, so this saves one
+        # round trip that would only come back empty.
+        if len(ids) < CLEANUP_BATCH_SIZE:
+            break
+
+    return removed
+
+
+def run_cleanup_once():
+    """Purge read deliveries past the retention window, then orphaned events.
+
+    Returns (deliveries removed, events removed).
+    """
+    db = SessionLocal()
+
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=READ_RETENTION_DAYS)
+
+        # READ deliveries only — an unread one is outstanding work whatever
+        # its age. Aged on created_at, which is what
+        # ix_notification_deliveries_created_at exists for (read_at is not
+        # the leading column of any index, and this deletes across all users).
+        deliveries = _delete_in_batches(
+            db,
+            select(NotificationDelivery.id)
+            .where(NotificationDelivery.read_at.isnot(None))
+            .where(NotificationDelivery.created_at < cutoff),
+            NotificationDelivery,
+        )
+
+        #-----------------------------------------------------
+        # THEN THE EVENTS NOTHING POINTS AT ANY MORE.
+        #
+        # Two guards, and both are load-bearing:
+        #
+        #   fanned_out_at IS NOT NULL — an event still QUEUED has no delivery
+        #   rows yet by definition. Without this, cleanup would delete the
+        #   backlog the fan-out worker has not reached.
+        #
+        #   created_at < cutoff — closes the race in the other direction. The
+        #   worker commits fanned_out_at BEFORE it inserts the deliveries (see
+        #   _claim), so for a moment an event is marked routed and has none.
+        #   Requiring it to be 90 days old as well means cleanup can never be
+        #   looking at an event any live worker is mid-way through.
+        #
+        # A correlated EXISTS, not a LEFT JOIN ... IS NULL: the join would
+        # build the full delivery set for every event just to discard it.
+        #-----------------------------------------------------
+        events = _delete_in_batches(
+            db,
+            select(NotificationEvent.id)
+            .where(NotificationEvent.fanned_out_at.isnot(None))
+            .where(NotificationEvent.created_at < cutoff)
+            .where(
+                ~exists().where(
+                    NotificationDelivery.event_id == NotificationEvent.id
+                )
+            ),
+            NotificationEvent,
+        )
+
+        if deliveries or events:
+            logger.info(
+                "Notification retention: removed %s read delivery row(s) and "
+                "%s orphaned event(s) older than %s days",
+                deliveries, events, READ_RETENTION_DAYS,
+            )
+
+        return deliveries, events
+
+    finally:
+        db.close()
+
+
 async def background_loop():
-    """Fan-out every poll, threshold scan every SCAN_EVERY_N_POLLS. App-lifetime."""
+    """Fan-out every poll, threshold scan and retention on their own cadences.
+
+    Runs for the lifetime of the app; started and cancelled by main.lifespan.
+    """
     logger.info(
         "Notification worker started (fan-out every %ss in batches of %s, "
-        "threshold scan every %s polls)",
-        POLL_SECONDS, BATCH_SIZE, SCAN_EVERY_N_POLLS,
+        "threshold scan every %s polls, retention every %s)",
+        POLL_SECONDS, BATCH_SIZE, SCAN_EVERY_N_POLLS, CLEANUP_INTERVAL,
     )
 
     polls = 0
+    last_cleanup = None
 
     while True:
         try:
             await asyncio.sleep(POLL_SECONDS)
             polls += 1
 
-            # Sync SQLAlchemy, so both of these go to a thread — running them
-            # on the loop would block every concurrent request in the process.
-            await run_in_threadpool(run_once)
+            # Sync SQLAlchemy, so every database pass goes to a thread —
+            # running one on the loop would block every concurrent request in
+            # the process.
+            _, _, pushes = await run_in_threadpool(run_once)
+
+            # THE SOCKET SENDS HAPPEN HERE, on the event loop, not in the
+            # worker thread that produced them — see fan_out's on_delivered.
+            # Each is already scoped to the users the delivery rows were
+            # written for, so nobody receives a notification they have no row
+            # for.
+            for user_ids, message in pushes:
+                await manager.broadcast(user_ids, message)
 
             if polls % SCAN_EVERY_N_POLLS == 0:
                 await run_in_threadpool(run_scan_once)
+
+            now = datetime.now(timezone.utc)
+
+            if last_cleanup is None or now - last_cleanup >= CLEANUP_INTERVAL:
+                await run_in_threadpool(run_cleanup_once)
+                last_cleanup = now
 
         except asyncio.CancelledError:
             # Shutdown. Re-raised so the task actually ends.

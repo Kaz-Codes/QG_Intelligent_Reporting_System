@@ -41,6 +41,7 @@ from app.dashboard.whole.routes import router as overview_dashboard_router
 from app.dashboard.purchases.routes import router as purchases_dashboard_router
 from app.dashboard.inventory.routes import router as inventory_dashboard_router
 from app.reports.routes import router as reports_router
+from app.notifications.routes import router as notifications_router
 from app.chatbot_proxy import router as chatbot_proxy_router
 
 # The auth package has no populated __init__, so its two route files are
@@ -211,6 +212,7 @@ app.include_router(overview_dashboard_router)
 app.include_router(purchases_dashboard_router)
 app.include_router(inventory_dashboard_router)
 app.include_router(reports_router)
+app.include_router(notifications_router)
 app.include_router(chatbot_proxy_router)
 
 
