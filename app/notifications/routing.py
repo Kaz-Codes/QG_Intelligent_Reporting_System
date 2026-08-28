@@ -1,11 +1,14 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import selectinload
 
 from app.accounts.models import User
-from app.enums import NotificationTier
+from app.enums import (
+    NotificationChannel, NotificationDeliveryStatus, NotificationTier,
+)
 from app.notifications.catalogue import get_event
+from app.notifications.models import NotificationDelivery
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +34,26 @@ logger = logging.getLogger(__name__)
 
 
 #--------------------------------
-# TIER: A VOLUME CONTROL, NOT A ROLE
+# TIER: HOW FAR DOWN AN EVENT REACHES
 #
-# ASSUMPTION, FLAGGED FOR CONFIRMATION. The catalogue pitches each event at a
-# tier, and each user carries one too, but how the two compare is a business
-# decision that has not been stated. This is the reading implemented here:
+# The event's tier is a CEILING, and the rule is cumulative:
 #
-#   a user receives events pitched at their own tier AND ABOVE it.
+#     a user receives an event when user_tier <= event_tier,
+#     ordered operational < managerial < executive.
 #
-# So operational (the default) receives everything; managerial drops the
-# operational chatter; executive receives only what is pitched at executives.
-# Volume falls as seniority rises.
+# So an event tiered executive reaches executive, managerial AND operational
+# users — everybody. One tiered operational reaches operational users only.
+# Read from the other end: the more senior the pitch, the wider the reach;
+# the more senior the USER, the less they see, because only the events pitched
+# at their level or higher get through.
 #
-# Why this reading and not the reverse: all ten v1 events are pitched at
-# managerial or executive, and none at operational. If tier meant "only this
-# exact tier receives it", every user on the default setting would receive
-# nothing at all, which would make the default useless. Reading it as a floor
-# makes the default mean "show me everything until somebody narrows me",
-# which is the only sensible thing for a new account.
+# That is also why operational is the right default for a new account: it
+# receives everything until somebody deliberately narrows it. All ten v1
+# events are pitched managerial or executive, so a default of executive would
+# leave most accounts seeing almost nothing.
 #
-# If the intended rule is the opposite — seniority widens rather than narrows
-# — this one function is the only thing that changes.
+# Written as an ordered list and one comparison, not a chain of if-branches,
+# so adding a tier is a one-line change here and nowhere else.
 #--------------------------------
 
 _TIER_ORDER = [
@@ -77,22 +79,47 @@ def tier_receives(user_tier, event_tier):
 
 
 def user_receives(user, entry):
-    """Whether one already-loaded user is an audience for one catalogue entry."""
+    """Whether one already-loaded user is an audience for one catalogue entry.
+
+    The gates are ANDed, in the order the rule is written. Nothing here is an
+    override of anything else — see the permission note.
+    """
+    # A disabled account should not accumulate unread work.
     if not user.is_active:
         return False
 
+    # admin_only outranks tier: a failed backup is not about anybody's module
+    # and goes to admins whatever tier they are set to.
     if entry.get("admin_only") and not user.is_admin:
         return False
 
     if not tier_receives(user.notification_tier, entry["tier"]):
         return False
 
+    #-----------------------------------------------------
+    # PERMISSION IS A HARD GATE. TIER NEVER OVERRIDES IT.
+    #
+    # These two are not alternatives and must never be ORed together. Tier
+    # says how much someone WANTS to see; permission says what they are
+    # ALLOWED to see, and it is the same permission the module's own routes
+    # enforce. If a high tier could satisfy this check, the notification panel
+    # would become a way to read imports data — supplier names, values, GD
+    # numbers, all rendered into the body — without holding CAN_VIEW_IMPORTS.
+    # That is a permission bypass with a friendly name.
+    #
+    # is_admin passes, because is_admin passes every authorization check in
+    # the system; that is the one intended exception and it is the same one
+    # authorize() makes.
+    #-----------------------------------------------------
     permission = entry.get("permission")
 
     if permission and not user.is_admin:
         if permission not in {p.name for p in user.permissions}:
             return False
 
+    # v1 has no per-user opt-outs. When they arrive they belong HERE, as one
+    # more ANDed gate on an already-loaded user — not as a separate pass over
+    # the recipient list, which would have to re-query.
     return True
 
 
@@ -115,3 +142,50 @@ def recipients_for(db, event_type):
     ).scalars().all()
 
     return [user for user in users if user_receives(user, entry)]
+
+
+#--------------------------------
+# FAN-OUT
+#
+# Turns one event into one delivery row per recipient. Called by the
+# background worker, NEVER from a web request — see worker.py on why.
+#
+# The insert is a single executemany, not a loop of db.add(): thirty
+# recipients is thirty round trips otherwise, all of them holding a pooled
+# connection that live requests are competing for.
+#
+# v1 delivers IN-APP ONLY. WhatsApp and email are separate channels with
+# their own consent and provider concerns (see User.whatsapp_opted_in); when
+# they land, this produces one row per channel per user and the per-channel
+# senders read their own pending rows.
+#--------------------------------
+
+def fan_out(db, event):
+    """Create the delivery rows for one event. Returns how many were written."""
+    recipients = recipients_for(db, event.event_type)
+
+    if not recipients:
+        # Not an error. An event can legitimately reach nobody — no active
+        # user holds the permission, or everyone is tiered above it. The
+        # worker marks it done regardless, so it is not retried forever.
+        logger.info(
+            "Notification event %s (%s) matched no recipients",
+            event.id, event.event_type,
+        )
+        return 0
+
+    db.execute(
+        insert(NotificationDelivery),
+        [
+            {
+                "event_id": event.id,
+                "user_id": user.id,
+                "channel": NotificationChannel.IN_APP.value,
+                "status": NotificationDeliveryStatus.PENDING.value,
+            }
+            for user in recipients
+        ],
+    )
+    db.commit()
+
+    return len(recipients)

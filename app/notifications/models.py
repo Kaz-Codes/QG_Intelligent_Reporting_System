@@ -64,6 +64,16 @@ class NotificationEvent(Base, TimestampMixin):
             unique=True,
             postgresql_where=text("dedupe_key IS NOT NULL"),
         ),
+
+        # THE FAN-OUT QUEUE. Partial on purpose: the worker only ever asks for
+        # unprocessed rows, and those are a handful at any moment, so this
+        # index stays the size of the backlog rather than the size of the
+        # table — however many million events accumulate behind it.
+        Index(
+            "ix_notification_events_fanout_queue",
+            "id",
+            postgresql_where=text("fanned_out_at IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -126,6 +136,23 @@ class NotificationEvent(Base, TimestampMixin):
     # Built per event type from whatever makes that event unique — see
     # catalogue.py. NULL means "this event type does not dedupe".
     dedupe_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # WHEN THE WORKER FINISHED ROUTING THIS EVENT. NULL means "still queued".
+    #
+    # This is the work queue, and it exists because the obvious alternative
+    # does not work. Polling for "events that have no delivery rows yet" looks
+    # equivalent and is not: an event can legitimately reach NOBODY — no
+    # active user holds the permission, or everyone is tiered above it — and
+    # such an event never gets a delivery row, so it stays a candidate for
+    # ever. Once a hundred of those accumulate they fill every batch, ordered
+    # by id, and fan-out stops making progress entirely while looking busy.
+    #
+    # Marking the EVENT as processed separates "we routed this" from "somebody
+    # received it", which are genuinely different facts.
+    fanned_out_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
 
     deliveries: Mapped[list["NotificationDelivery"]] = relationship(
         back_populates="event",

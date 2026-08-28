@@ -1,4 +1,5 @@
 import logging
+import string
 
 from sqlalchemy.exc import IntegrityError
 
@@ -12,69 +13,86 @@ logger = logging.getLogger(__name__)
 # RAISING AN EVENT
 #
 # EMITTING A NOTIFICATION MUST NEVER BREAK A BUSINESS TRANSACTION. A
-# consignment saves or fails on its own merits; whether anybody got told about
-# it is a side effect and is not allowed a vote. Three things enforce that,
-# and all three matter:
+# consignment saves or fails on its own merits; whether anyone was told about
+# it is a side effect and does not get a vote. Three properties enforce that:
 #
-#   1. IT OPENS ITS OWN SESSION. The caller's session is never touched. If
-#      this shared the caller's transaction, a failed insert here would poison
-#      that transaction and roll the consignment back — and a caller that
-#      rolled back for its own reasons would silently take the notification
-#      with it. Separate sessions is what makes the two independent.
+#   1. IT NEVER RAISES. The whole body is wrapped. Failures are logged and
+#      swallowed and the caller gets None back. No caller is expected to catch
+#      anything, and none is expected to check a return value either.
 #
-#   2. IT NEVER RAISES. Everything is wrapped; failures are logged and
-#      swallowed, and the caller gets None. A caller is not expected to check
-#      the return value, and must never be expected to handle an exception.
+#   2. IT USES ITS OWN SESSION — see the long note on that below.
 #
-#   3. IT DOES NOT FAN OUT. This writes the EVENT — the fact — and stops.
-#      Working out who receives it and writing their delivery rows is bulk
-#      work that must not happen inside a web request while holding a pooled
-#      connection. That is a separate step; routing.py resolves recipients,
-#      and the dispatcher that calls it runs outside the request path.
+#   3. IT DOES NOT FAN OUT. This writes the EVENT, the fact that something
+#      happened, and stops. Working out who receives it and writing their
+#      delivery rows is O(recipients) work that must not happen in a web
+#      request; the background worker does it. That keeps emit O(1), so a
+#      consignment save pays for one INSERT no matter how many people are
+#      eventually told.
 #
-# DEDUPE IS OPTIMISTIC, NOT CHECKED. Insert, and treat the unique violation as
-# a no-op success. Checking first and inserting second races: two concurrent
-# emits both see nothing, both insert, and one crashes — or worse, both
-# succeed on a database without the constraint.
+# DEDUPE IS OPTIMISTIC. Insert and let the unique index decide, treating the
+# violation as a no-op success. A check-then-insert races: two concurrent
+# emits both find nothing, both insert, and one blows up.
 #-----------------------------------------------------
 
 
 class _Blanks(dict):
-    """Renders an absent template variable as its own placeholder.
+    """Renders an absent template variable as its own placeholder."""
 
-    A message missing one value should still be readable and should still say
-    what is missing — losing the whole notification because a payload key was
-    forgotten trades a small defect for a total one.
-    """
+    def __init__(self, values, missing):
+        super().__init__(values or {})
+        self._missing = missing
 
     def __missing__(self, key):
+        self._missing.append(key)
         return "{" + key + "}"
 
 
-def render(template, payload):
+def render(template, payload, event_type=""):
+    """Fill a catalogue template from the payload.
+
+    A MISSING VARIABLE DOES NOT LOSE THE EVENT. The placeholder is rendered
+    literally and the gap is logged: a message reading "{branch}" is ugly, but
+    it still tells somebody what happened and it names its own defect. Raising
+    here would trade one missing word for the entire notification.
+    """
+    missing = []
+
     try:
-        return template.format_map(_Blanks(payload or {}))
+        rendered = string.Formatter().vformat(template, (), _Blanks(payload, missing))
     except Exception:
-        # A malformed template is a bug to fix, not a reason to lose the
-        # event; keep the raw template so it is obvious in the panel.
-        logger.exception("Notification template failed to render: %r", template)
+        # A malformed template is a bug to fix, not a reason to drop the
+        # event. Keep the raw template so it is obvious in the panel.
+        logger.exception(
+            "Notification template could not be rendered for %r: %r",
+            event_type, template,
+        )
         return template
 
+    if missing:
+        logger.warning(
+            "Notification %r rendered with missing payload variables: %s",
+            event_type, ", ".join(sorted(set(missing))),
+        )
 
-def emit(event_type, payload=None, *, entity_type=None, entity_id=None,
+    return rendered
+
+
+def emit(db, event_type, *, payload, entity_type=None, entity_id=None,
          branch=None, dedupe_key=None):
-    """Record that a business event happened. Returns its id, or None.
+    """Record that a business event happened. Always returns None.
 
-    None means one of three things, none of which the caller should act on:
-    the event type is not in the catalogue, an identical event was already
-    recorded (dedupe), or something failed and was logged. No exception ever
-    leaves this function.
+    `db` IS THE CALLER'S SESSION AND IS DELIBERATELY NOT WRITTEN THROUGH.
+    It is accepted so call sites read like every other helper in the codebase
+    (`something(db, ...)`) and so a future version can READ context through it
+    without changing every caller. It must never become the session this
+    function writes on — see below.
     """
     try:
         entry = get_event(event_type)
 
         if entry is None:
-            # Refused rather than guessed at — see catalogue.py.
+            # Refused, not guessed at: the catalogue is the whole list of
+            # things allowed to interrupt somebody.
             logger.error(
                 "Notification not emitted: %r is not in the event catalogue",
                 event_type,
@@ -83,45 +101,62 @@ def emit(event_type, payload=None, *, entity_type=None, entity_id=None,
 
         payload = payload or {}
 
-        event = NotificationEvent(
-            event_type=event_type,
-            # Copied from the catalogue, not referenced — the event keeps the
-            # classification it was raised under.
-            severity=entry["severity"],
-            tier=entry["tier"],
-            module=entry["module"],
-            title=render(entry["title_template"], payload),
-            body=render(entry["body_template"], payload),
-            entity_type=entity_type,
-            entity_id=entity_id,
-            branch=branch,
-            payload=payload,
-            dedupe_key=dedupe_key,
-        )
-
-        db = SessionLocal()
+        #-----------------------------------------------------
+        # WHY A SEPARATE SESSION, NOT THE CALLER'S
+        #
+        # This looks like pointless duplication — the caller already handed us
+        # a perfectly good session. Using it would be a bug in both
+        # directions:
+        #
+        #   * A notification failure would mark the CALLER'S transaction as
+        #     rolled back, so a consignment that saved perfectly well would be
+        #     lost because nobody could be told about it.
+        #   * A caller that rolls back for its own reasons — a validation
+        #     failure three lines later — would silently take the notification
+        #     with it, and the event would vanish with no trace that it was
+        #     ever raised.
+        #
+        # A fresh session commits on its own and fails on its own, so neither
+        # can reach the other. Proven by test: a caller that rolls back its
+        # own work still leaves the notification standing.
+        #-----------------------------------------------------
+        own_session = SessionLocal()
 
         try:
-            db.add(event)
-            db.commit()
-            return event.id
+            own_session.add(NotificationEvent(
+                event_type=event_type,
+                # Copied from the catalogue rather than looked up on read, so
+                # the event keeps the classification it was raised under even
+                # if the catalogue is later re-tuned.
+                severity=entry["severity"],
+                tier=entry["tier"],
+                module=entry["module"],
+                title=render(entry["title_template"], payload, event_type),
+                body=render(entry["body_template"], payload, event_type),
+                entity_type=entity_type,
+                entity_id=entity_id,
+                branch=branch,
+                payload=payload,
+                dedupe_key=dedupe_key,
+            ))
+            own_session.commit()
 
         except IntegrityError:
-            # The dedupe key is already present: this same real-world event
+            # The dedupe key is already present, so this same real-world event
             # has been recorded. Nothing to do, and nothing went wrong.
-            db.rollback()
+            own_session.rollback()
             logger.debug(
                 "Notification %r deduped on key %r", event_type, dedupe_key
             )
-            return None
 
         finally:
-            db.close()
+            own_session.close()
 
     except Exception:
-        # The whole point: a side effect does not get to break the caller.
+        # The entire point: a side effect does not get to break its caller.
         logger.exception(
             "Notification %r could not be emitted — swallowed so the caller "
             "is unaffected", event_type,
         )
-        return None
+
+    return None

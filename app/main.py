@@ -1,5 +1,7 @@
 import os
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -48,6 +50,7 @@ import app.auth.login
 import app.auth.logout
 
 from app.logs.middleware import log_requests
+from app.notifications.worker import fanout_loop
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +141,35 @@ def seed_admin():
 # THE APP
 #-----------------------------------------------------
 
-app = FastAPI(title="Supply Chain ERP")
+#-----------------------------------------------------
+# BACKGROUND WORKERS
+#
+# Notification fan-out runs here rather than inside the request that raised
+# the event, so a consignment save never pays for routing to every recipient
+# and never holds a pooled connection while doing it — see
+# app/notifications/worker.py for the full reasoning.
+#
+# The task is cancelled on shutdown and awaited, so uvicorn's reload does not
+# leave an orphaned loop polling the database behind the new process.
+#-----------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    worker = asyncio.create_task(fanout_loop())
+
+    try:
+        yield
+
+    finally:
+        worker.cancel()
+
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Supply Chain ERP", lifespan=lifespan)
 
 # CORS. The token lives in a cookie, so the browser only sends it when the
 # request carries credentials, and that in turn means the allowed origins
