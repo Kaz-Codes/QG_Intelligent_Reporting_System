@@ -9,7 +9,7 @@ import { useAuth } from '@/features/auth/AuthContext'
 import { PERMISSION_GROUPS, permissionLabel, type Permission } from '@/lib/roleAccess'
 import {
   listUsers, createUser, updateUser, setUserActive,
-  credentialError, phoneError, MIN_CREDENTIAL_LENGTH, NOTIFICATION_TIERS,
+  credentialError, phoneError, NOTIFICATION_TIERS,
   type UserAccount, type NotificationTier,
 } from '@/lib/api/users'
 import { listLogs, subscribeToLogs, describeLog, type ActivityLogEntry } from '@/lib/api/logs'
@@ -550,9 +550,12 @@ export function UserManagement() {
                 <UserPlus size={15} />
                 Create account
               </p>
+              {/* No length guidance any more — the 8-character minimum was
+                  removed by request, and stating "at least 1 character" would
+                  be noise. Both fields are still required. */}
               <p className="mb-4 text-xs text-muted">
-                Only admins can create accounts. Username and password must be at least {MIN_CREDENTIAL_LENGTH} characters.
-                A normal account needs at least one permission checked.
+                Only admins can create accounts. A normal account needs at least
+                one permission checked.
               </p>
               <form onSubmit={handleCreate} className="flex flex-col gap-3">
                 <div className="flex flex-col gap-1.5">

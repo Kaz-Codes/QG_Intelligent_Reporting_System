@@ -16,8 +16,21 @@ _TIERS = {t.value for t in NotificationTier}
 
 
 class UserSchema(BaseModel):
-    username: str = Field(..., max_length=255, min_length=8)
-    password: str = Field(..., max_length=255, min_length=8)
+    # min_length=1, not 0: the 8-character minimum was removed by request, but
+    # an EMPTY username is still refused. A blank one would be unloggable-in
+    # and would collide with the next blank one on the uniqueness check.
+    username: str = Field(..., max_length=255, min_length=1)
+
+    # THE 8-CHARACTER MINIMUM WAS REMOVED BY REQUEST. Password strength is a
+    # matter of policy here, not of this schema — this is a LAN-only system
+    # whose passwords are set by an admin on the user's behalf and are visible
+    # to that admin by design (see helpers.serialize_user). A length rule in
+    # the schema was enforcing a rule nobody had asked this layer to keep.
+    #
+    # min_length=1 rather than 0 for the same reason as the username: an empty
+    # password is not a weak password, it is an account with no credential at
+    # all, and login compares the two directly (app/auth/login.py).
+    password: str = Field(..., max_length=255, min_length=1)
 
     # The account-creation checkbox: checked -> admin (passes everything), no
     # permissions needed. Unchecked -> a normal account holding exactly the

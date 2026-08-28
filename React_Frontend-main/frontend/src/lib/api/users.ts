@@ -98,7 +98,13 @@ interface Envelope<T> {
   data: T
 }
 
-export const MIN_CREDENTIAL_LENGTH = 8
+/** Mirrors app/accounts/schemas.py's `min_length=1` on both fields. The
+ *  8-character minimum was removed by request; password strength is handled
+ *  by policy rather than by the schema (the reasoning is written out on the
+ *  password field there). Kept as a named constant, and kept at 1 rather than
+ *  deleted, because empty is still refused on both sides and the message
+ *  below has to say so. */
+export const MIN_CREDENTIAL_LENGTH = 1
 
 const toAccount = (u: BackendUser): UserAccount => ({
   id: u.id,
@@ -154,13 +160,20 @@ function toBody(input: UserPayload) {
   })
 }
 
-/** Mirrors the backend's min-length rule so the form can fail fast. */
+/** Mirrors the backend's min-length rule so the form can fail fast. Now only
+ *  "not empty" on both fields — phrased that way rather than as "at least 1
+ *  character", which is a true statement nobody reads as helpful.
+ *
+ *  The username is TRIMMED to match what is actually sent: toBody() above
+ *  trims it, so a whitespace-only name reaches the backend as '' and is
+ *  refused there. The password is NOT trimmed — leading or trailing spaces
+ *  are legitimate in a password and login compares it verbatim. */
 export function credentialError(username: string, password: string): string | null {
   if (username.trim().length < MIN_CREDENTIAL_LENGTH) {
-    return `Username must be at least ${MIN_CREDENTIAL_LENGTH} characters`
+    return 'Username is required'
   }
   if (password.length < MIN_CREDENTIAL_LENGTH) {
-    return `Password must be at least ${MIN_CREDENTIAL_LENGTH} characters`
+    return 'Password is required'
   }
   return null
 }
