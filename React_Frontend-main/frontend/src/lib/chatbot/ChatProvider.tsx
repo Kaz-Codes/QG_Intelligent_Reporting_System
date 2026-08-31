@@ -51,6 +51,13 @@ type ChatValue = ReturnType<typeof useChatState> & {
   /** Back to the empty state. Creates nothing. */
   startNewChat: () => void
   removeConversation: (threadId: string) => Promise<void>
+  /** Desktop rail collapsed? Held HERE, not in the Assistant page, because
+   *  that page unmounts on navigation and the preference must outlive it —
+   *  the same reason the messages and the list live here. Not localStorage:
+   *  it is a per-session preference, and this environment has no persistence
+   *  requirement for it. */
+  sidebarCollapsed: boolean
+  toggleSidebar: () => void
 }
 
 const ChatContext = createContext<ChatValue | null>(null)
@@ -134,6 +141,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Held here rather than in the Assistant page because the page unmounts on
   // navigation and this does not - the same reason the messages live here. It
   // also means the list is already warm when the user comes back to the tab.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const toggleSidebar = useCallback(() => setSidebarCollapsed((v) => !v), [])
+
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [conversationsError, setConversationsError] = useState(false)
   const [conversationsLoading, setConversationsLoading] = useState(false)
@@ -266,11 +276,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       openConversation,
       startNewChat,
       removeConversation,
+      sidebarCollapsed,
+      toggleSidebar,
     }),
     [
       chat, clearConversation, conversations, conversationsError,
       conversationsLoading, refreshConversations, openConversation,
-      startNewChat, removeConversation,
+      startNewChat, removeConversation, sidebarCollapsed, toggleSidebar,
     ],
   )
 

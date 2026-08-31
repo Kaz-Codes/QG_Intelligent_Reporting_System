@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { AlertCircle, MessageSquare, Plus, Trash2, X } from 'lucide-react'
+import {
+  AlertCircle, ChevronLeft, ChevronRight, MessageSquare, Plus, Trash2, X,
+} from 'lucide-react'
 
 import { useChat } from '@/lib/chatbot/ChatProvider'
 import { dayGroupLabel, relativeTime } from '@/lib/api/notifications'
@@ -27,6 +29,15 @@ function conversationTime(iso: string): string {
   return relativeTime(iso)
 }
 
+/**
+ * The list itself, shared by the desktop rail and the mobile drawer.
+ *
+ * TWO REGIONS, AND THE SPLIT IS THE POINT: a `shrink-0` header that never
+ * scrolls, and a `min-h-0 flex-1 overflow-y-auto` list that scrolls inside it.
+ * Without `min-h-0` the list refuses to shrink below its content — a flex
+ * child defaults to min-height:auto — so the whole column grows instead and
+ * the scrollbar never appears where it is wanted.
+ */
 function SidebarBody({ onPick }: { onPick?: () => void }) {
   const {
     conversations,
@@ -46,7 +57,9 @@ function SidebarBody({ onPick }: { onPick?: () => void }) {
 
   return (
     <>
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
+        {/* PINNED. Outside the scrolling region below, so "New chat" is
+            reachable however far down the list the user has scrolled. */}
         <button
           type="button"
           onClick={() => {
@@ -114,6 +127,13 @@ function SidebarBody({ onPick }: { onPick?: () => void }) {
                       void openConversation(c.thread_id)
                       onPick?.()
                     }}
+                    // THE FULL STORED TITLE, which the rail is too narrow to
+                    // show: it is truncated twice over, once to 60 characters
+                    // by derive_title and again by this column's width. A
+                    // native title attribute rather than a component, because
+                    // components/ui/ has no tooltip and one row in a list does
+                    // not justify inventing one.
+                    title={c.title}
                     className="min-w-0 flex-1 px-2.5 py-2 text-left"
                   >
                     <span
@@ -183,18 +203,85 @@ function SidebarBody({ onPick }: { onPick?: () => void }) {
   )
 }
 
-/** Fixed rail on a wide screen. */
+/**
+ * The desktop rail.
+ *
+ * STICKY, NOT FIXED. The app shell is a flex column whose single scroll region
+ * is `main > div.overflow-y-auto` (AppLayout), and pinned regions elsewhere in
+ * this app — the data-table headers, the filter search boxes — are all
+ * `sticky`. position:fixed would take this out of that flow and need offsets
+ * that duplicate the shell's own measurements.
+ *
+ * `self-start` stops the flex row stretching it to the height of a long
+ * conversation, which is what would make it scroll away with the page. The
+ * height is then the visible region rather than the content: 100dvh less the
+ * 4rem nav and the shell's 2rem top and bottom padding. dvh rather than vh so
+ * a mobile browser's collapsing address bar does not leave it overhanging.
+ */
 export function ConversationSidebar() {
+  const { sidebarCollapsed, toggleSidebar } = useChat()
+
   return (
-    <aside className="hidden w-60 shrink-0 border-r border-line pr-3 lg:block">
-      <SidebarBody />
+    <aside
+      className={cn(
+        'sticky top-0 hidden h-[calc(100dvh-8rem)] shrink-0 self-start',
+        // Width is what animates. The list is hidden at the same time, so the
+        // panel does not reflow its contents into a 2.5rem column on the way.
+        'overflow-hidden transition-[width] duration-300 ease-out lg:block',
+        sidebarCollapsed ? 'w-10' : 'w-60 border-r border-line',
+      )}
+    >
+      <div className="flex h-full min-h-0 flex-col">
+        <div
+          className={cn(
+            'mb-2 flex shrink-0 items-center',
+            // Collapsed, the toggle is the only thing left, so it centres in
+            // the narrow rail instead of hugging one edge.
+            sidebarCollapsed ? 'justify-center' : 'justify-between pr-3',
+          )}
+        >
+          {!sidebarCollapsed && (
+            <p className="font-display text-sm font-bold text-ink">Your chats</p>
+          )}
+
+          {/* THE TOGGLE LIVES IN THE RAIL, AND THE RAIL NEVER FULLY LEAVES.
+              Collapsing to w-10 rather than w-0 is what keeps this reachable —
+              a control that disappears with the panel it controls cannot bring
+              it back. */}
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? 'Show conversations' : 'Hide conversations'}
+            aria-label={sidebarCollapsed ? 'Show conversations' : 'Hide conversations'}
+            aria-expanded={!sidebarCollapsed}
+            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-canvas-alt hover:text-ink"
+          >
+            {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
+
+        {/* Unmounted while collapsed rather than merely hidden: it holds a
+            confirm dialog and a scroll position, neither of which should be
+            live behind a 2.5rem strip. */}
+        {!sidebarCollapsed && (
+          <div className="min-h-0 flex-1 pr-3">
+            <SidebarBody />
+          </div>
+        )}
+      </div>
     </aside>
   )
 }
 
 /** The same list as a drawer, for narrow viewports — a 240px rail beside the
- *  chat on a phone leaves neither usable, so below `lg` it hides behind the
- *  toggle in the Assistant header. */
+ *  chat on a phone leaves neither readable, so below `lg` it hides behind the
+ *  toggle in the Assistant header.
+ *
+ *  Separate open state from the desktop rail's `sidebarCollapsed`, because the
+ *  two want opposite defaults: the rail sits open beside the chat and costs
+ *  nothing, while this covers the conversation and must start shut. One
+ *  boolean cannot default to both. They share this body and the provider's
+ *  list, which is the part worth sharing. */
 export function ConversationDrawer({
   open,
   onClose,
