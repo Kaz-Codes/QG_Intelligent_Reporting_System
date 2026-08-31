@@ -9,7 +9,7 @@ from app.database import SessionLocal
 from app.notifications.manager import manager
 from app.notifications.models import NotificationDelivery, NotificationEvent
 from app.notifications.routing import fan_out
-from app.notifications.scanner import run_all
+from app.notifications.scanner import reconcile_state, run_all
 from app.notifications.serializers import serialize_event
 
 logger = logging.getLogger(__name__)
@@ -210,6 +210,17 @@ def _delete_in_batches(db, id_query, model):
     return removed
 
 
+def run_reconcile_once():
+    """One state-reconciliation pass. Returns how many rows were reset."""
+    db = SessionLocal()
+
+    try:
+        return reconcile_state(db, READ_RETENTION_DAYS)
+
+    finally:
+        db.close()
+
+
 def run_cleanup_once():
     """Purge read deliveries past the retention window, then orphaned events.
 
@@ -287,6 +298,19 @@ async def background_loop():
         POLL_SECONDS, BATCH_SIZE, SCAN_EVERY_N_POLLS, CLEANUP_INTERVAL,
     )
 
+    # BEFORE ANYTHING ELSE, and before the first scan below: a state row that
+    # claims an event nobody can find would keep its condition silent for ever,
+    # so it is cleared now and re-raised by that scan. See reconcile_state.
+    try:
+        await run_in_threadpool(run_reconcile_once)
+    except Exception:
+        # A failed reconciliation must not stop the worker starting. The cost
+        # is that a desynchronised row stays silent until the next restart,
+        # which is no worse than before this existed.
+        logger.exception(
+            "Notification state reconciliation failed at startup; continuing"
+        )
+
     polls = 0
     last_cleanup = None
 
@@ -308,7 +332,14 @@ async def background_loop():
             for user_ids, message in pushes:
                 await manager.broadcast(user_ids, message)
 
-            if polls % SCAN_EVERY_N_POLLS == 0:
+            # THE FIRST POLL SCANS, then every SCAN_EVERY_N_POLLS after it.
+            # Without the `polls == 1`, a restart left every threshold
+            # unwatched for a full fifteen minutes — the counter starts at
+            # zero, so the modulo does not come true until poll 90. A stockout
+            # that crossed during the restart would sit unreported for the
+            # whole of that window, which is exactly when somebody is most
+            # likely to be watching.
+            if polls == 1 or polls % SCAN_EVERY_N_POLLS == 0:
                 await run_in_threadpool(run_scan_once)
 
             now = datetime.now(timezone.utc)

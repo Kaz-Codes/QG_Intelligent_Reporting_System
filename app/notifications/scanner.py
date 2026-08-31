@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, cast, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.dashboard.inventory.calculations import (
@@ -17,7 +17,7 @@ from app.loading.schemas.stores_schemas import Stock
 from app.logistics.models import LogisticsConsignment, LogisticsItem
 from app.masters.models import Item
 from app.notifications.emit import emit
-from app.notifications.models import NotificationState
+from app.notifications.models import NotificationEvent, NotificationState
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,12 @@ BELOW, ABOVE = "below", "above"
 OUT, IN_STOCK = "out", "in_stock"
 OPEN, CLEAR = "open", "clear"
 
+# The half of each pair that means "an event has been raised for this". The
+# other half means the condition recovered and nobody was told, because
+# recovery is not news. Only these can be stale in the sense reconcile_state
+# cares about — a cleared state claims nothing that needs to exist.
+ALERTING_STATES = (BELOW, OUT, OPEN)
+
 # Where the item master has no row for a stock line's code. NEVER omitted:
 # item names are not unique, so a name with no specification beside it is an
 # ambiguous instruction about which physical part to go and find.
@@ -184,7 +190,7 @@ def _commit_crossings(db, event_type, crossings, today):
                 "event_label": event_type,
             },
             variant="grouped",
-            dedupe_key=f"{event_type}:grouped:{today.isoformat()}",
+            dedupe_key=_dedupe_key(event_type, "grouped", today),
         )
         raised = 1
 
@@ -200,7 +206,7 @@ def _commit_crossings(db, event_type, crossings, today):
                 # The state key already identifies the watched thing
                 # uniquely; the date makes a re-crossing on another day a
                 # genuinely new event.
-                dedupe_key=f"{event_type}:{crossing.state_key}:{today.isoformat()}",
+                dedupe_key=_dedupe_key(event_type, crossing.state_key, today),
             )
         raised = len(alerts)
 
@@ -213,6 +219,45 @@ def _commit_crossings(db, event_type, crossings, today):
         )
 
     return raised
+
+
+#--------------------------------
+# THE DEDUPE KEY, AND READING IT BACK
+#
+# `{event_type}:{state_key}:{day}` — built here and taken apart here, so the
+# two can never drift. The parse is what lets reconcile_state ask "is there an
+# event for this state row" WITHOUT a foreign key: NotificationState carries a
+# last_event_id column, but nothing has ever written it, and it could not be
+# relied on anyway — retention nulls it when the event it points at is purged
+# (see models.py), which is exactly when a state row must NOT be treated as
+# orphaned.
+#
+# Splitting on the first and last colon rather than on every colon, because a
+# state key legitimately contains them: "stockout:22296-60:Qadri Brothers
+# (Pvt.) Ltd. (Unit-II)". The event type never does, and an ISO date never
+# does, so the first and last segments are unambiguous.
+#--------------------------------
+
+def _dedupe_key(event_type, state_key, day):
+    return f"{event_type}:{state_key}:{day.isoformat()}"
+
+
+def _state_key_from_dedupe(dedupe_key):
+    """The state key a dedupe key was built from, or None if it holds none.
+
+    The runaway guard's grouped key is `{event_type}:grouped:{day}`, which
+    parses to the literal "grouped" — matching no real state key, which is the
+    correct outcome: it names no single watched thing.
+    """
+    if not dedupe_key:
+        return None
+
+    parts = dedupe_key.split(":")
+
+    if len(parts) < 3:
+        return None
+
+    return ":".join(parts[1:-1])
 
 
 def _state_key_sql(prefix, *parts):
@@ -777,6 +822,96 @@ CHECKS = [
     ("logistics.detention_risk", check_detention_risk),
     ("trucking.request_aged", check_request_aged),
 ]
+
+
+#--------------------------------
+# STATE RECONCILIATION
+#
+# NotificationState is the scanner's whole memory, and it can outlive the
+# events it describes. When it does, the conditions it covers go silent for
+# ever: the state says "already alerted", the crossing test therefore matches
+# nothing, and the event that would have said so does not exist any more. From
+# the outside this looks exactly like the feature being broken — nothing in
+# the panel, nothing in the logs, no error anywhere.
+#
+# It has happened twice in ways worth naming:
+#
+#   * a restore from backup, where the two tables come back from different
+#     points in time;
+#   * test cleanup that cleared notification_events without clearing the
+#     state beside it (which is now forbidden — see CLAUDE.md, "Test scripts
+#     never touch the live database").
+#
+# So on startup every ALERTING state row is checked against the events that
+# should exist for it, and any row that claims an event nobody can find is
+# DELETED — not set to its cleared value. Deleting is the honest reset: the
+# crossing test treats an absent state as a first observation, which is
+# precisely what this is. Setting a cleared value would also need a per-check
+# map of which value is the cleared one, a second thing to keep in step for no
+# gain.
+#
+# THE WINDOW MATTERS. Retention purges events older than READ_RETENTION_DAYS,
+# so an event that legitimately aged out is not evidence of desynchronisation
+# — but its state row is also, by then, describing something nobody was told
+# about within living memory. Re-raising it once is the better failure: a
+# condition still true after the notice about it expired is worth restating.
+# The practical effect is that a permanently-true threshold re-notifies about
+# once per retention period, not once per scan.
+#
+# RUNS AT STARTUP ONLY, which is what keeps the runaway guard from looping. If
+# the guard grouped a check's crossings, no per-state dedupe key exists for
+# them and they all reconcile as orphaned — so the next scan re-raises them
+# and the guard groups them again, one summary event. Once per restart is
+# acceptable; once per scan would not be.
+#--------------------------------
+
+def reconcile_state(db, retention_days):
+    """Drop alerting state rows whose event no longer exists. Returns how many."""
+    alerting = db.execute(
+        select(NotificationState.id, NotificationState.state_key)
+        .where(NotificationState.state_value.in_(ALERTING_STATES))
+    ).all()
+
+    if not alerting:
+        return 0
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    # Every state key an event in the window still vouches for. One query for
+    # the whole table rather than one per state row — this runs at startup and
+    # must not turn into fifty round trips.
+    vouched = {
+        key
+        for key in (
+            _state_key_from_dedupe(d)
+            for d in db.execute(
+                select(NotificationEvent.dedupe_key)
+                .where(NotificationEvent.dedupe_key.isnot(None))
+                .where(NotificationEvent.created_at >= cutoff)
+            ).scalars()
+        )
+        if key
+    }
+
+    orphaned = [row_id for row_id, state_key in alerting if state_key not in vouched]
+
+    if not orphaned:
+        logger.info(
+            "Notification state reconciled: %s alerting row(s), all accounted for",
+            len(alerting),
+        )
+        return 0
+
+    db.execute(delete(NotificationState).where(NotificationState.id.in_(orphaned)))
+    db.commit()
+
+    logger.warning(
+        "Notification state reconciled: reset %s of %s alerting row(s) whose "
+        "event no longer exists — those conditions will re-raise on the next scan",
+        len(orphaned), len(alerting),
+    )
+
+    return len(orphaned)
 
 
 def run_all(db):
