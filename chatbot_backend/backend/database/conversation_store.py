@@ -38,6 +38,15 @@ _TABLE = "chatbot_conversations"
 # stored copy is trimmed.
 MAX_ROWS_PER_MESSAGE = 2000
 
+# How many conversations a user keeps. Beyond this the oldest are retired by
+# prune_old - retired, not removed: the row and its audit trail stay, the user
+# simply stops being offered it in the sidebar.
+KEEP_CONVERSATIONS = 10
+
+# Sidebar width, essentially. Long enough that two questions about the same
+# table are still tellable apart, short enough not to wrap.
+TITLE_MAX_CHARS = 60
+
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS {_TABLE} (
     thread_id   TEXT        PRIMARY KEY,
@@ -128,6 +137,42 @@ def _trim(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def derive_title(messages: List[Dict[str, Any]]) -> str:
+    """Name a conversation after the first thing the user asked in it.
+
+    DELIBERATELY NOT AN LLM CALL. A generated title would read a little better
+    and would cost a request, a latency budget and a failure mode on every new
+    conversation - for a label. This is deterministic, free, and cannot fail:
+    the worst case is a blunt title, not a missing one.
+
+    Newlines are flattened because a pasted multi-line question would otherwise
+    make one sidebar row as tall as the rest of the list. The ellipsis is
+    included IN the limit, so the result is never wider than TITLE_MAX_CHARS.
+    """
+    for m in messages or []:
+        if m.get("role") != "user":
+            continue
+
+        content = m.get("content")
+        if not content:
+            continue
+
+        # Any whitespace run - newline, tab, double space - becomes one space.
+        text_value = " ".join(str(content).split())
+        if not text_value:
+            continue
+
+        if len(text_value) <= TITLE_MAX_CHARS:
+            return text_value
+
+        return text_value[:TITLE_MAX_CHARS - 1].rstrip() + "…"
+
+    # Lazy creation means a stored conversation always has a user message, so
+    # this is for a caller asking before anything was said - a draft that has
+    # not been persisted yet.
+    return "New chat"
+
+
 def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
     """
     Upsert the conversation. Returns False on any failure - saving must never
@@ -140,11 +185,9 @@ def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
         return False
     try:
         payload = json.dumps(_trim(messages), default=str)
-        title = ""
-        for m in messages or []:
-            if m.get("role") == "user" and m.get("content"):
-                title = str(m["content"])[:120]
-                break
+        # Only used when this INSERT is the one that creates the row - the
+        # ON CONFLICT below keeps whatever title is already stored.
+        title = derive_title(messages)
         with get_engine().begin() as conn:
             conn.execute(
                 text(
@@ -153,6 +196,12 @@ def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
                     VALUES (:t, :u, CAST(:m AS JSONB), :ti, 'active')
                     ON CONFLICT (thread_id) DO UPDATE
                        SET messages   = EXCLUDED.messages,
+                           -- TITLE IS SET ONCE AND NEVER OVERWRITTEN. A chat's
+                           -- name should stay put as it grows, and when
+                           -- renaming arrives the user's own title must not be
+                           -- silently replaced by the first question again.
+                           -- COALESCE also backfills a row stored before
+                           -- titles were derived.
                            title      = COALESCE({_TABLE}.title, EXCLUDED.title),
                            updated_at = now()
                      WHERE {_TABLE}.user_id = EXCLUDED.user_id
@@ -229,6 +278,10 @@ def append_turn(
                     VALUES (:t, :u, CAST(:m AS JSONB), :ti, 'active')
                     ON CONFLICT (thread_id) DO UPDATE
                        SET messages   = {_TABLE}.messages || CAST(:m AS JSONB),
+                           -- COALESCE, not assignment: fills in a title only
+                           -- where the row has none (one stored before titles
+                           -- existed), and leaves any existing one alone.
+                           title      = COALESCE({_TABLE}.title, EXCLUDED.title),
                            updated_at = now()
                      WHERE {_TABLE}.user_id = EXCLUDED.user_id
                     """
@@ -237,7 +290,11 @@ def append_turn(
                     "t": thread_id,
                     "u": user_id,
                     "m": json.dumps(turn, default=str),
-                    "ti": (question or "")[:120],
+                    # Same derivation save() uses, so a conversation is
+                    # named identically whichever path created it. Read only
+                    # on INSERT - the ON CONFLICT above deliberately does not
+                    # touch title.
+                    "ti": derive_title([{"role": "user", "content": question}]),
                 },
             )
         return True
@@ -274,25 +331,184 @@ def latest(user_id: int) -> Optional[Dict[str, Any]]:
         return None
 
 
+def list_conversations(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """That user's active conversations, newest first - what the sidebar draws.
+
+    NO MESSAGES PAYLOAD, deliberately. A sidebar needs a name and a date; the
+    messages column holds every table the assistant has ever returned, capped
+    at MAX_ROWS_PER_MESSAGE *per message*, so selecting it for fifty rows could
+    pull tens of megabytes to render a list of titles. The count comes from the
+    database instead - get_conversation fetches the body when one is opened.
+
+    Served entirely by the (user_id, status, updated_at DESC) index: the WHERE
+    matches its first two columns and the ORDER BY its third, so this is an
+    index range scan however large the table becomes.
+
+    Returns [] on failure rather than raising, like everything else here. A
+    chatbot with no history is usable; a chatbot that will not load is not.
+    """
+    if user_id is None or not ensure_table():
+        return []
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT thread_id,
+                           title,
+                           updated_at,
+                           created_at,
+                           -- Guarded rather than a bare jsonb_array_length:
+                           -- that raises on a non-array, and one malformed row
+                           -- would take the WHOLE sidebar down with it. The
+                           -- column is NOT NULL DEFAULT '[]' and only ever
+                           -- written from a list, so this should never fire -
+                           -- but degrading one row to 0 beats degrading the
+                           -- list to nothing.
+                           CASE WHEN jsonb_typeof(messages) = 'array'
+                                THEN jsonb_array_length(messages)
+                                ELSE 0
+                           END AS message_count
+                    FROM {_TABLE}
+                    WHERE user_id = :u AND status = 'active'
+                    ORDER BY updated_at DESC
+                    LIMIT :n
+                    """
+                ),
+                {"u": user_id, "n": limit},
+            ).mappings().all()
+
+        return [
+            {
+                "thread_id": r["thread_id"],
+                # A row stored before titles were derived has none; name it
+                # here rather than letting the sidebar render a blank line.
+                "title": r["title"] or "Untitled chat",
+                "updated_at": r["updated_at"],
+                "created_at": r["created_at"],
+                "message_count": r["message_count"],
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def get_conversation(thread_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    """One conversation in full - what opening a sidebar entry loads.
+
+    SCOPED BY user_id IN THE WHERE CLAUSE, not checked after the fetch. A
+    thread_id is a guessable opaque string and this returns the entire contents
+    of a conversation, so ownership is part of the question asked of the
+    database rather than a comparison somebody can later refactor away. A
+    thread that does not exist and one belonging to somebody else are the same
+    None, which is also what stops this being used to probe for valid ids.
+
+    Deleted threads are not returned: the user cleared it, so it is not theirs
+    to reopen from the sidebar. The row itself survives - see the module note.
+    """
+    if not thread_id or user_id is None or not ensure_table():
+        return None
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text(
+                    f"""
+                    SELECT thread_id, title, messages, created_at, updated_at
+                    FROM {_TABLE}
+                    WHERE thread_id = :t
+                      AND user_id = :u
+                      AND status = 'active'
+                    """
+                ),
+                {"t": thread_id, "u": user_id},
+            ).mappings().first()
+
+        if not row:
+            return None
+
+        return {
+            "thread_id": row["thread_id"],
+            "title": row["title"] or "Untitled chat",
+            "messages": row["messages"] or [],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+    except Exception:
+        return None
+
+
+def prune_old(user_id: int, keep: int = KEEP_CONVERSATIONS) -> int:
+    """Retire this user's conversations beyond the most recent `keep`.
+
+    RETIRES, NEVER DELETES. status goes to 'deleted' and the row stays, the
+    same as a user clearing one by hand - the module note and the ON DELETE
+    RESTRICT on the users FK both say history outlives the user's own view of
+    it. A DELETE FROM here would quietly make that untrue for the oldest
+    conversations of every busy user.
+
+    ONE STATEMENT, not a select followed by a loop of updates. A loop reads a
+    list and then acts on it, and anything arriving in between - the user
+    asking a question in another tab, which moves a thread's updated_at - is
+    acted on with a stale idea of the order. Here the subquery evaluates
+    against the same snapshot as the update.
+
+    Returns how many were retired.
+    """
+    if user_id is None or not ensure_table():
+        return 0
+    try:
+        with get_engine().begin() as conn:
+            result = conn.execute(
+                text(
+                    f"""
+                    UPDATE {_TABLE}
+                       SET status = 'deleted', updated_at = now()
+                     WHERE user_id = :u
+                       AND status = 'active'
+                       AND thread_id NOT IN (
+                             SELECT thread_id
+                             FROM {_TABLE}
+                             WHERE user_id = :u AND status = 'active'
+                             ORDER BY updated_at DESC
+                             LIMIT :k
+                           )
+                    """
+                ),
+                {"u": user_id, "k": keep},
+            )
+        return result.rowcount or 0
+    except Exception:
+        return 0
+
+
 def soft_delete(thread_id: str, user_id: int) -> bool:
     """
-    Hide this user's conversation from them without losing it.
+    Hide ONE conversation from its owner without losing it.
 
-    The rows stay, with status='deleted', so the record of what was asked
-    survives even though the user has cleared their screen. Scoped by user_id
-    so nobody can hide somebody else's conversation.
+    The row stays, with status='deleted', so the record of what was asked
+    survives even though the user has cleared it from their sidebar. Scoped by
+    user_id so nobody can hide somebody else's conversation.
 
-    RETIRES EVERY ACTIVE THREAD OF THEIRS, not only the named one. The user is
-    shown exactly one conversation - restore serves the most recently updated
-    ACTIVE row - and there is no UI anywhere for reaching an older one. So
-    clearing only the thread on screen left earlier conversations active with
-    nothing to select them, and the next sign-in simply promoted the next one
-    up: the user pressed clear, came back, and found a chat still sitting
-    there. It looked like the delete had not worked, or worse like a deleted
-    conversation had come back.
+    THIS USED TO RETIRE EVERY ACTIVE THREAD OF THEIRS, and the reason is worth
+    keeping. The user was shown exactly one conversation - restore served the
+    most recently updated ACTIVE row - and there was no UI anywhere for
+    reaching an older one. Clearing only the thread on screen therefore left
+    earlier conversations active with nothing able to select them, and the next
+    sign-in simply promoted the next one up: the user pressed clear, came back,
+    and found a chat still sitting there. It looked like the delete had not
+    worked, or worse like a deleted conversation had come back. Sweeping them
+    all was the only way to make "clear" mean what it said.
 
-    "Clear" therefore means what it says - this person's chat history stops
-    being shown - while every row, and the audit log beside it, is kept.
+    THE SIDEBAR REMOVES THE CONDITION THAT MADE THAT NECESSARY. Every active
+    conversation is now reachable and selectable, so an untouched older thread
+    is not orphaned - it is simply the next row in a list the user can see. The
+    sweep would now be the surprising behaviour: deleting one chat would take
+    the other nine with it.
+
+    So this deletes the named thread and nothing else. What has not changed is
+    that nothing is ever destroyed - the row, and the audit log beside it, are
+    kept either way.
     """
     if not thread_id or user_id is None or not ensure_table():
         return False
@@ -304,7 +520,7 @@ def soft_delete(thread_id: str, user_id: int) -> bool:
                     UPDATE {_TABLE}
                        SET status = 'deleted', updated_at = now()
                      WHERE user_id = :u
-                       AND (thread_id = :t OR status = 'active')
+                       AND thread_id = :t
                     """
                 ),
                 {"t": thread_id, "u": user_id},
