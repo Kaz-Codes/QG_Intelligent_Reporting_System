@@ -2,10 +2,11 @@
 REM ---------------------------------------------------------------------------
 REM Pull the latest main onto a machine whose working copy has drifted.
 REM
-REM WHY THIS EXISTS. Three files used to be tracked that every machine rewrites
-REM as it runs - the query cache, the derived data profile, and the learned
-REM terms. Ordinary use therefore produced local edits to tracked files, and the
-REM commit that untracks them has to delete them, so git refuses the pull with
+REM WHY THIS EXISTS. Five files used to be tracked that every machine rewrites
+REM as it runs - the query cache, the derived data profile, the learned terms,
+REM and the ERP's two runtime logs. Ordinary use therefore produced local
+REM edits to tracked files, and the commit that untracks them has to delete
+REM them, so git refuses the pull with
 REM "your local changes would be overwritten". On a machine that had been
 REM running a while, that is a wall of conflicts for files nobody edited by hand.
 REM
@@ -37,12 +38,20 @@ if exist ".git\MERGE_HEAD" (
     git merge --abort
 )
 
-REM --- 2. the three runtime files, which are never hand-edited ---------------
-echo === Discarding local edits to runtime data ^(cache, profile, learned terms^)
+REM --- 2. the runtime files, which are never hand-edited --------------------
+REM  The two .log files joined this list when they were untracked. A machine
+REM  that has not pulled that commit yet still has them TRACKED, and its
+REM  running server is appending to them - so the pull that deletes them fails
+REM  exactly the way the three .json files used to. Anything untracked in a
+REM  later commit belongs here in the SAME commit, or this script stops being
+REM  able to do the one job it exists for.
+echo === Discarding local edits to runtime data ^(cache, profile, terms, logs^)
 for %%F in (
     "chatbot_backend/backend/metadata/query_cache.json"
     "chatbot_backend/backend/metadata/data_profile.json"
     "chatbot_backend/backend/metadata/learned_terms.json"
+    "erp_backend.out.log"
+    "erp_backend.err.log"
 ) do (
     git checkout -- %%F 2>nul
 )
