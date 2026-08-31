@@ -9,3 +9,8 @@ server.out.log
 server.err.log
 .env.bak
 .env.*
+
+# ...but the TEMPLATE is meant to be committed. `.env.*` above is what stopped
+# .env.example ever existing here: it was written, silently ignored, and the
+# root .env.example went on pointing at a file nobody could add.
+!.env.example
