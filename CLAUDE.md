@@ -1230,6 +1230,45 @@ It runs on the **ERP venv** — there is no separate one — but the package roo
 is `chatbot_backend/`, so `backend.*` imports only resolve from inside that
 directory.
 
+## Running tests
+
+```
+pip install pytest          # not in requirements.txt — a dev-only dependency
+python -m pytest tests/ -q
+```
+
+**The pytest suite is pure and needs no database.** Every function it covers
+takes objects and returns or mutates values, so the tests build plain Python
+stand-ins (`tests/conftest.py`) rather than ORM rows. It passes with the
+database unreachable, which is the property that keeps it honest about the
+CLAUDE.md rule above — there is nothing for it to write to.
+
+What it covers, chosen for consequence rather than coverage percentage:
+
+- `test_derived_totals.py` — `recompute_derived`. The money totals are
+  STORED, so an error here is written once and then read back for ever by
+  every dashboard, report and export, all agreeing because they all read the
+  same wrong number. Pins Decimal exactness, the null-vs-zero rules
+  (a missing rate leaves `pkr_total` NULL, never 0) and idempotence.
+- `test_submission_rules.py` — `submission_errors`. Gates whether work can
+  move forward, and is mirrored twice on the front end (the zod submit schema
+  and the wizard's requirements banner), so it can silently disagree with two
+  other places. Includes the "Others" item-code exemption.
+- `test_notification_transitions.py` — the crossing rule, the hysteresis
+  band, the rank filter and the stockout movement gate. A regression here is
+  not an error message, it is a flood.
+- `test_packing_costs.py` — `packing_cost_kpis`, where a missing cost must
+  not read as a zero cost.
+
+`tests/check_dashboard_consistency.py` is a different thing and is NOT part of
+the pytest run: it is an integration script that needs a live app, a real
+database and a login, and it asserts that the same metric reads the same on
+every screen. Run it by hand after changing any dashboard calculation:
+
+```
+python tests/check_dashboard_consistency.py
+```
+
 ## Test scripts never touch the live database
 
 **A test or verification script must NEVER delete from or write to an
