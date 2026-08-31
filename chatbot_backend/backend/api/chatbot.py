@@ -18,6 +18,34 @@ from pydantic import BaseModel, Field
 
 from backend.graph.memory import get_checkpointer
 from backend.api.identity import current_user_id
+
+#-------------------------------------------
+# NO ANONYMOUS CALLERS.
+#
+# Every route below that reads or writes conversation data refuses a request
+# with no identity. It used to answer them: current_user_id() returns None
+# rather than raising (the caller decides whether anonymous is acceptable),
+# and these routes simply carried on - so the graph ran, queried the business
+# database and returned consignments, suppliers, values and stock to whoever
+# asked. The ownership 403 further down did not catch it, because it fires
+# only on a CONFLICT (`owner is not None and user_id is not None`), and with
+# user_id None there is no conflict to find.
+#
+# 401 AND NOT 403. The caller is unauthenticated, not forbidden: they have not
+# said who they are, so there is nothing yet to permit or refuse. 403 would
+# also tell a browser it is signed in as somebody who lacks access, which is a
+# different remedy.
+#
+# THE ERP PROXY IN FRONT OF THIS CHECKS TOO, and gates on CAN_USE_ASSISTANT.
+# This layer exists so that reaching :8010 directly - which is possible from
+# the server itself, and from the LAN if the bind address is ever widened -
+# does not get past it. Neither layer is load-bearing alone.
+#
+# /health is the deliberate exception: it takes no identity and returns no
+# business data.
+#-------------------------------------------
+
+_ANON = "Sign in to use the assistant."
 from backend.database import chat_log, conversation_store
 from backend.graph.workflow import build_graph
 from backend.tools.postgres_tools import ping
@@ -94,6 +122,8 @@ class ChatResponse(BaseModel):
 def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     thread_id = request.thread_id or str(uuid.uuid4())
     user_id = current_user_id(http_request)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail=_ANON)
 
     # A thread belongs to whoever started it. Refusing to continue somebody
     # else's is what stops a thread id left in a shared browser handing the
@@ -307,6 +337,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     """
     thread_id = request.thread_id or str(uuid.uuid4())
     user_id = current_user_id(http_request)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail=_ANON)
 
     # A thread belongs to whoever started it. This is what stops a thread id
     # left in a shared browser continuing the previous user's conversation.
@@ -427,6 +459,9 @@ def history(thread_id: str, http_request: Request) -> Dict[str, Any]:
     previous one's conversation.
     """
     user_id = current_user_id(http_request)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail=_ANON)
+
     owner = chat_log.thread_owner(thread_id)
     if owner is not None and owner != user_id:
         # Empty, not 403: the client asks for history on every page load, and a
@@ -483,9 +518,11 @@ def save_conversation(body: ConversationBody, http_request: Request) -> Dict[str
     """Upsert the signed-in user's conversation."""
     user_id = current_user_id(http_request)
     if user_id is None:
-        # Nothing to attach it to. Not an error - an anonymous session simply
-        # has no conversation to restore later.
-        return {"saved": False, "reason": "not signed in"}
+        # Used to answer {"saved": false, "reason": "not signed in"} - a soft
+        # no that let an unauthenticated caller reach the store at all. There
+        # is nothing to attach a conversation to without an identity, and
+        # saying so as 401 is both truer and refusable at the proxy.
+        raise HTTPException(status_code=401, detail=_ANON)
 
     existing = conversation_store.owner(body.thread_id)
     if existing is not None and existing != user_id:
@@ -526,7 +563,11 @@ def list_conversations(http_request: Request) -> Dict[str, Any]:
     """
     user_id = current_user_id(http_request)
     if user_id is None:
-        return {"conversations": []}
+        # An empty list used to be returned here, on the reasoning that an
+        # anonymous session has no history. True, but it answers a question
+        # that should not have been accepted - and it made "no history" and
+        # "not signed in" look identical to the caller.
+        raise HTTPException(status_code=401, detail=_ANON)
 
     found = conversation_store.list_conversations(user_id)
 
@@ -565,7 +606,12 @@ def get_conversation(thread_id: str, http_request: Request) -> Dict[str, Any]:
     """
     user_id = current_user_id(http_request)
     if user_id is None:
-        raise HTTPException(status_code=404, detail="Conversation not found.")
+        # 401 here, 404 below. They are different facts: this caller has not
+        # signed in at all, which discloses nothing about whether the thread
+        # exists. The 404 further down is the one that must stay a 404 - it
+        # answers a SIGNED-IN caller asking for somebody else's thread, and a
+        # 403 there would confirm the thread exists.
+        raise HTTPException(status_code=401, detail=_ANON)
 
     found = conversation_store.get_conversation(thread_id, user_id)
     if not found:
@@ -590,5 +636,5 @@ def delete_conversation(thread_id: str, http_request: Request) -> Dict[str, Any]
     """
     user_id = current_user_id(http_request)
     if user_id is None:
-        return {"deleted": False, "reason": "not signed in"}
+        raise HTTPException(status_code=401, detail=_ANON)
     return {"deleted": conversation_store.soft_delete(thread_id, user_id)}
