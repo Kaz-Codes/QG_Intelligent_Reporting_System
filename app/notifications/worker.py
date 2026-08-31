@@ -88,6 +88,37 @@ CLEANUP_INTERVAL = timedelta(days=1)
 # pooled connection while it does.
 CLEANUP_BATCH_SIZE = 5000
 
+#-----------------------------------------------------
+# LIVENESS
+#
+# A DEAD WORKER IS SILENT. Everything in the loop below is wrapped, so a
+# failing pass logs and the loop continues - but if the TASK itself ever ends
+# (cancelled, or an exception escaping the handler), nothing restarts it and
+# nothing says so. Notifications simply stop arriving, and the first anybody
+# knows is somebody noticing they have not had one for a while, which is a
+# thing people notice slowly if at all.
+#
+# So the worker records when it last completed a pass, and the health endpoint
+# reports it (app/main.py). That turns "no notifications" from a guess into a
+# timestamp: a last_poll_at of two hours ago on a ten-second loop is a dead
+# worker, and it says so without anybody having to correlate anything.
+#
+# Plain module state rather than anything shared: one process, one worker, and
+# a health read that is already inside it.
+#-----------------------------------------------------
+
+_LIVENESS = {
+    "started_at": None,
+    "last_poll_at": None,
+    "last_scan_at": None,
+    "polls": 0,
+}
+
+
+def liveness() -> dict:
+    """What the health endpoint reports. Copied, so a caller cannot edit it."""
+    return dict(_LIVENESS)
+
 
 def _claim(db, limit):
     """Mark up to `limit` queued events as ours, and return them.
@@ -311,6 +342,8 @@ async def background_loop():
             "Notification state reconciliation failed at startup; continuing"
         )
 
+    _LIVENESS["started_at"] = datetime.now(timezone.utc)
+
     polls = 0
     last_cleanup = None
 
@@ -341,12 +374,20 @@ async def background_loop():
             # likely to be watching.
             if polls == 1 or polls % SCAN_EVERY_N_POLLS == 0:
                 await run_in_threadpool(run_scan_once)
+                _LIVENESS["last_scan_at"] = datetime.now(timezone.utc)
 
             now = datetime.now(timezone.utc)
 
             if last_cleanup is None or now - last_cleanup >= CLEANUP_INTERVAL:
                 await run_in_threadpool(run_cleanup_once)
                 last_cleanup = now
+
+            # Stamped at the END of a pass that got all the way through, so
+            # "last poll" means work completed rather than merely attempted -
+            # a pass that raised leaves the timestamp where it was and the
+            # staleness shows.
+            _LIVENESS["last_poll_at"] = now
+            _LIVENESS["polls"] = polls
 
         except asyncio.CancelledError:
             # Shutdown. Re-raised so the task actually ends.

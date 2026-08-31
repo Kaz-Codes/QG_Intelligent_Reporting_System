@@ -1,6 +1,6 @@
 @echo off
 REM ---------------------------------------------------------------------------
-REM Pull the latest master onto a machine whose working copy has drifted.
+REM Pull the latest main onto a machine whose working copy has drifted.
 REM
 REM WHY THIS EXISTS. Three files used to be tracked that every machine rewrites
 REM as it runs - the query cache, the derived data profile, and the learned
@@ -51,12 +51,12 @@ REM --- 3. keep anything else, rather than throwing it away -------------------
 git diff --quiet && git diff --cached --quiet
 if errorlevel 1 (
     echo === Other local changes found - stashing them ^(recover with: git stash pop^)
-    git stash push -u -m "pull-latest: before syncing with master"
+    git stash push -u -m "pull-latest: before syncing with main"
 )
 
 REM --- 4. pull ---------------------------------------------------------------
-echo === Pulling master
-git pull origin master
+echo === Pulling main
+git pull origin main
 if errorlevel 1 (
     echo.
     echo    PULL FAILED. Nothing has been lost - your work is either committed

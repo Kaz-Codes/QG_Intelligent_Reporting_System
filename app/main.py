@@ -52,7 +52,7 @@ import app.auth.login
 import app.auth.logout
 
 from app.logs.middleware import log_requests
-from app.notifications.worker import background_loop
+from app.notifications.worker import background_loop, liveness as worker_liveness
 
 logger = logging.getLogger(__name__)
 
@@ -231,9 +231,17 @@ def seed_admin():
 # leave an orphaned loop polling the database behind the new process.
 #-----------------------------------------------------
 
+# The running task, so the health endpoint can ask whether it is still alive.
+# Module-level rather than on app.state because that is where the other
+# process-wide handles in this file live, and there is exactly one of these.
+_worker_task: asyncio.Task | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _worker_task
     worker = asyncio.create_task(background_loop())
+    _worker_task = worker
 
     try:
         yield
@@ -292,11 +300,69 @@ app.include_router(notifications_router)
 app.include_router(chatbot_proxy_router)
 
 
+#-----------------------------------------------------
+# LIVENESS
+#
+# Reports the notification worker alongside the app, because the two can fail
+# independently: the API answers perfectly well with a dead worker, and
+# nothing else would ever say so - notifications just stop, quietly (see the
+# note in app/notifications/worker.py).
+#
+# `running` is the task itself; `last_poll_at` is what actually proves it is
+# working. A task can be alive and wedged, so a timestamp older than a couple
+# of poll intervals means as much as running=false.
+#
+# UNAUTHENTICATED, like the root route it extends. It returns no business data
+# - a timestamp, a count and two booleans - and a health check that needs a
+# login cannot be polled by the thing most likely to need it.
+#-----------------------------------------------------
+
+def _worker_health() -> dict:
+    state = worker_liveness()
+
+    task = _worker_task
+    running = task is not None and not task.done()
+
+    failure = None
+    if task is not None and task.done():
+        # Only safe to ask once done(); on a live task this raises.
+        try:
+            exc = task.exception()
+            failure = repr(exc) if exc else "stopped"
+        except asyncio.CancelledError:
+            failure = "cancelled"
+
+    def iso(value):
+        return value.isoformat() if value else None
+
+    return {
+        "running": running,
+        "started_at": iso(state["started_at"]),
+        "last_poll_at": iso(state["last_poll_at"]),
+        "last_scan_at": iso(state["last_scan_at"]),
+        "polls": state["polls"],
+        # Only present when the task has ended, so its absence is not a claim
+        # that nothing went wrong - `running` is.
+        "stopped_because": failure,
+    }
+
+
 @app.get("/")
 def root():
     return {
         "status_code": 200,
-        "detail": "Supply Chain ERP API is running"
+        "detail": "Supply Chain ERP API is running",
+        "notification_worker": _worker_health(),
+    }
+
+
+@app.get("/health")
+def health():
+    """The same thing under the name a monitor would look for."""
+    return {
+        "status_code": 200,
+        "detail": "Supply Chain ERP API is running",
+        "notification_worker": _worker_health(),
     }
 
 

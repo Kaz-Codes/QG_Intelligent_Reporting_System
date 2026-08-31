@@ -1,6 +1,12 @@
 .env
 /venv
 
+# Runtime logs. erp_backend.out.log and .err.log were tracked until now, which
+# put one machine's stdout in everybody's clone - including a stale
+# "D:\Work\Erp Complete" path from a different install that cost time during
+# a debugging session, because it looked like a real configured path.
+*.log
+
 # Source workbooks. These are ~169 MB of Excel exports and do not belong in
 # git: pushing them is what made the last push time out, and they change every
 # time a new period is exported. They must be copied onto a machine separately
