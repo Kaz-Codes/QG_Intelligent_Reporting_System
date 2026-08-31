@@ -1200,6 +1200,44 @@ Backend by an intern, frontend by the project owner. Neither invents a field
 name, URL name or status value alone — write it here first, then implement, and
 add it in the same change if it's missing.
 
+## Test scripts never touch the live database
+
+**A test or verification script must NEVER delete from or write to an
+operational table.** No such script may contain `DELETE FROM` or `TRUNCATE`
+against one. Use one of:
+
+- a transaction that is **always rolled back**;
+- a **separate scratch database**;
+- **assertions against existing data, with no mutation at all** — usually
+  enough, since most checks are questions about what is already there.
+
+The rule exists because it was broken. A round of notification tests each ended
+in a `finally:` block that ran `DELETE FROM notification_deliveries` and
+`DELETE FROM notification_events` to leave a clean slate. It emptied the real
+tables, and the panel went blank.
+
+The cleanup is what made it expensive rather than merely careless. Notification
+events are re-raised by the scanner only on a **crossing** (see the threshold
+scanner note above), and `notification_state` still recorded every threshold as
+already alerting — so the deleted events could not come back on their own, and
+recovery meant clearing that state as well. **Deleting rows can destroy state
+that no longer regenerates itself**, and which rows those are is rarely obvious
+from the script.
+
+**The loaders are a different category and are not covered by this.**
+`app/loading/scripts/` exists to mutate — `load_all` drops and rebuilds,
+`add_customer_master` and `add_transporter_master` merge duplicate rows,
+`retire_delete_permissions` removes retired permission rows. Those are
+deliberate, reviewed, explicitly-invoked data migrations, and their `DELETE
+FROM`s are the point of them. The rule is about scripts written to CHECK
+something, which have no business changing anything in order to do it.
+
+Read-only diagnosis is the same rule seen from the other side: prefer a
+question the database can answer over an experiment it has to be changed for.
+`recipients_for()`, `submission_errors()` and every serializer are pure reads
+and can be called freely against production data. Where a check genuinely needs
+a mutation, it needs a scratch database, not a `finally:` block.
+
 ## When to stop and ask
 
 Business rules around imports, LCs, customs, duty, stock and purchasing are
