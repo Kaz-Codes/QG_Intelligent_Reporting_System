@@ -494,37 +494,25 @@ def save_conversation(body: ConversationBody, http_request: Request) -> Dict[str
     return {"saved": conversation_store.save(body.thread_id, user_id, body.messages)}
 
 
-@router.get("/conversation")
-def restore_conversation(http_request: Request) -> Dict[str, Any]:
-    """
-    The signed-in user's most recent conversation, or an empty one.
-
-    DEPRECATED - superseded by GET /conversations (plural) plus
-    GET /conversations/{thread_id}. It assumes a user has exactly ONE
-    conversation worth restoring, which is the assumption the sidebar removes:
-    signing in now opens an empty chat and the user picks a past one, rather
-    than the server choosing for them.
-
-    Kept because the CURRENT Assistant page still calls it. Removing it in the
-    same change that added the replacement would break the live UI before the
-    new one shipped. Delete it once nothing calls it.
-
-    Only status='active' is returned, so a conversation the user deleted stays
-    deleted for them however many times they sign back in.
-    """
-    user_id = current_user_id(http_request)
-    if user_id is None:
-        return {"thread_id": None, "messages": []}
-
-    found = conversation_store.latest(user_id)
-    if not found:
-        return {"thread_id": None, "messages": []}
-    return {
-        "thread_id": found["thread_id"],
-        "messages": found["messages"],
-        "updated_at": str(found.get("updated_at") or ""),
-    }
-
+# GET /conversation - "the user's most recent conversation" - USED TO BE HERE.
+#
+# It served whichever ACTIVE thread had been updated last, and the Assistant
+# page called it on load. That single call is what made every sign-in resume
+# mid-conversation: the server picked a thread and put it on screen, because
+# there was no way for the user to pick one. Coming back to work meant landing
+# in the middle of whatever you happened to be asking last week.
+#
+# Replaced by GET /conversations (the list) and GET /conversations/{thread_id}
+# (one of them, by choice). Opening the Assistant now starts an empty chat and
+# the sidebar is how a past conversation is reached - so nothing has to guess
+# which one was meant.
+#
+# Removed only once the new UI was confirmed working, so the old path stayed
+# available as a fallback until it was genuinely unused.
+#
+# PUT /conversation and DELETE /conversation/{thread_id} above and below are a
+# different thing and both remain: saving a conversation and clearing one are
+# still per-thread operations.
 
 @router.get("/conversations")
 def list_conversations(http_request: Request) -> Dict[str, Any]:

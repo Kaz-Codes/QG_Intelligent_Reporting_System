@@ -362,34 +362,11 @@ def append_turn(
     return True
 
 
-def latest(user_id: int) -> Optional[Dict[str, Any]]:
-    """That user's most recent ACTIVE conversation, or None."""
-    if user_id is None or not ensure_table():
-        return None
-    try:
-        with get_engine().connect() as conn:
-            row = conn.execute(
-                text(
-                    f"""
-                    SELECT thread_id, messages, updated_at
-                    FROM {_TABLE}
-                    WHERE user_id = :u AND status = 'active'
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """
-                ),
-                {"u": user_id},
-            ).mappings().first()
-        if not row:
-            return None
-        return {
-            "thread_id": row["thread_id"],
-            "messages": row["messages"] or [],
-            "updated_at": row["updated_at"],
-        }
-    except Exception:
-        return None
-
+# latest(user_id) - "their most recently updated ACTIVE conversation" - USED TO
+# BE HERE. Its only caller was the restore-latest route, which is gone: picking
+# a conversation on the user's behalf is exactly the behaviour the sidebar
+# replaced. list_conversations below offers all of them instead, and
+# get_conversation opens the one that was chosen.
 
 def list_conversations(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
     """That user's active conversations, newest first - what the sidebar draws.

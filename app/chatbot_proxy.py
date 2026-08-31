@@ -108,17 +108,12 @@ async def save_conversation(request: Request):
     )
 
 
-@router.get("/conversation")
-async def restore_conversation(request: Request):
-    upstream = await _client.get(
-        "/api/conversation", headers=_forward_headers(request.headers)
-    )
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=_forward_headers(upstream.headers),
-        media_type=upstream.headers.get("content-type"),
-    )
+# GET /conversation - the restore-latest passthrough - USED TO BE HERE, and
+# went with the upstream route it forwarded to (see the note in
+# chatbot_backend/backend/api/chatbot.py). Restoring the most recent thread on
+# load is what made every sign-in resume mid-conversation; the sidebar replaced
+# it with GET /conversations and GET /conversations/{thread_id}, both proxied
+# below.
 
 
 @router.get("/conversations")

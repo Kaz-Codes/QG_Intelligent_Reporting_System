@@ -178,18 +178,11 @@ export async function fetchConversationById(
   return request(`/conversations/${encodeURIComponent(threadId)}`, { signal: opts.signal })
 }
 
-/** DEPRECATED - the "restore the latest conversation" call.
- *
- *  Nothing calls this any more. Opening the Assistant now starts an empty
- *  chat and the sidebar is how a past conversation is reached, which is the
- *  behaviour this endpoint made impossible: it chose a conversation for the
- *  user and dragged it onto the screen. Kept only until the backend route it
- *  wraps is removed with it. */
-export async function fetchConversation(
-  opts: { signal?: AbortSignal } = {},
-): Promise<{ thread_id: string | null; messages: unknown[] }> {
-  return request('/conversation', { signal: opts.signal })
-}
+/* fetchConversation() - the restore-latest call - USED TO BE HERE. It fetched
+ * "the user's most recent conversation" on load, which is what made every
+ * sign-in resume mid-conversation. Replaced by fetchConversations (the sidebar
+ * list) and fetchConversationById (opening the one the user picked); the
+ * backend route it called has been removed too. */
 
 /** Clears it from the user's view. The row stays in the database. */
 export async function deleteConversation(threadId: string): Promise<{ deleted: boolean }> {
