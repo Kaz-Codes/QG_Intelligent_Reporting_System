@@ -293,6 +293,11 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
 
     status,
     remarksLog: makeRemarksLog(orderKey),
+    // Generated server-side and never sent back (see the schema note on
+    // systemRemarks); '' is the schema's own default, and every consumer
+    // renders `systemRemarks || 'No system-generated history yet.'`, so a
+    // generated row reads exactly as it did when the field was absent.
+    systemRemarks: '',
     gateOutDate,
     // ~60% of orders that have progressed past the early stages have already
     // been handed to Trucking, so Trucking Status's from-logistics feed has

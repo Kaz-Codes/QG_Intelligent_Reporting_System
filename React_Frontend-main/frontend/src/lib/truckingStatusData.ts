@@ -516,6 +516,10 @@ export function rowToDraft(row: TruckingRow): TruckingDraft {
     dispatchNoteDate: row.dispatchNoteDate ?? '',
     etaWorks: row.etaWorks ?? '',
     remarks: row.remarks ?? '',
+    // TruckingRow carries no systemRemarks to forward - it is generated
+    // server-side and never sent back (see the schema note) - so this is the
+    // schema's own default rather than a value dropped in translation.
+    systemRemarks: '',
   }
 }
 
