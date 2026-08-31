@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -72,8 +73,83 @@ load_dotenv()
 # — see "Database migrations" in CLAUDE.md.
 #-----------------------------------------------------
 
+#-----------------------------------------------------
+# STARTUP MUST NOT DEPEND ON WINNING A RACE WITH POSTGRES
+#
+# This used to be a bare create_all(). It runs at IMPORT time, so a database
+# that was not yet accepting connections raised straight out of the module and
+# uvicorn exited — and on a server where the ERP service and PostgreSQL start
+# together at boot, which of them is ready first is a coin toss. The ERP would
+# come up after some reboots and not others, with nothing retrying it and
+# nothing but a traceback to say why.
+#
+# So: a few attempts with a short backoff, and if the database is still not
+# there, LOG IT AND CARRY ON.
+#
+# STARTING WITHOUT A DATABASE IS THE BETTER FAILURE. The alternative is a
+# process that refuses to exist, which cannot serve a health check, cannot be
+# inspected, and needs somebody to notice and restart it by hand. A process
+# that is up and failing per request stays visible, and pool_pre_ping
+# (app/database.py) means the very next request after Postgres appears gets a
+# live connection rather than a dead pooled one — so it recovers on its own,
+# without a restart.
+#
+# The two seeds below already worked this way. This only makes the first step
+# consistent with them.
+#-----------------------------------------------------
+
+CREATE_TABLES_ATTEMPTS = 5
+CREATE_TABLES_BACKOFF_SECONDS = 2
+
+
 def create_tables():
-    Base.metadata.create_all(bind=engine)
+    """Create any missing tables, retrying while the database wakes up.
+
+    Returns True if the schema was reached, False if every attempt failed —
+    the caller does not act on it, but it makes the outcome testable and
+    keeps the function honest about what happened.
+    """
+    for attempt in range(1, CREATE_TABLES_ATTEMPTS + 1):
+        try:
+            Base.metadata.create_all(bind=engine)
+
+            if attempt > 1:
+                # Worth saying out loud: this is the boot-order race resolving
+                # itself, and knowing it happened explains a slow start.
+                logger.info(
+                    "Database reachable on attempt %s; schema is ready", attempt
+                )
+
+            return True
+
+        except Exception:
+            last = attempt == CREATE_TABLES_ATTEMPTS
+
+            if not last:
+                # WARNING, not exception: a retry that is about to succeed is
+                # not an error, and a full traceback per attempt would bury
+                # the one that matters.
+                logger.warning(
+                    "Database not reachable on attempt %s of %s; retrying in "
+                    "%ss", attempt, CREATE_TABLES_ATTEMPTS,
+                    CREATE_TABLES_BACKOFF_SECONDS,
+                )
+                time.sleep(CREATE_TABLES_BACKOFF_SECONDS)
+                continue
+
+            # ERROR with the traceback, once, on the attempt that gave up.
+            logger.exception(
+                "Could not reach the database after %s attempts over %ss. "
+                "The server is STARTING ANYWAY and will fail per request until "
+                "the database is available; pool_pre_ping means it recovers "
+                "without a restart once it is. If this persists, check that "
+                "PostgreSQL is running and that DB_HOST/DB_PORT/DB_NAME/"
+                "DB_USER/DB_PASSWORD in .env are correct.",
+                CREATE_TABLES_ATTEMPTS,
+                CREATE_TABLES_ATTEMPTS * CREATE_TABLES_BACKOFF_SECONDS,
+            )
+
+    return False
 
 
 def seed_permissions():
