@@ -23,16 +23,34 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from 'react'
 import { useAuth } from '@/features/auth/AuthContext'
-import { deleteConversation, fetchConversation, saveConversation } from './api'
-import type { AssistantMessage } from './types'
+import {
+  deleteConversation,
+  fetchConversationById,
+  fetchConversations,
+  saveConversation,
+} from './api'
+import type { ConversationSummary } from './types'
 import { useChatState } from './useChat'
 
 type ChatValue = ReturnType<typeof useChatState> & {
-  /** Clear from view; the conversation is soft-deleted, never dropped. */
+  /** Clear the OPEN conversation from view; it is soft-deleted, never dropped. */
   clearConversation: () => void
+  /** The sidebar list. Empty while loading, and empty on failure - see
+   *  `conversationsError`, which is what tells the two apart. */
+  conversations: ConversationSummary[]
+  conversationsError: boolean
+  conversationsLoading: boolean
+  refreshConversations: () => Promise<void>
+  /** Load a past conversation onto the screen. False if it could not be
+   *  loaded, in which case the current screen is left untouched. */
+  openConversation: (threadId: string) => Promise<boolean>
+  /** Back to the empty state. Creates nothing. */
+  startNewChat: () => void
+  removeConversation: (threadId: string) => Promise<void>
 }
 
 const ChatContext = createContext<ChatValue | null>(null)
@@ -41,7 +59,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const chat = useChatState()
   const { user } = useAuth()
   const lastUserRef = useRef<string | null | undefined>(undefined)
-  const restoredForRef = useRef<string | null>(null)
 
   // useChatState returns a FRESH OBJECT every render, so naming `chat` as an
   // effect dependency re-runs that effect on every render - and for the restore
@@ -52,6 +69,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // the only thing that should actually re-trigger them.
   const chatRef = useRef(chat)
   chatRef.current = chat
+
+  // Declared up here because the conversation actions below close over it -
+  // switching conversation has to forget what was last saved, or the save
+  // effect sees an unchanged signature and skips the first turn of the thread
+  // just opened.
+  const lastSavedRef = useRef('')
 
   // THE CONVERSATION BELONGS TO THE PERSON WHO IS SIGNED IN.
   //
@@ -78,62 +101,120 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // Aborts anything in flight, drops the messages and clears the stored
       // thread id, so nothing of the previous session survives.
       chatRef.current.resetConversation()
-      restoredForRef.current = null
     }
   }, [user?.username])
 
-  // RESTORE the signed-in user's own conversation.
+  // OPENING THE ASSISTANT STARTS AN EMPTY CHAT. IT NO LONGER RESTORES ONE.
   //
-  // Runs once per signed-in user: on sign-in, and on a page reload while
-  // signed in. Only their own ACTIVE conversation comes back - one they
-  // deleted stays gone for them however often they return, because the server
-  // only serves status='active'.
+  // This used to fetch GET /conversation - "the user's most recent active
+  // thread" - and put it straight on screen. That was the only way to reach a
+  // conversation at all, so the server had to choose one; with a sidebar the
+  // user chooses, and being handed last week's thread on every sign-in is
+  // simply the wrong default.
+  //
+  // The reset is what makes "empty" true rather than merely looking true.
+  // useChatState seeds threadId from localStorage, so without this a reload
+  // would show an empty screen that was still POINTING AT the old thread, and
+  // the next question would silently append to a conversation the user could
+  // not see. Empty screen, live thread id, is worse than either state alone.
+  //
+  // Runs on MOUNT, not on navigation: this provider sits above the router and
+  // is not unmounted by moving between pages, so a conversation survives a trip
+  // to Dashboard and back exactly as it did before. Only a real page load - or
+  // signing in - lands on a new chat.
+  const startedFreshRef = useRef(false)
   useEffect(() => {
-    const id = user?.username ?? null
-    if (!id || restoredForRef.current === id) return
+    if (startedFreshRef.current) return
+    startedFreshRef.current = true
+    chatRef.current.resetConversation()
+  }, [])
 
-    let cancelled = false
-    fetchConversation()
-      .then((saved) => {
-        if (cancelled) return
-        const messages = (saved?.messages ?? []) as AssistantMessage[]
-        if (saved?.thread_id && messages.length) {
-          // Marked only ON SUCCESS - see below.
-          restoredForRef.current = id
-          chatRef.current.restoreConversation(saved.thread_id, messages)
-        }
-      })
-      .catch(() => {
-        // A conversation that cannot be restored is not worth an error on
-        // screen, and leaving the marker unset means the next attempt retries.
-      })
-    return () => {
-      cancelled = true
+  // THE SIDEBAR LIST.
+  //
+  // Held here rather than in the Assistant page because the page unmounts on
+  // navigation and this does not - the same reason the messages live here. It
+  // also means the list is already warm when the user comes back to the tab.
+  const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [conversationsError, setConversationsError] = useState(false)
+  const [conversationsLoading, setConversationsLoading] = useState(false)
+
+  const refreshConversations = useCallback(async () => {
+    if (!user) {
+      setConversations([])
+      return
     }
-    // WHY THE MARKER IS SET LATE, AND WHY THIS IS A FLAG NOT AN AbortController.
-    //
-    // StrictMode mounts every effect twice in development: run, clean up, run
-    // again. The original code claimed the marker BEFORE fetching and aborted
-    // the request on cleanup, so the sequence was: start fetch -> abort it ->
-    // re-run and return early because the marker was already claimed. The
-    // request that would have restored the conversation was cancelled, and the
-    // guard guaranteed nothing ever retried it. Restore could not succeed in
-    // development at all, which is why the endpoint returned the conversation
-    // to curl while the screen stayed empty.
-    //
-    // Claiming the marker only after a conversation actually comes back leaves
-    // the second StrictMode run free to fetch again, and the `cancelled` flag
-    // discards the first response instead of killing the request. One duplicate
-    // GET in development, on an idempotent read - which is the cheap half of
-    // this trade.
+    setConversationsLoading(true)
+    try {
+      const res = await fetchConversations()
+      setConversations(res.conversations ?? [])
+      setConversationsError(false)
+    } catch {
+      // HISTORY IS A CONVENIENCE; THE CHATBOT WORKING IS NOT. A failed list
+      // sets a flag the sidebar renders as a retry, and touches nothing else -
+      // the user can still ask questions and still start new conversations.
+      setConversationsError(true)
+    } finally {
+      setConversationsLoading(false)
+    }
   }, [user?.username])
+
+  // Load on sign-in, and clear on sign-out so one user's titles are never
+  // shown to the next person at this machine.
+  useEffect(() => {
+    if (!user) {
+      setConversations([])
+      setConversationsError(false)
+      return
+    }
+    void refreshConversations()
+  }, [user?.username, refreshConversations])
+
+  // Open a past conversation. Failure leaves the current screen alone rather
+  // than half-clearing it - a conversation that will not load should not cost
+  // the user the one they are in.
+  const openConversation = useCallback(async (threadId: string) => {
+    try {
+      const found = await fetchConversationById(threadId)
+      chatRef.current.restoreConversation(found.thread_id, found.messages ?? [])
+      lastSavedRef.current = ''
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  // "New chat" - a UI state, not a row. Nothing is created until a message is
+  // sent, which is why this only clears what is on screen.
+  const startNewChat = useCallback(() => {
+    chatRef.current.resetConversation()
+    lastSavedRef.current = ''
+  }, [])
+
+  // Delete ONE conversation. Since C1 the server retires only the named thread
+  // rather than sweeping every active one, so the rest of the list survives.
+  const removeConversation = useCallback(
+    async (threadId: string) => {
+      setConversations((current) => current.filter((c) => c.thread_id !== threadId))
+      if (chatRef.current.threadId === threadId) {
+        chatRef.current.resetConversation()
+        lastSavedRef.current = ''
+      }
+      try {
+        await deleteConversation(threadId)
+      } catch {
+        // Put it back: the row is still there, so showing it gone would be a
+        // lie the next refresh contradicts.
+        void refreshConversations()
+      }
+    },
+    [refreshConversations],
+  )
 
   // SAVE after every completed turn, so closing the tab loses nothing.
   //
   // Keyed on the message count and the streaming flag rather than the array
   // itself: the last message is patched token by token while an answer
   // streams, and saving on every token would be one write per word.
-  const lastSavedRef = useRef('')
   useEffect(() => {
     if (!user || !chat.threadId || !chat.messages.length) return
     if (chat.isSending) return  // still streaming - wait for the final text
@@ -144,10 +225,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (lastSavedRef.current === signature) return
     lastSavedRef.current = signature
 
-    saveConversation(chat.threadId, chat.messages).catch(() => {
-      // Best effort. A failed save must never surface as a failed answer.
-    })
-  }, [user, chat.threadId, chat.messages, chat.isSending])
+    const isFirstTurnOfThread = !conversations.some((c) => c.thread_id === chat.threadId)
+
+    saveConversation(chat.threadId, chat.messages)
+      .catch(() => {
+        // Best effort. A failed save must never surface as a failed answer.
+      })
+      .finally(() => {
+        // The list only changes when a thread is NEW - a further turn moves its
+        // updated_at, but it is already at the top of a list ordered by exactly
+        // that. Refreshing on every turn would re-fetch the whole sidebar to
+        // learn nothing, and this runs after every answer.
+        //
+        // In .finally rather than .then because the SERVER has already
+        // persisted the turn as it answered (append_turn); this PUT only
+        // refines the row. So the conversation exists and belongs in the
+        // sidebar whether or not the save call itself succeeded.
+        if (isFirstTurnOfThread) void refreshConversations()
+      })
+  }, [user, chat.threadId, chat.messages, chat.isSending, conversations, refreshConversations])
 
   // What the "clear" control calls. The server marks the conversation deleted
   // and KEEPS the row - the user stops seeing it, the record of what was asked
@@ -155,12 +251,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const clearConversation = useCallback(() => {
     const id = chatRef.current.threadId
     chatRef.current.resetConversation()
-    restoredForRef.current = user?.username ?? null
     lastSavedRef.current = ''
     if (id) deleteConversation(id).catch(() => {})
   }, [user?.username])
 
-  const value = useMemo(() => ({ ...chat, clearConversation }), [chat, clearConversation])
+  const value = useMemo(
+    () => ({
+      ...chat,
+      clearConversation,
+      conversations,
+      conversationsError,
+      conversationsLoading,
+      refreshConversations,
+      openConversation,
+      startNewChat,
+      removeConversation,
+    }),
+    [
+      chat, clearConversation, conversations, conversationsError,
+      conversationsLoading, refreshConversations, openConversation,
+      startNewChat, removeConversation,
+    ],
+  )
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }

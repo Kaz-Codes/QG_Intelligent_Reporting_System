@@ -96,3 +96,24 @@ export interface AssistantMessage {
     error?: string
   }
 }
+
+
+/** One row in the conversation sidebar. Titles and counts only - the messages
+ *  payload is deliberately not sent by GET /chatbot/conversations, because a
+ *  stored conversation carries every table the assistant ever returned. */
+export interface ConversationSummary {
+  thread_id: string
+  title: string
+  message_count: number
+  updated_at: string
+  created_at: string
+}
+
+/** One past conversation, opened from the sidebar. */
+export interface ConversationDetail {
+  thread_id: string
+  title: string
+  messages: AssistantMessage[]
+  updated_at: string
+  created_at: string
+}

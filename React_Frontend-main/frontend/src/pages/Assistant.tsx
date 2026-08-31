@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowUp, PanelLeft, Sparkles, Trash2 } from 'lucide-react'
 import { AssistantChart } from '@/components/assistant/AssistantChart'
 import { AssistantDataTable } from '@/components/assistant/AssistantDataTable'
 import { AssistantMarkdown } from '@/components/assistant/AssistantMarkdown'
 import { ClarifyOptions } from '@/components/assistant/ClarifyOptions'
 import { DevDetailsPanel } from '@/components/assistant/DevDetailsPanel'
+import {
+  ConversationDrawer,
+  ConversationSidebar,
+} from '@/components/assistant/ConversationSidebar'
 import { useChat } from '@/lib/chatbot/ChatProvider'
 import { useChatHealth } from '@/lib/chatbot/useHealth'
 import type { AssistantMessage } from '@/lib/chatbot/types'
@@ -104,7 +108,7 @@ function AssistantResult({
   )
 }
 
-export function Assistant() {
+function AssistantChat({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const { messages, isSending, status, error, send, clearConversation } = useChat()
   const { status: connection } = useChatHealth()
   const [input, setInput] = useState('')
@@ -170,7 +174,18 @@ export function Assistant() {
       // min-h-full (see AppLayout): fills the available viewport for
       // centering without a page-specific height calc, and simply grows —
       // no clipping, no forced overflow — if it ever needs more than that.
-      <div className="flex min-h-full flex-col items-center justify-center px-4">
+      <div className="relative flex min-h-full flex-col items-center justify-center px-4">
+        {/* Below lg the rail is hidden, so this is the only way to reach past
+            conversations from the landing screen. */}
+        <button
+          type="button"
+          onClick={onOpenDrawer}
+          aria-label="Your chats"
+          className="absolute left-0 top-0 rounded-lg border border-line p-2 text-muted transition-colors hover:bg-canvas-alt hover:text-ink lg:hidden"
+        >
+          <PanelLeft size={16} />
+        </button>
+
         <div className="animate-fade-in-up w-full max-w-xl text-center">
           {/* No drop shadow on the wrapper: with a transparent mark it renders
               as a rectangular glow behind empty space. */}
@@ -208,6 +223,14 @@ export function Assistant() {
       {/* Header — only shown once a conversation is underway. */}
       <div className="flex items-center justify-between pb-4">
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onOpenDrawer}
+            aria-label="Your chats"
+            className="rounded-lg border border-line p-2 text-muted transition-colors hover:bg-canvas-alt hover:text-ink lg:hidden"
+          >
+            <PanelLeft size={16} />
+          </button>
           <BotAvatar size={92} />
           <div>
             <div className="flex items-center gap-2">
@@ -288,6 +311,36 @@ export function Assistant() {
       <div className="fixed bottom-0 left-0 right-0 z-50  px-8 pb-4 pt-3">
         {inputBar}
       </div>
+    </div>
+  )
+}
+
+
+/**
+ * THE PAGE: a conversation rail beside the chat.
+ *
+ * The rail sits here rather than inside AssistantChat because it frames BOTH
+ * of that component's states - the landing screen and a conversation in
+ * progress - and neither should lose its history while the other has it.
+ *
+ * Below `lg` the rail is hidden and the same list opens as a drawer instead:
+ * a 240px column beside a chat on a phone leaves neither of them readable.
+ */
+export function Assistant() {
+  const [drawerOpen, setDrawerOpen] = useState(false)
+
+  return (
+    <div className="flex min-h-full gap-3">
+      <ConversationSidebar />
+
+      {/* min-w-0 so a wide table inside a message cannot push the rail off
+          screen - a flex child defaults to min-width:auto and refuses to
+          shrink below its content. */}
+      <div className="min-w-0 flex-1">
+        <AssistantChat onOpenDrawer={() => setDrawerOpen(true)} />
+      </div>
+
+      <ConversationDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </div>
   )
 }

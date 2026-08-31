@@ -14,7 +14,10 @@
 //   GET  /chatbot/chat/{thread_id}/history                            -> ChatHistory
 //   GET  /chatbot/health                                              -> HealthResponse
 
-import type { ChatHistory, ChatResponse, HealthResponse, StreamEvent } from './types'
+import type {
+  ChatHistory, ChatResponse, ConversationDetail, ConversationSummary,
+  HealthResponse, StreamEvent,
+} from './types'
 
 // Defaults to riding on the main API's own origin + /chatbot (the proxy).
 // VITE_CHATBOT_API_BASE_URL still works as an override — e.g. to talk to
@@ -158,6 +161,30 @@ export async function saveConversation(
   })
 }
 
+/** The sidebar list: the signed-in user's conversations, newest first. */
+export async function fetchConversations(
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ conversations: ConversationSummary[] }> {
+  return request('/conversations', { signal: opts.signal })
+}
+
+/** One past conversation in full, for opening it from the sidebar. A thread
+ *  that is not the caller's answers 404 exactly as a missing one does - the
+ *  backend will not confirm that somebody else's thread exists. */
+export async function fetchConversationById(
+  threadId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ConversationDetail> {
+  return request(`/conversations/${encodeURIComponent(threadId)}`, { signal: opts.signal })
+}
+
+/** DEPRECATED - the "restore the latest conversation" call.
+ *
+ *  Nothing calls this any more. Opening the Assistant now starts an empty
+ *  chat and the sidebar is how a past conversation is reached, which is the
+ *  behaviour this endpoint made impossible: it chose a conversation for the
+ *  user and dragged it onto the screen. Kept only until the backend route it
+ *  wraps is removed with it. */
 export async function fetchConversation(
   opts: { signal?: AbortSignal } = {},
 ): Promise<{ thread_id: string | null; messages: unknown[] }> {
