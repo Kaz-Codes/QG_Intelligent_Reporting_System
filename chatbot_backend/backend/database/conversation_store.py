@@ -173,6 +173,41 @@ def derive_title(messages: List[Dict[str, Any]]) -> str:
     return "New chat"
 
 
+def _prune_quietly(user_id: int) -> None:
+    """Enforce KEEP_CONVERSATIONS, and never let doing so cost the user a save.
+
+    WHY RETENTION RUNS HERE - at the moment a conversation is first persisted -
+    and not in the two other places it could:
+
+      NOT ON LOGIN. Signing in would then do work proportional to nothing the
+      user has asked for, on the one request whose latency they actually feel.
+      It would also run for people who never chat at all.
+
+      NOT AS A SCHEDULED JOB. A sweep has to consider EVERY user to find the
+      few over the limit, so its cost grows with the size of the table while
+      the work it finds stays tiny. This is the opposite: it runs once per new
+      conversation, which is exactly as often as the limit can be exceeded, and
+      only ever touches the one user who just exceeded it.
+
+      NOT ON EVERY TURN. A long conversation would re-run it on each message to
+      discover nothing changed - the count only moves when a row is ADDED.
+
+    Wrapped so a failure is invisible to the caller. Retention is housekeeping;
+    the conversation is the user's data. Losing the second to a fault in the
+    first would be the wrong trade, the same reasoning as the notification emit
+    path in the ERP.
+    """
+    try:
+        retired = prune_old(user_id)
+        if retired:
+            print(f"[conversations] retired {retired} old conversation(s) for user {user_id}")
+    except Exception:
+        # prune_old already swallows its own failures and returns 0; this is
+        # the belt to that braces, so a change there can never reach a caller
+        # who is only trying to save a message.
+        pass
+
+
 def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
     """
     Upsert the conversation. Returns False on any failure - saving must never
@@ -189,7 +224,7 @@ def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
         # ON CONFLICT below keeps whatever title is already stored.
         title = derive_title(messages)
         with get_engine().begin() as conn:
-            conn.execute(
+            row = conn.execute(
                 text(
                     f"""
                     INSERT INTO {_TABLE} (thread_id, user_id, messages, title, status)
@@ -205,13 +240,30 @@ def save(thread_id: str, user_id: int, messages: List[Dict[str, Any]]) -> bool:
                            title      = COALESCE({_TABLE}.title, EXCLUDED.title),
                            updated_at = now()
                      WHERE {_TABLE}.user_id = EXCLUDED.user_id
+                    -- xmax = 0 is true only for a row this statement
+                    -- INSERTED; an updated row carries the id of the
+                    -- transaction that touched it. It is how one upsert can
+                    -- say which of the two it did, without a SELECT first that
+                    -- another connection could invalidate in between.
+                    -- No row at all means the ON CONFLICT's WHERE refused it
+                    -- (somebody else's thread), which is not a creation either.
+                    RETURNING (xmax = 0) AS inserted
                     """
                 ),
                 {"t": thread_id, "u": user_id, "m": payload, "ti": title},
-            )
-        return True
+            ).first()
+            created = bool(row and row[0])
     except Exception:
         return False
+
+    # AFTER the transaction has committed, deliberately. prune_old opens its
+    # own transaction, so calling it inside the block above would nest one
+    # inside another, and a housekeeping statement has no business sharing a
+    # transaction with the user's data.
+    if created:
+        _prune_quietly(user_id)
+
+    return True
 
 
 def append_turn(
@@ -271,7 +323,7 @@ def append_turn(
 
     try:
         with get_engine().begin() as conn:
-            conn.execute(
+            row = conn.execute(
                 text(
                     f"""
                     INSERT INTO {_TABLE} (thread_id, user_id, messages, title, status)
@@ -284,6 +336,9 @@ def append_turn(
                            title      = COALESCE({_TABLE}.title, EXCLUDED.title),
                            updated_at = now()
                      WHERE {_TABLE}.user_id = EXCLUDED.user_id
+                    -- See save(): true only when this statement created the
+                    -- row, which is the one moment retention can be exceeded.
+                    RETURNING (xmax = 0) AS inserted
                     """
                 ),
                 {
@@ -296,10 +351,15 @@ def append_turn(
                     # touch title.
                     "ti": derive_title([{"role": "user", "content": question}]),
                 },
-            )
-        return True
+            ).first()
+            created = bool(row and row[0])
     except Exception:
         return False
+
+    if created:
+        _prune_quietly(user_id)
+
+    return True
 
 
 def latest(user_id: int) -> Optional[Dict[str, Any]]:

@@ -121,6 +121,32 @@ async def restore_conversation(request: Request):
     )
 
 
+@router.get("/conversations")
+async def list_conversations(request: Request):
+    upstream = await _client.get(
+        "/api/conversations", headers=_forward_headers(request.headers)
+    )
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_forward_headers(upstream.headers),
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+@router.get("/conversations/{thread_id}")
+async def get_conversation(thread_id: str, request: Request):
+    upstream = await _client.get(
+        f"/api/conversations/{thread_id}", headers=_forward_headers(request.headers)
+    )
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=_forward_headers(upstream.headers),
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
 @router.delete("/conversation/{thread_id}")
 async def delete_conversation(thread_id: str, request: Request):
     upstream = await _client.delete(

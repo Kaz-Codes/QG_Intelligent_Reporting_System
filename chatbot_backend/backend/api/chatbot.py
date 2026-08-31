@@ -499,6 +499,16 @@ def restore_conversation(http_request: Request) -> Dict[str, Any]:
     """
     The signed-in user's most recent conversation, or an empty one.
 
+    DEPRECATED - superseded by GET /conversations (plural) plus
+    GET /conversations/{thread_id}. It assumes a user has exactly ONE
+    conversation worth restoring, which is the assumption the sidebar removes:
+    signing in now opens an empty chat and the user picks a past one, rather
+    than the server choosing for them.
+
+    Kept because the CURRENT Assistant page still calls it. Removing it in the
+    same change that added the replacement would break the live UI before the
+    new one shipped. Delete it once nothing calls it.
+
     Only status='active' is returned, so a conversation the user deleted stays
     deleted for them however many times they sign back in.
     """
@@ -513,6 +523,72 @@ def restore_conversation(http_request: Request) -> Dict[str, Any]:
         "thread_id": found["thread_id"],
         "messages": found["messages"],
         "updated_at": str(found.get("updated_at") or ""),
+    }
+
+
+@router.get("/conversations")
+def list_conversations(http_request: Request) -> Dict[str, Any]:
+    """
+    The signed-in user's conversations, newest first - what the sidebar draws.
+
+    Titles and counts only; no messages. Opening one calls the route below.
+
+    An anonymous session gets an empty list rather than an error: it has no
+    history, which is a fact about it and not a fault.
+    """
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        return {"conversations": []}
+
+    found = conversation_store.list_conversations(user_id)
+
+    return {
+        "conversations": [
+            {
+                "thread_id": c["thread_id"],
+                "title": c["title"],
+                "message_count": c["message_count"],
+                # Stringified here rather than left to the JSON encoder, the
+                # same as restore_conversation above, so every timestamp this
+                # API emits has one shape.
+                "updated_at": str(c.get("updated_at") or ""),
+                "created_at": str(c.get("created_at") or ""),
+            }
+            for c in found
+        ]
+    }
+
+
+@router.get("/conversations/{thread_id}")
+def get_conversation(thread_id: str, http_request: Request) -> Dict[str, Any]:
+    """
+    One past conversation in full, for the user who owns it.
+
+    404, NOT 403, WHEN IT IS NOT THEIRS. A 403 would confirm the thread exists
+    and merely belongs to somebody else, which is exactly what somebody trying
+    ids would want to learn; thread ids are opaque strings and the only safe
+    answer is that a thread they cannot have is a thread that is not there.
+    A deleted conversation answers the same way, for the same reason.
+
+    The check is not made here at all - conversation_store.get_conversation
+    puts user_id in the WHERE clause, so "not found" and "not yours" are one
+    query returning nothing rather than a comparison this route could get
+    wrong.
+    """
+    user_id = current_user_id(http_request)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    found = conversation_store.get_conversation(thread_id, user_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    return {
+        "thread_id": found["thread_id"],
+        "title": found["title"],
+        "messages": found["messages"],
+        "updated_at": str(found.get("updated_at") or ""),
+        "created_at": str(found.get("created_at") or ""),
     }
 
 
