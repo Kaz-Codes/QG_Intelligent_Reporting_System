@@ -1200,6 +1200,36 @@ Backend by an intern, frontend by the project owner. Neither invents a field
 name, URL name or status value alone — write it here first, then implement, and
 add it in the same change if it's missing.
 
+## Verifying a change
+
+Each part of the system is proved differently, and the commands are not
+interchangeable:
+
+- **ERP backend** — `python -c "import app.main"`. Imports every model, route
+  and router, so a bad import, a broken decorator or a route that shadows
+  another shows up here.
+- **Frontend** — an esbuild bundle of `src/main.tsx`. Note esbuild strips
+  types without checking them, so it catches a broken import or a syntax
+  error but NOT a type error; `tsc -b` is what the real build runs.
+
+**THE CHATBOT IS A SEPARATE SERVICE, AND `import app.main` PROVES NOTHING
+ABOUT IT.** Nothing under `chatbot_backend/` is loaded by the ERP app — it has
+its own code and its own `.env` (the same reason its tables are excluded from
+Alembic, see "Database migrations" above). A chatbot change that breaks on
+import will sail past the ERP check looking perfectly healthy.
+
+So for anything under `chatbot_backend/`, import the changed module directly
+and exercise the functions you touched:
+
+```
+cd chatbot_backend
+../venv/Scripts/python.exe -c "from backend.database import conversation_store as cs; ..."
+```
+
+It runs on the **ERP venv** — there is no separate one — but the package root
+is `chatbot_backend/`, so `backend.*` imports only resolve from inside that
+directory.
+
 ## Test scripts never touch the live database
 
 **A test or verification script must NEVER delete from or write to an
