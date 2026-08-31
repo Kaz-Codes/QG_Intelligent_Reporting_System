@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -35,9 +36,15 @@ export function UnsavedChangesDialog({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onCancel])
 
-  if (!open) return null
+  if (!open) return null
 
-  return (
+  return createPortal(
+
+    // Portalled for the same reason as components/ui/ConfirmDialog: a
+    // `fixed` overlay with a z-index still only competes inside whatever
+    // stacking context it is rendered in, and an ancestor with position
+    // sticky/transform/filter creates one silently. document.body is the
+    // only place a modal is guaranteed to win.
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={onCancel}
@@ -69,6 +76,7 @@ export function UnsavedChangesDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

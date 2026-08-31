@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -6,6 +7,30 @@ import { Button } from '@/components/ui/button'
  * changeHistory/RevertConfirmDialog (no shared dialog primitive exists in
  * components/ui/ yet), lifted out so any "are you sure?" prompt can use a
  * real dialog instead of the browser's window.confirm.
+ *
+ *
+ * PORTALLED TO document.body, AND THAT IS LOAD-BEARING.
+ *
+ * `position: fixed` and `z-50` are NOT enough on their own. z-index is only
+ * ever compared within a stacking context, so a dialog rendered inside one
+ * competes only with that context's own children — however large its number.
+ *
+ * It broke exactly that way: the chatbot's delete prompt is rendered from
+ * inside the conversation sidebar, whose <aside> is `position: sticky`, and
+ * sticky ALWAYS creates a stacking context (no z-index needed). The dialog's
+ * z-50 was therefore sealed inside the aside, the aside is z-index:auto, and
+ * the Assistant's empty state — `relative`, also auto, but LATER in the DOM —
+ * painted over the whole subtree. The 210px Qadri logo landed on top of the
+ * dialog text and its Cancel button.
+ *
+ * Raising the number would have fixed that one case and nothing else: it was
+ * never a contest the dialog could win from in there. A portal moves the node
+ * to document.body, so it is laid out against the root stacking context and
+ * escapes every ancestor's stacking context AND every ancestor's
+ * `overflow: hidden` at the same time — the sidebar has that too.
+ *
+ * Same reasoning, and the same `createPortal(..., document.body)` idiom, as
+ * MetricInfo and the two filter popovers.
  */
 export function ConfirmDialog({
   open, title, description, confirmLabel, confirmingLabel, confirming, danger, onConfirm, onCancel,
@@ -41,9 +66,14 @@ export function ConfirmDialog({
 
   if (!open) return null
 
-  return (
+  return createPortal(
+    // The backdrop is also the click-away target: anywhere outside the panel
+    // cancels, which the panel's own stopPropagation below keeps from firing
+    // on a click inside it. It dims the page as well, so a busy background —
+    // the Assistant's watermark, a dense table — is suppressed rather than
+    // competing with the dialog's text.
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={onCancel}
     >
       <div
@@ -76,6 +106,7 @@ export function ConfirmDialog({
           <Button variant="ghost" onClick={onCancel} disabled={confirming}>Cancel</Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
