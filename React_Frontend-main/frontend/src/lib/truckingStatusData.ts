@@ -27,6 +27,7 @@ import * as importsData from '@/lib/importsStatusData'
 // graph one-directional.
 import type { TruckingReadthrough } from '@/features/logisticsStatus/schema'
 import { itemNetWeight } from '@/features/logisticsStatus/schema'
+import { uuid } from './uuid'
 
 /**
  * Mock data layer for Trucking Status, mirroring lib/logisticsStatusData.ts.
@@ -395,7 +396,7 @@ export function updateTruckingJob(systemId: string, data: TruckingDraft): void {
  * the wizard, pre-filled.
  */
 export function takeAction(sourceType: 'from-logistics' | 'from-import-fob', sourceId: string): string {
-  const newId = crypto.randomUUID()
+  const newId = uuid()
   let snapshot: TakenSourceSnapshot[] = []
   let itemDetails = 'No items'
   let referenceNo = sourceId

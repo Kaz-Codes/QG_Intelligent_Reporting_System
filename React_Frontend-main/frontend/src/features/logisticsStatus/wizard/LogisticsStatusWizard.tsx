@@ -29,6 +29,7 @@ import { Step2Packing } from './steps/Step2Packing'
 import { Step3Shipping } from './steps/Step3Shipping'
 import { Step4Expenditures } from './steps/Step4Expenditures'
 import { Step5Status } from './steps/Step5Status'
+import { uuid } from '@/lib/uuid'
 
 const STEP_COMPONENTS = [
   Step1Order, Step2Packing, Step3Shipping, Step4Expenditures, Step5Status,
@@ -39,7 +40,7 @@ const STEP_COMPONENTS = [
 const CLOSED_STATUS = 'Delivered'
 
 function freshDraftDefaults(jobKind: JobKind = 'standard'): LogisticsDraft {
-  return { ...DRAFT_DEFAULT_VALUES, jobKind, items: [emptyItem(`item-${crypto.randomUUID()}`)] }
+  return { ...DRAFT_DEFAULT_VALUES, jobKind, items: [emptyItem(`item-${uuid()}`)] }
 }
 
 /**

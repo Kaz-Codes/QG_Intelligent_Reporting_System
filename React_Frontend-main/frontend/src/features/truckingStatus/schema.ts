@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { SubmitRequirement } from '@/lib/submitRequirements'
+import { uuid } from '@/lib/uuid'
 
 /**
  * Trucking Status — the third status module, sibling to importsStatus and
@@ -107,7 +108,7 @@ export const vehicleSchema = z.object({
    * save as delete-all + insert-all, losing the vehicles' ids and their
    * change history.
    */
-  id: z.string().default(() => `vehicle-${crypto.randomUUID()}`),
+  id: z.string().default(() => `vehicle-${uuid()}`),
   vehicleNumber: z.string().optional(),
   vehicleType: z.string().optional(),
   noOfPackages: z.number().int().min(0).optional(),
@@ -131,7 +132,7 @@ export function emptyVehicle(): Vehicle {
   return {
     // Unique per row so two brand-new vehicles never collide before the
     // backend gives them real ids.
-    id: `vehicle-${crypto.randomUUID()}`,
+    id: `vehicle-${uuid()}`,
     vehicleNumber: '',
     vehicleType: '',
     noOfPackages: 0,
