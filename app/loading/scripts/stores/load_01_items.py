@@ -40,14 +40,25 @@ def load_items(conn):
     store_req_df_list = [read_sheet("Sheet1", file) for file in file_names["store_requisitions"]]
     store_req_df = pd.concat(store_req_df_list, ignore_index=True)
 
+    # DE-DUPE WITHIN THIS BATCH ONLY — deliberately NOT pre-seeded from the
+    # database any more.
+    #
+    # It used to start from the codes already stored, which made this loader
+    # insert-if-new and nothing else: an item whose name or category changed in
+    # the workbook was silently ignored for ever. That was tolerable when the
+    # table was dropped and rebuilt on every load. It is not now — items is
+    # UPSERTED instead of replaced (consignment_items.item_id and hs_codes.item_id
+    # are real foreign keys onto items.id, so dropping it would SET NULL and
+    # CASCADE across app-owned rows), so this is the only path by which a
+    # corrected master reaches the database.
+    #
+    # Still de-duped in-batch, and that ordering matters: items_database is read
+    # FIRST, so a code it defines wins over the same code appearing later in
+    # purchases / stocks / store_requisitions, which carry no spec or UoM and
+    # fill those columns with "-". ON CONFLICT cannot touch the same row twice
+    # in one statement either, so a duplicate here would be a hard error.
     item_codes_history = []
     items_rows = []
-
-    with conn.cursor() as cur:
-            cur.execute(
-                "SELECT item_code from items" #--> getting already existing item codes
-            )
-            item_codes_history = [row[0] for row in cur.fetchall()]
 
     for _, row in df.iterrows():
         if clean_text(row.get("ItemCode")) not in item_codes_history:
@@ -101,6 +112,32 @@ def load_items(conn):
                 True
             ))
 
-    print("Inserting items")
-    bulk_insert(conn, "items", ITEMS_COLUMNS, items_rows)
-    print(f"Items : inserted {len(items_rows)} rows")
+    # UPSERT, NEVER REPLACE. Matched on item_code (UNIQUE), so an existing row
+    # keeps its id and everything pointing at it survives.
+    #
+    # Only the DESCRIPTIVE columns are refreshed. is_active and is_verified are
+    # deliberately excluded: those are operator decisions made in the Masters
+    # screen — deactivating a line, verifying one created inline mid-entry — and
+    # a workbook has no opinion about either. Overwriting them would silently
+    # re-verify everything sitting in the review queue.
+    #
+    # NULLIF guards the placeholder: purchases / stocks / store_requisitions
+    # supply "-" for spec and UoM because their sheets carry neither, and
+    # without this a code that has dropped out of items_database would have a
+    # real specification overwritten with a dash.
+    print("Upserting items")
+    bulk_insert(
+        conn, "items", ITEMS_COLUMNS, items_rows,
+        conflict_clause=(
+            "ON CONFLICT (item_code) DO UPDATE SET "
+            "name = COALESCE(NULLIF(EXCLUDED.name, ''), items.name), "
+            "default_specification = COALESCE("
+            "NULLIF(NULLIF(EXCLUDED.default_specification, '-'), ''), "
+            "items.default_specification), "
+            "default_unit_of_measurement = COALESCE("
+            "NULLIF(NULLIF(EXCLUDED.default_unit_of_measurement, '-'), ''), "
+            "items.default_unit_of_measurement), "
+            "category = COALESCE(NULLIF(EXCLUDED.category, ''), items.category)"
+        ),
+    )
+    print(f"Items : upserted {len(items_rows)} rows")
