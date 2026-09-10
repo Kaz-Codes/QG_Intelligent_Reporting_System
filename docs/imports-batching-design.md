@@ -53,6 +53,44 @@ found by building them rather than by re-reading.
 
 ---
 
+## EVERY COUNT IN THIS DOCUMENT IS STALE — read this before quoting one
+
+**183 consignments, 455 item lines, 142 locked, 179 live / 4 soft-deleted, the
+15 multi-batch consignments in §0.2, the two blank-quantity rows named in §4.3,
+§4.9's zero, the 97-of-179 `required_date` coverage in §6 Q2 — all of it was
+measured against ONE snapshot, and that snapshot no longer matches either
+machine.**
+
+| Where | State |
+|---|---|
+| This document's figures | a snapshot taken while revisions 1–5 were written |
+| This dev machine | **178 consignments / 450 lines**, rebuilt by `create_all` + `load_all` on 9 Sep 2026, no `alembic_version` |
+| Production | **191 consignments**, `alembic_version` `3142a00a5b31` |
+
+**They are deliberately NOT re-measured yet**, because they will move again when
+the workbooks are reloaded, and a number re-measured twice is no more trustworthy
+than one measured once. They are marked instead. Treat every figure here as *"as
+measured then"* — illustrative of shape and order of magnitude, never as a
+current fact.
+
+**Two of them are load-bearing and must be re-checked against PRODUCTION before
+revision A runs there**, because they name specific rows rather than describing a
+shape:
+
+- **§4.3's `COALESCE(quantity, 0)`** exists for two blank lines (ids 451 and 460,
+  on soft-deleted consignments 179 and 182). Different database, different ids —
+  and if production has blank lines this document never saw, the COALESCE still
+  covers them, but the claim *"confined to two rows that hold nothing at all"*
+  stops being true and stops being reviewable.
+- **§4.9's count of drafts already at "Arrived at Works" is ZERO**, which is what
+  makes the migration's lock statement a no-op rather than a mass state change.
+  On 191 consignments it may not be zero.
+
+Add both to the deploy checklist for revision A. Neither blocks step 6, which
+runs against a scratch database and changes no schema.
+
+---
+
 ## Verifying this work
 
 ```
@@ -2849,6 +2887,27 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    `payment_reference()` (§3.4), and change the payment reference to mode +
    number. No schema change, independently shippable, and it makes the batching
    change smaller.
+
+   > **HARD ORDERING RULE, added in revision 7: STEP 1 MUST SHIP BEFORE STEP 7.
+   > NOT STILL UNSHIPPED WHEN STEP 7 CREATES THE FIRST REAL SECOND BATCH.**
+   >
+   > It is still unshipped. `consignment_reference()` (`imports/helpers.py`)
+   > remains the only implementation, alongside the two dashboard copies
+   > (`calculations.py:350`, `:842`) and `cross_module.py:182`.
+   >
+   > **Why it is a sequencing constraint and not a tidy-up.** Every list that
+   > names an import row labels it by `instrument_number` — the reference
+   > drill-downs (`whole/references.py`), the trucking queue, the notifications.
+   > `instrument_number` moves to the GROUP, so it is shared by every batch of
+   > one LC. The moment step 7 creates a real second batch, those lists render
+   > **two rows carrying the identical reference**, which reads as a duplicate
+   > rather than as a split. The count is right; the label lies about it.
+   >
+   > **And nothing fails while it is missing**, which is exactly why it gets
+   > forgotten: today every group holds one batch, so one group means one label
+   > and the duplication cannot occur. It is harmless right up to the commit
+   > that makes it wrong, and then it is wrong everywhere at once with no error
+   > anywhere.
 2. **Fix finding 11** (no empty draft) and **finding 12** (export: one row per
    line, every field, drafts and deleted excluded). Both independent, and the
    export forces a full field inventory before the model moves.
@@ -2872,9 +2931,22 @@ Not a commitment — the sequence I would follow, so you can see the shape.
      input-layer prompt beside a field being typed, not a prediction of a gate,
      which is precisely where quality was moved TO. `consignmentSubmitSchema`,
      `pendingFields` and `submitRequirements` all went; that one did not.
-   - **The production database carries no `alembic_version` row**, so the
-     `create_all` gate is not yet active on it and `alembic stamp head` has
-     still never been run there. Noted, not acted on.
+   - **THIS MACHINE'S database carries no `alembic_version` row — production is
+     fine.** Corrected after first reporting it the other way round. The local
+     `supply_chain_erp` was dropped and rebuilt by `create_all` + `load_all` on
+     **9 September 2026**, outside Alembic, which is why it has no revision row
+     and why it now holds **178 consignments / 450 lines** rather than the
+     183/455 this document measured. **Production is a different PostgreSQL
+     instance: 191 consignments, `alembic_version` at `3142a00a5b31`. The gate
+     is active there and working as designed.**
+
+     **Outstanding, and it must be resolved before step 7.** Step 6 adds no
+     tables, so an ungated `create_all` costs nothing while it runs. From step 7
+     onward it does: a service start could half-apply a migration, which is the
+     exact failure the gate exists to prevent. **The fix is a restore from the
+     09:52 dump followed by `alembic upgrade head` — never `alembic stamp`.**
+
+     Until then, any figure quoted from the local database says so.
 
    One change, because the pieces are only safe together:
    - `submission_errors()`, `missing_fields`, the eight frontend consumers, and
