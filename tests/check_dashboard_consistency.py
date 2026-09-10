@@ -244,6 +244,174 @@ print("\n== Logistics left unchanged ==")
 lg = c.get("/dashboard/logistics/shipments")
 check("logistics dashboard still answers", lg.status_code == 200)
 
+
+#-------------------------------------------------------------------
+# BATCHES vs ORDERS — the fourteen count decisions, reconciled on screen
+#
+# Runs ONLY against a scratch database carrying a real two-batch group. Every
+# other database has one batch per group, where `count(rows)` and
+# `count(distinct group)` are the same number and every assertion below would
+# pass whichever unit the code used — the "both screens looked right" failure,
+# inside the check written to prevent it. So each assertion first proves its
+# two candidate answers DIFFER, and only then says which one the API gave.
+#
+# Set up with:   DB_NAME=scratch_x python -m tests.batch_fixture
+#
+# tests/test_count_units.py is the companion: it pins each site's unit against
+# the compiled SQL, needs no database, and runs in the default pytest suite.
+# This one proves the SCREENS reconcile once the units are right.
+#-------------------------------------------------------------------
+
+print("\n== Batches vs orders (scratch + split fixture only) ==")
+
+_split = None
+try:
+    import os
+    if (os.getenv("DB_NAME") or "").lower().startswith("scratch"):
+        from tests.batch_fixture import connect, group_holding_two_batches
+        _conn = connect()
+        _split = group_holding_two_batches(_conn)
+except Exception as _e:                                   # noqa: BLE001
+    print(f"  [skip] fixture unavailable — {_e}")
+
+if _split is None:
+    print("  [SKIP] no two-batch group in this database. Rows and groups are")
+    print("         identical here, so nothing below could discriminate.")
+    print("         Run:  DB_NAME=scratch_x python -m tests.batch_fixture")
+else:
+    with _conn.cursor() as _cur:
+        def one(sql_text, *params):
+            _cur.execute(sql_text, params)
+            return _cur.fetchone()[0]
+
+        LIVE = "is_deleted = false"
+        rows_all = one(f"SELECT count(*) FROM consignments WHERE {LIVE}")
+        groups_all = one(
+            f"SELECT count(DISTINCT batch_group_id) FROM consignments WHERE {LIVE}")
+
+        check("the fixture actually discriminates (rows != orders)",
+              rows_all != groups_all, f"{rows_all} batches across {groups_all} orders")
+
+        # --- #13: the list counts BATCHES, and is forced to ---
+        _l = c.get("/consignments/", params={"page": 1, "page_size": 1,
+                                             "include_closed": True})
+        _lt = _l.json()["pagination"]["total"]
+        check("list total == batches, not orders (#13)",
+              _lt == rows_all and _lt != groups_all,
+              f"{_lt} vs {rows_all} batches / {groups_all} orders")
+
+        _both = c.get("/consignments/", params={"page": 1, "page_size": 200,
+                                                "include_closed": True}).json()["data"]
+        _ids = [r["id"] for r in _both if r.get("batch_group_id") == _split]
+        check("both batches of the split order appear as separate rows",
+              len(_ids) == 2, f"group {_split} -> {_ids}")
+
+        # --- #3 and #9: rows on the tile, orders published alongside ---
+        WIDE = ("2000-01-01", "2035-12-31")
+        _o = get("/dashboard/overview", imports_date_from=WIDE[0],
+                 imports_date_to=WIDE[1])["imports"]
+        _pv, _pop = _o["period_value"], _o
+
+        # MEMBERSHIP, not just liveness. A consignment is in the window only if
+        # some LINE of it is dated inside it (whole/helpers._imports_window_
+        # membership), and a handful carry no date at all — so `count(*)` is the
+        # wrong denominator here and would fail this for a reason that has
+        # nothing to do with batches vs orders.
+        _cur.execute("""
+            SELECT count(*), count(DISTINCT c.batch_group_id)
+              FROM consignments c
+             WHERE c.is_deleted = false
+               AND EXISTS (SELECT 1 FROM consignment_items i
+                            WHERE i.consignment_id = c.id
+                              AND i.is_deleted = false
+                              AND COALESCE(i.eta_works, c.eta_works)
+                                  BETWEEN %s AND %s)
+        """, WIDE)
+        w_rows, w_groups = _cur.fetchone()
+
+        check("overview period_value counts BATCHES (#3)",
+              _pv["consignments"] == w_rows, f'{_pv["consignments"]} vs {w_rows}')
+        check("overview period_value ALSO publishes the order count (#3)",
+              _pv.get("orders") == w_groups,
+              f'{_pv.get("orders")} vs {w_groups} orders')
+        check("the two units differ, so publishing both is not decoration",
+              _pv["consignments"] != _pv.get("orders"))
+
+        check("overview population total counts BATCHES (#9)",
+              _pop["population"]["total"]["count"] == w_rows
+              if "population" in _pop else True)
+        check("population still splits exactly into its buckets",
+              _o["in_process"]["count"] + _o["arrived"]["count"]
+              + _o["cancelled"]["count"] == _pv["consignments"])
+
+        # --- #14: supplier and branch count ORDERS; the agent counts BATCHES ---
+        _cur.execute("""
+            SELECT g.supplier_id, g.works_branch_id, c.clearing_agent_id
+              FROM consignment_batch_groups g
+              JOIN consignments c ON c.batch_group_id = g.id
+             WHERE g.id = %s ORDER BY c.batch_sequence LIMIT 1
+        """, (_split,))
+        _sup_id, _br_id, _ag_id = _cur.fetchone()
+
+        def used_for(master, row_id):
+            if row_id is None:
+                return None
+            body = c.get(f"/masters/{master}", params={"include_inactive": True}).json()
+            for row in body["data"]:
+                if row["id"] == row_id:
+                    return row.get("used")
+            return None
+
+        for _master, _rid, _col, _table in (
+            ("supplier", _sup_id, "supplier_id", "consignment_batch_groups"),
+            ("branch", _br_id, "works_branch_id", "consignment_batch_groups"),
+        ):
+            if _rid is None:
+                print(f"  [skip] the split order has no {_master}")
+                continue
+            _orders = one(f"SELECT count(*) FROM {_table} "
+                          f"WHERE is_deleted = false AND {_col} = %s", _rid)
+            _batches = one(f"SELECT count(*) FROM consignments c "
+                           f"JOIN consignment_batch_groups g ON g.id = c.batch_group_id "
+                           f"WHERE c.{LIVE} AND g.{_col} = %s", _rid)
+            _used = used_for(_master, _rid)
+            check(f"masters {_master} 'used' counts ORDERS (#14)",
+                  _used == _orders,
+                  f"{_used} vs {_orders} orders / {_batches} batches")
+            if _orders != _batches:
+                check(f"masters {_master}: the two units differ here",
+                      _used != _batches)
+
+        if _ag_id is not None:
+            _ag_batches = one(f"SELECT count(*) FROM consignments "
+                              f"WHERE {LIVE} AND clearing_agent_id = %s", _ag_id)
+            _ag_groups = one(f"SELECT count(DISTINCT batch_group_id) FROM consignments "
+                             f"WHERE {LIVE} AND clearing_agent_id = %s", _ag_id)
+            _used = used_for("agent", _ag_id)
+            check("masters clearing agent 'used' counts BATCHES (#14)",
+                  _used == _ag_batches,
+                  f"{_used} vs {_ag_batches} batches / {_ag_groups} orders")
+        else:
+            print("  [skip] the split order has no clearing agent")
+
+        # --- the split must not have INVENTED money ---
+        _order_value = one("""
+            SELECT COALESCE(SUM(i.quantity * i.unit_price), 0)
+              FROM consignment_items i
+              JOIN consignments c ON c.id = i.consignment_id
+             WHERE c.batch_group_id = %s AND i.is_deleted = false
+               AND c.is_deleted = false
+        """, _split)
+        _stored = one("""
+            SELECT COALESCE(SUM(foreign_total), 0) FROM consignments
+             WHERE batch_group_id = %s AND is_deleted = false
+        """, _split)
+        check("the two batches' stored totals sum to the ORDER's value",
+              abs(float(_order_value) - float(_stored)) < 0.01,
+              f"{float(_order_value):,.2f} vs {float(_stored):,.2f}")
+
+    _conn.close()
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 if FAILS:
     print("FAILED:\n  " + "\n  ".join(FAILS))
