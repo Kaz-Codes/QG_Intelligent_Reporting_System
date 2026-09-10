@@ -76,6 +76,53 @@ CHECKS = [
         "expect": "any",
     },
     {
+        "label": "Consignment batch groups",
+        "sql": "SELECT count(batch_group_id), count(*) FROM consignments",
+        "why": ("every consignment is a batch of an ORDER, and the order holds "
+                "the supplier, the currency and the exchange rate; a consignment "
+                "with no group has no commercial terms at all"),
+        # BELT AND BRACES, AND WORTH SAYING SO. `batch_group_id` is NOT NULL, so
+        # a loader that forgets the group fails at the INSERT and never reaches
+        # this check — which is the outcome we want and means this row cannot
+        # actually fire today. It is here so the coverage is stated rather than
+        # assumed, and so it starts working the moment anyone relaxes the
+        # column. "Allocation totals" below is the check in this group that can
+        # genuinely catch something.
+        #
+        # No repair either way: the only cause is a loader that built a
+        # consignment without its group, and the fix is that loader rather than
+        # a patch-up afterwards.
+        "repair": None,
+    },
+    {
+        "label": "Order item links",
+        "sql": ("SELECT count(order_item_id), count(*) FROM consignment_items "
+                "WHERE is_deleted = false"),
+        "why": ("what each shipment line is an allocation AGAINST; without it "
+                "the ordered quantity, the price and the demand dates have no "
+                "home"),
+        # NOT NULL too, so the same caveat as above applies.
+        "repair": None,
+    },
+    {
+        # THE BACKSTOP'S OWN BACKSTOP. allocated_quantity is a denormalised sum
+        # of the lines below it, and the CHECK constraint that keeps allocation
+        # within the order can only see that column - nothing in the constraint
+        # proves the column still matches the rows it summarises. A loader that
+        # writes lines without maintaining it, or an allocation path that
+        # forgets, drifts silently and the CHECK goes on passing.
+        "label": "Allocation totals",
+        "sql": ("SELECT count(*) FILTER (WHERE o.allocated_quantity = COALESCE(s.total, 0)), "
+                "count(*) FROM consignment_order_items o "
+                "LEFT JOIN (SELECT order_item_id, SUM(COALESCE(quantity, 0)) AS total "
+                "FROM consignment_items WHERE is_deleted = false "
+                "GROUP BY order_item_id) s ON s.order_item_id = o.id "
+                "WHERE o.is_deleted = false"),
+        "why": ("the over-allocation CHECK, which trusts this column and cannot "
+                "see the lines it is supposed to be the sum of"),
+        "repair": None,
+    },
+    {
         "label": "Stock ABC ranks",
         "sql": "SELECT count(*) FILTER (WHERE rank <> 'C'), count(*) FROM stock",
         "why": "the A/B classification; everything defaults to C when the AB workbook is not read",

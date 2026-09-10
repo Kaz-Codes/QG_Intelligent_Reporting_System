@@ -24,10 +24,11 @@ stack — do not reintroduce Django/templates.
 - Pydantic schemas for request bodies; plain dict serializers for responses.
 - Cookie-based auth (an httpOnly session cookie set by `/auth/login`).
 - Excel export via **openpyxl**. No server-side PDF (the frontend prints/exports client-side).
-- `Base.metadata.create_all()` still runs on startup and still only creates
-  missing tables — it never adds/drops/alters a column on a table that
-  already exists. **Alembic** (`alembic/`) is the source of truth for schema
-  changes now — see **Database migrations** below.
+- `Base.metadata.create_all()` runs on startup **only on a database Alembic
+  does not manage**, and even then only creates missing tables — it never
+  adds/drops/alters a column on a table that already exists. **Alembic**
+  (`alembic/`) is the source of truth for schema changes now — see
+  **Database migrations** below.
 
 **Frontend** (`React_Frontend-main/frontend/`)
 - React + Vite + TypeScript, React Router, **@tanstack/react-query**, react-hook-form + zod, Tailwind.
@@ -84,11 +85,37 @@ param path: `GET /export`, `GET /open-requests` etc. are imported **before**
 
 ## Database migrations
 
-`create_all()` (still run on every startup, see above) only ever creates a
-table that doesn't exist yet — it silently does nothing for a new column, a
-changed type, or a dropped column on a table that's already there. **Alembic**
-closes that gap and is the source of truth for schema changes going forward;
-`create_all()` stays only so a brand-new empty database still boots.
+`create_all()` only ever creates a table that doesn't exist yet — it silently
+does nothing for a new column, a changed type, or a dropped column on a table
+that's already there. **Alembic** closes that gap and is the source of truth for
+schema changes going forward; `create_all()` stays only so a brand-new empty
+database still boots.
+
+### `create_all()` is GATED, and the gate is `alembic_version`
+
+**`main.py::create_tables` skips `create_all` entirely when the database carries
+an Alembic revision** (`main.py::schema_is_alembic_managed`). It used to run on
+every start against every database, and on an Alembic-managed one that is not a
+harmless no-op — it is a schema change made behind the migration's back, once
+per service start.
+
+**The failure it prevents, which was measured rather than imagined.** Start the
+service *before* running a migration that adds a table, and `create_all` creates
+that table **empty**: no back-fill, no ALTER of the existing tables the migration
+also needed, and no row in `alembic_version`. `alembic upgrade head` then dies
+with `DuplicateTable: relation "..." already exists`, and the database sits
+half-changed. Recovery is dropping the empty tables by hand and migrating again.
+
+- **A revision in `alembic_version` is the gate**, not a guess from whether some
+  sentinel table happens to exist. The table with no row in it does not count:
+  that is a database Alembic has touched but never applied anything to.
+- **A brand-new empty database still boots** — it has no `alembic_version`, so
+  `create_all` builds the schema and the admin seed runs, exactly as before.
+- **A fresh database stays ungated until it is stamped.** `alembic stamp head`
+  on it (see below) is the same manual step it always was; from then on the gate
+  holds and `create_all` never runs against that database again.
+- The check sits **inside** the startup retry loop, so a Postgres that is still
+  waking up backs off and retries exactly as `create_all` used to.
 
 - `alembic/env.py` imports `Base` from `app.database` plus every model module
   (`accounts`, `masters`, `imports`, `logistics`, `trucking`, `logs`,
@@ -1205,9 +1232,34 @@ add it in the same change if it's missing.
 Each part of the system is proved differently, and the commands are not
 interchangeable:
 
-- **ERP backend** — `python -c "import app.main"`. Imports every model, route
-  and router, so a bad import, a broken decorator or a route that shadows
-  another shows up here.
+- **ERP backend** —
+
+  ```
+  python -c "import app.main; import sqlalchemy.orm as o; o.configure_mappers(); print('ok')"
+  ```
+
+  Imports every model, route and router, so a bad import, a broken decorator
+  or a route that shadows another shows up here.
+
+  **`configure_mappers()` is not optional, and `import app.main` ALONE IS NOT
+  A CHECK.** `main.py` builds its tables inside a retry loop that catches and
+  logs whatever startup raises, so a broken MAPPER — a relationship whose join
+  column no longer exists, which is what removing a mapped attribute does —
+  is written to the log and swallowed. The bare import **exits 0** on a tree
+  where every query in the app would 500. Measured, on a tree with two of
+  `Consignment`'s foreign keys deleted: bare import exit 0, the command above
+  exit 1 naming the relationship. `configure_mappers()` forces the
+  configuration the import defers and re-raises the cached failure.
+
+  **It connects to whatever `DB_NAME` says, and `create_all` runs at import.**
+  So running it after adding a model CREATES that model's tables in the
+  database it points at. Point it at a scratch database when the change adds
+  a table, or the "verification" quietly applies half a migration outside
+  Alembic:
+
+  ```
+  DB_NAME=scratch_something python -c "import app.main; import sqlalchemy.orm as o; o.configure_mappers()"
+  ```
 - **Frontend** — an esbuild bundle of `src/main.tsx`. Note esbuild strips
   types without checking them, so it catches a broken import or a syntax
   error but NOT a type error; `tsc -b` is what the real build runs.

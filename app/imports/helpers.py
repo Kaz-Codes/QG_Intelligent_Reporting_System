@@ -1,4 +1,7 @@
-from app.imports.models import Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory
+from app.imports.models import (
+    Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory,
+    ConsignmentBatchGroup, ConsignmentOrderItem,
+)
 from sqlalchemy import select, func, or_, and_, not_
 from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
@@ -685,6 +688,36 @@ def revert_local_fields(consignment, fields):
             old_value = coerce_value(Consignment, column.key, change["old_value"])
             setattr(consignment, column.key, old_value)
 
+    # A HISTORY KEY THAT MATCHES NO ATTRIBUTE IS A DEFECT, AND MUST NOT BE
+    # SILENT.
+    #
+    # The loop above is driven by the MAPPER, not by the history: it walks the
+    # model's columns and picks up whichever of them the stored history mentions.
+    # A key the model does NOT have is therefore never looked at, and the revert
+    # reports success having restored nothing for it. In a feature whose entire
+    # purpose is undo, half-succeeding quietly is worse than failing.
+    #
+    # This matters now because fields are about to MOVE. Once the shared values
+    # (supplier, currency, exchange rate...) live on the batch group and their
+    # attributes come off Consignment, every history row written before that
+    # change still carries them under these keys — and every one would be
+    # skipped without a word. Routing those keys to the group is a later change;
+    # this is the part that makes the boundary visible instead of assumed, and
+    # it goes in FIRST so the routing can be seen to be needed rather than
+    # taken on trust.
+    known = {column.key for column in consignment_columns}
+    unknown = sorted(
+        key for key, change in fields.items()
+        if isinstance(change, dict) and "old_value" in change and key not in known
+    )
+    if unknown:
+        raise ValueError(
+            "Change history for consignment "
+            f"{getattr(consignment, 'id', '?')} holds field(s) that no longer "
+            f"exist on Consignment: {', '.join(unknown)}. Reverting would have "
+            "restored the rest and silently dropped these."
+        )
+
 
 def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
     for data in data:
@@ -967,3 +1000,196 @@ def submission_errors(consignment):
         errors.append("ETA cannot be before ETD")
 
     return errors
+
+
+#---------------------------------------
+# THE ORDER ABOVE A CONSIGNMENT
+#
+# A consignment is a BATCH of an order. Every consignment created here is a
+# group of ONE - it founds its own group and is batch 1 of it - which is exactly
+# the shape the migration left every pre-existing consignment in, and the shape
+# the Excel loader writes. Splitting an order across several batches, allocating
+# quantities between them and the numbering suffix are a later phase; nothing
+# here does any of that.
+#
+# WHY THIS IS NOT OPTIONAL. `consignments.batch_group_id` and
+# `consignment_items.order_item_id` are both NOT NULL, so without these helpers
+# a create is a 500 rather than a missing feature.
+#
+# THE INSERT ORDER IS THE WHOLE DIFFICULTY, and it is why `new_batch_group`
+# looks the way it does. consignments and consignment_batch_groups reference
+# each other with NOT NULL columns, so neither row can be written first: the
+# group needs a consignment that does not exist yet and the consignment needs a
+# group that does not exist yet. Verified against the database in all three
+# orderings, all three fail. The FK on `consignments.batch_group_id` is
+# therefore DEFERRABLE INITIALLY DEFERRED, and the sequence below is the one
+# that works:
+#
+#   1. take the group's id from its sequence, before either row exists
+#   2. INSERT the consignment carrying that id - the FK is deferred, so
+#      pointing at a group that is not there yet is allowed until COMMIT
+#   3. INSERT the group, now that the consignment id it must reference exists
+#   4. everything else (order items, lines) goes after, with no cycle left
+#
+# COMMIT then checks the deferred constraint, with both halves present. A
+# transaction that leaves either half missing still fails - deferring moves the
+# check, it does not remove it.
+#---------------------------------------
+
+# The values that belong to the ORDER rather than to a shipment, copied onto the
+# group. `branch_id` becomes `works_branch_id`. Identical to the list the
+# migration copies, deliberately: the two must not be able to disagree about
+# what is shared.
+GROUP_SHARED_FIELDS = [
+    "supplier_id",
+    "origin",
+    "currency",
+    "consignment_type",
+    "incoterm",
+    "payment_instrument",
+    "instrument_number",
+    "exchange_rate",
+    "rate_booked_on",
+    "rate_source",
+]
+
+
+def new_batch_group(consignment, user, db):
+    """Create the order this consignment is the first batch of, and link them.
+
+    Flushes twice, in the only order the constraints allow - see the block
+    comment above. Returns the group.
+    """
+    group_id = db.execute(
+        select(func.nextval("consignment_batch_groups_id_seq"))
+    ).scalar()
+
+    consignment.batch_group_id = group_id
+    consignment.batch_sequence = 1
+
+    # The consignment goes in FIRST, pointing at a group that does not exist
+    # yet. Only the deferred foreign key makes this legal.
+    db.add(consignment)
+    db.flush()
+
+    group = ConsignmentBatchGroup(
+        id=group_id,
+        founding_consignment_id=consignment.id,
+        batches_ever=1,
+        works_branch_id=consignment.branch_id,
+        created_by_id=user.id if user is not None else None,
+        **{field: getattr(consignment, field) for field in GROUP_SHARED_FIELDS},
+    )
+
+    db.add(group)
+    db.flush()
+
+    return group
+
+
+#---------------------------------------
+# THE ORDER LINE ABOVE A SHIPMENT LINE
+#
+# While a group holds ONE batch, "what was ordered" and "what this shipment
+# carries" are the same quantity, so the order item mirrors its line. That is
+# what the migration back-filled and what the loader writes.
+#
+# It is mirrored on every write rather than snapshotted at creation, because
+# `allocated_quantity` is the denormalised sum the over-allocation CHECK is
+# built on. Left unmirrored, editing a line's quantity would leave that column
+# describing a quantity the line no longer has - the exact drift `post_load`'s
+# "Allocation totals" check exists to catch.
+#
+# When allocation arrives, ordered_quantity stops following the line and starts
+# being entered against the order; this mirroring is what that replaces.
+#---------------------------------------
+
+# Copied straight off the line: identity, price and the requisition details.
+ORDER_ITEM_LINE_FIELDS = [
+    "item_id",
+    "item_code",
+    "item_name",
+    "placeholder_name",
+    "specification",
+    "hs_code",
+    "unit_of_measurement",
+    "unit_price",
+    "requisition_type",
+    "reference_number",
+    "job_number",
+    "mo_number",
+    "description",
+]
+
+# Taken from the CONSIGNMENT: header columns today, per-item columns once the
+# requirements land. The header value is the true one for every line under it,
+# which is the same reasoning the migration back-fills them on.
+ORDER_ITEM_HEADER_FIELDS = {
+    "branch_id": "branch_id",
+    "requisition_date": "requisition_date",
+    "required_date": "required_date",
+}
+
+
+def sync_order_item_from_line(item, consignment):
+    """Mirror a shipment line onto the order line above it.
+
+    Creates the order item if the line has none, which is the case for every
+    line on a create and every line added by an update.
+    """
+    order_item = item.order_item
+
+    if order_item is None:
+        order_item = ConsignmentOrderItem(batch_group_id=consignment.batch_group_id)
+        item.order_item = order_item
+
+    for field in ORDER_ITEM_LINE_FIELDS:
+        setattr(order_item, field, getattr(item, field, None))
+
+    for target, source in ORDER_ITEM_HEADER_FIELDS.items():
+        setattr(order_item, target, getattr(consignment, source, None))
+
+    # NOT NULL, and a line can legitimately carry no quantity at draft. A line
+    # that orders nothing orders zero - the same COALESCE the migration and the
+    # loader apply, for the same reason.
+    quantity = item.quantity if item.quantity is not None else Decimal("0")
+    order_item.ordered_quantity = quantity
+    order_item.allocated_quantity = quantity
+
+    # The pair is one thing while a group holds one batch, so it is deleted as
+    # one. Without this the order item outlives its line and
+    # `allocated_quantity` stops matching the lines it is the sum of.
+    order_item.is_deleted = item.is_deleted
+    order_item.deleted_at = item.deleted_at
+
+    return order_item
+
+
+def sync_order_items(consignment, db):
+    """Mirror every line of a consignment onto its order line.
+
+    RUNS WITH AUTOFLUSH OFF, and that is not a precaution — without it this
+    function cannot work at all.
+
+    Attaching a line to its order line writes a relationship, and SQLAlchemy
+    reads the attribute's previous value before it writes the new one. On a
+    consignment that has already been flushed — which it has, because the group
+    could not be written otherwise — that read is a lazy load, a lazy load
+    emits a SELECT, and a SELECT autoflushes the session first. The session at
+    that moment holds lines whose `order_item_id` is still NULL, so the
+    autoflush inserts them and the NOT NULL constraint rejects the lot:
+
+        NotNullViolation: null value in column "order_item_id"
+        (raised as a result of Query-invoked autoflush)
+
+    Deferring the flush to the end of this loop means every line already has
+    its order line by the time anything is written, and SQLAlchemy inserts the
+    order items first because the lines depend on them.
+
+    The suppression lives HERE rather than in the routes so that a future caller
+    cannot forget it. It is the helper that creates the transient state, so it
+    is the helper that has to hold it off the database.
+    """
+    with db.no_autoflush:
+        for item in consignment.items:
+            sync_order_item_from_line(item, consignment)

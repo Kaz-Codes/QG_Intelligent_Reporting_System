@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select, text
 
 from app.database import Base, SessionLocal, engine
 
@@ -102,15 +102,75 @@ CREATE_TABLES_ATTEMPTS = 5
 CREATE_TABLES_BACKOFF_SECONDS = 2
 
 
+#-----------------------------------------------------
+# CREATE_ALL MUST NOT TOUCH A DATABASE ALEMBIC MANAGES
+#
+# create_all creates any table the MODELS have and the database does not. On a
+# database Alembic owns, that is not a harmless no-op — it is a schema change
+# made behind the migration's back, and it happens on every service start
+# rather than once.
+#
+# The failure is specific and it is not theoretical. Start the service before
+# running a migration that adds a table and create_all creates that table
+# EMPTY: no back-fill, no ALTER of the existing tables the migration also
+# needed, and no row in alembic_version. The migration then cannot run —
+# "relation already exists" — and the database is left half-changed, with the
+# new tables present and unpopulated. Recovery is dropping them by hand.
+#
+# So the boot path asks one question first: is this database under Alembic's
+# control? A row in alembic_version is exactly that fact, and it is the fact
+# rather than a proxy for it — no guessing from whether some sentinel table
+# happens to exist.
+#
+#   managed   -> skip. Alembic is the source of truth; `alembic upgrade head`
+#                is the only thing allowed to change this schema.
+#   unmanaged -> create_all, which is the brand-new-empty-database path
+#                CLAUDE.md says this function is kept for.
+#
+# A freshly created database stays unmanaged until somebody runs
+# `alembic stamp head` on it (CLAUDE.md, "Database migrations"), which is the
+# same manual step as before this guard. From that point on the guard holds and
+# create_all never runs against it again.
+#-----------------------------------------------------
+
+def schema_is_alembic_managed():
+    """True when this database carries an Alembic revision.
+
+    The table alone is not enough: `alembic_version` with no row is a database
+    Alembic has touched but never applied anything to, which is not a schema it
+    is managing. A revision in it is.
+    """
+    if not sa_inspect(engine).has_table("alembic_version"):
+        return False
+
+    with engine.connect() as connection:
+        revision = connection.execute(
+            text("SELECT version_num FROM alembic_version LIMIT 1")
+        ).scalar()
+
+    return revision is not None
+
+
 def create_tables():
     """Create any missing tables, retrying while the database wakes up.
 
-    Returns True if the schema was reached, False if every attempt failed —
-    the caller does not act on it, but it makes the outcome testable and
-    keeps the function honest about what happened.
+    Does nothing at all on a database Alembic manages — see the block comment
+    above. Returns True if the schema was reached, False if every attempt
+    failed — the caller does not act on it, but it makes the outcome testable
+    and keeps the function honest about what happened.
     """
     for attempt in range(1, CREATE_TABLES_ATTEMPTS + 1):
         try:
+            # Inside the retry, not before it: this is the first statement that
+            # touches the database, so a Postgres that is still waking up must
+            # back off and try again here exactly as create_all used to.
+            if schema_is_alembic_managed():
+                logger.info(
+                    "Database is under Alembic control; skipping create_all. "
+                    "Run `alembic upgrade head` to change this schema."
+                )
+                return True
+
             Base.metadata.create_all(bind=engine)
 
             if attempt > 1:

@@ -430,3 +430,23 @@ class NotificationDeliveryStatus(str, Enum):
     SENT = "sent"
     FAILED = "failed"
     READ = "read"
+
+#--------------------------------
+# IMPORTS: HOW AN ORDER LINE IS PRICED
+#
+# Chosen per line, on the order item, because both formulas are real and the
+# business uses each (design doc section 6, Q1):
+#
+#     quantity -> quantity * unit_price
+#     weight   -> quantity * unit_weight * weight_unit_price
+#
+# The two prices live in SEPARATE columns (`unit_price` per unit of measure,
+# `weight_unit_price` per kilogram) rather than one column meaning two things
+# depending on this flag. Summing one column across lines is then arithmetic
+# somebody can write by accident; summing a column that silently mixes
+# rupees-per-kg with rupees-per-piece is not.
+#--------------------------------
+
+class PriceBasis(str, Enum):
+    QUANTITY = "quantity"
+    WEIGHT = "weight"
