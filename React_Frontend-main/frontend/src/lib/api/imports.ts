@@ -113,7 +113,6 @@ export interface ApiConsignment {
   payments: ApiPayment[]
   eta_revisions: ApiEtaRevision[]
   status_updates: ApiStatusUpdate[]
-  missing_fields: string[]
   /** Cross-module hand-off. NULL = not sent. Set only by the send routes. */
   sent_to_logistics_at: string | null
   sent_to_trucking_at: string | null
@@ -216,8 +215,8 @@ export interface ConsignmentQuery {
   requisitionType?: string[]
   /** Show the closed status ("Arrived at Works") too. */
   includeClosed?: boolean
-  /** Only records still incomplete (server-side: record_state === 'draft'). */
-  missingOnly?: boolean
+  /** Only records nobody has marked finished (server-side: record_state === 'draft'). */
+  draftsOnly?: boolean
   /** Only consignments handed to logistics and/or trucking — the "Forwarded" view. */
   sentOnly?: boolean
   includeDeleted?: boolean
@@ -235,7 +234,7 @@ function buildQuery(q: ConsignmentQuery): URLSearchParams {
   // the same way, but leaving it off keeps the URL clean.
   if (q.stage && q.stage !== 'all') params.set('stage', q.stage)
   if (q.includeClosed) params.set('include_closed', 'true')
-  if (q.missingOnly) params.set('missing_only', 'true')
+  if (q.draftsOnly) params.set('drafts_only', 'true')
   if (q.sentOnly) params.set('sent_only', 'true')
   if (q.includeDeleted) params.set('include_deleted', 'true')
   if (q.etdFrom) params.set('etd_from', q.etdFrom)
@@ -393,9 +392,12 @@ export async function updateConsignmentApi(id: number | string, payload: Consign
   return res.data
 }
 
-/** POST /consignments/{id}/submit — runs the full rule set server-side and
- *  only flips record_state to 'submitted' if nothing is missing. A 422's
- *  ApiError.message is a JSON string; parse it with parseSubmitErrors(). */
+/** POST /consignments/{id}/submit — flips record_state to 'submitted'.
+ *
+ *  That is ALL it does. There is no rule set in imports any more, so it cannot
+ *  422 and it does not lock the record; a consignment closes on reaching
+ *  "Arrived at Works", which is a PUT, not this. Logistics and trucking keep
+ *  their rule sets and their 422s — this divergence is imports-only. */
 export async function submitConsignmentApi(id: number | string): Promise<ApiConsignment> {
   const res = await apiFetch<DetailEnvelope>(`/consignments/${id}/submit`, { method: 'POST' })
   return res.data

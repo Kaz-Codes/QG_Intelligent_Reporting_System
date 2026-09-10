@@ -107,8 +107,8 @@ export interface ImportsListRow {
   gateOut: string | null
   freeDays: number | null
 
-  /** Named gaps from the backend's own submit rule set. */
-  missing: string[]
+  /** "A user marked this finished." Nothing verifies the claim — imports has
+   *  no submit rule set, so there is no `missing` list beside this any more. */
   recordState: string
   isLocked: boolean
   isClosed: boolean
@@ -275,7 +275,6 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
     gateOut: c.gate_out_date,
     freeDays: c.free_days_allowed,
 
-    missing: c.missing_fields ?? [],
     recordState: c.record_state,
     isLocked: c.is_locked,
     // Soft-deleted rows are only ever FETCHED for an admin (includeDeleted on

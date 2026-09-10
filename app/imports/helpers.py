@@ -158,7 +158,7 @@ ORDER_CANCELLED_VALUE = Status.ORDER_CANCELLED.value
 
 def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
                             branch_id, supplier_id, requisition_type,
-                            missing_only, etd_from, etd_to, q, page, page_size,
+                            drafts_only, etd_from, etd_to, q, page, page_size,
                             sent_only=False):
     # status, branch_id, supplier_id and requisition_type are lists (the list
     # screen filters are multi-select), so each is an IN filter, not an equals.
@@ -167,15 +167,18 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     if not include_deleted:
         conditions.append(Consignment.is_deleted == False)
 
-    # "Closed" here means actually closed — "Arrived at works" AND submitted
-    # (is_locked; see helpers.is_closed), not merely sitting at that status.
-    # An unsubmitted "Arrived at works" record hasn't closed yet and stays
-    # out of this bucket. "Order Cancelled" has no lock concept but is the
-    # other terminal state, so it's always treated as closed here.
-    is_truly_closed = or_(
-        and_(Consignment.current_status == CLOSED_STATUS_VALUE, Consignment.is_locked == True),
-        Consignment.current_status == ORDER_CANCELLED_VALUE,
-    )
+    # "Closed" is the STATUS ALONE — the same one-part test helpers.is_closed
+    # now applies, spelled in SQL. "Order Cancelled" is the other terminal
+    # state and is treated as closed here too.
+    #
+    # This used to read `status == CLOSED AND is_locked == True`, the two-part
+    # test written out by hand. It has to change WITH is_closed, not after it:
+    # with the lock no longer written by /submit, that condition would match
+    # almost nothing, and `include_closed=False` — the DEFAULT — would quietly
+    # stop hiding closed consignments from the list. Not a crash; "closed
+    # consignments started showing up in the default list" a week later.
+    closed_statuses = (CLOSED_STATUS_VALUE, ORDER_CANCELLED_VALUE)
+    is_truly_closed = Consignment.current_status.in_(closed_statuses)
 
     # A stage is a group of statuses (the six-stage pipeline strip); it narrows
     # to that group's statuses. The Closed stage specifically means truly
@@ -215,9 +218,17 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
             )
         )
 
-    # "Missing information only" — the server-side notion of an incomplete
-    # record is a draft (a submitted one has passed the full rule set).
-    if missing_only:
+    # "Drafts only" — records nobody has marked finished.
+    #
+    # RENAMED FROM `missing_only`, and only the name changed: it always filtered
+    # on record_state and never on the rule set. But "Missing information only"
+    # was an honest label only while a record could leave draft solely by
+    # passing that rule set. It no longer can, so a draft says nothing about
+    # completeness and the old name promised something the filter cannot
+    # deliver. The question it answers — "show me what nobody has marked
+    # finished" — is still a real one, which is why this is a rename and not a
+    # removal.
+    if drafts_only:
         conditions.append(Consignment.record_state == "draft")
 
     # The "Forwarded" view: consignments handed to logistics and/or trucking.
@@ -762,53 +773,67 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 #---------------------------------------
 # THE CLOSED LOCK
 #
-# A consignment closes when its status reaches "Arrived at works" AND it has
-# been submitted — a draft sitting at "Arrived at works" is not yet closed,
-# since it hasn't passed the full rule set in submission_errors. While closed
-# it cannot be edited by anyone until an admin reopens it. The check lives
-# here so the one condition that means "closed" is written once.
+# A consignment closes when its status reaches "Arrived at works". That is the
+# WHOLE test — being submitted is no longer half of it.
+#
+# "Arrived at works" is a statement about the world: the goods are at the
+# factory. Completion follows from that fact, not from somebody remembering to
+# press Submit afterwards. Under the old two-part test a consignment whose goods
+# had demonstrably arrived stayed editable until an administrative gesture was
+# made, which put the lock on the gesture rather than on the event it is
+# supposed to represent.
+#
+# Submit now means only "I am finished editing this" and sets `record_state`
+# alone — it locks nothing, so there is nothing irreversible about it and
+# nothing to warn about at submit time.
+#
+# THE LOCK IS WRITTEN BY THE UPDATE ROUTE, on the transition into this status
+# (update_consignment.py), and nowhere else. It used to be written by /submit
+# and nowhere else, so this is not a rule that moved on its own — deleting the
+# write from one place without adding it to the other removes the closed lock
+# from the system entirely, silently, leaving is_locked false for ever.
+#
+# While closed the record cannot be edited by anyone until an admin reopens it.
+# The check lives here so the one condition that means "closed" is written once.
 #---------------------------------------
 
 def is_closed(consignment):
-    return (
-        consignment.current_status == Status.ARRIVED_AT_WORKS.value
-        and consignment.record_state == "submitted"
-    )
+    return consignment.current_status == Status.ARRIVED_AT_WORKS.value
 
 
 #---------------------------------------
-# SUBMIT VALIDATION
+# THERE IS NO SUBMIT VALIDATION IN IMPORTS ANY MORE
 #
-# The full rule set, enforced only when a draft is submitted — never at the
-# database level, because drafts and submitted rows share one table and a
-# draft is allowed to be empty. Mirrors the front end's consignmentSubmitSchema
-# so the two cannot drift. Returns a list of human readable messages; an empty
-# list means the consignment is complete enough to submit.
+# `submission_errors()`, `REQUISITION_REQUIRED` and `ITEM_CODE_NOT_REQUIRED_FOR`
+# used to live here. All three are deleted, along with the 422 path in
+# /submit, the `missing_fields` key in the serializer and the three front-end
+# mirrors of the same rules. `POST /{id}/submit` now always succeeds, subject
+# only to the closed lock.
 #
-# The requisition rules are a single dict, so adding a requisition type later
-# is a one line change here (and its mirror in the front end), not a hunt
-# through if-statements.
+# WHY, since deleting a rule set is the kind of thing that looks like a
+# regression later: data quality moves to the INPUT layer — dropdowns, masters
+# and required-at-entry — rather than being asserted at a gate the user reaches
+# after the typing is done. The rule set encoded the same requirements three
+# times (here, the wizard's zod submit schema, and the requirements banner) in
+# two languages, and the three could and did disagree. There is nothing left to
+# keep in agreement.
+#
+# WHAT IS LOST, stated rather than discovered as an absence: nothing replaces
+# the "N fields missing" tag, the row highlight, the disabled Submit or the
+# pending-information banner. If quality is enforced at entry then a record
+# cannot be incomplete in the ways those surfaces reported, and a tag that can
+# never fire is worse than no tag.
+#
+# THIS IS AN IMPORTS-ONLY DIVERGENCE. app/logistics/helpers.py and
+# app/trucking/helpers.py still have their own submission_errors() and still
+# block submit; the shared SubmitRequirements component stays for them. A user
+# working across all three modules will find imports behaves differently. That
+# is a cost of the decision, deliberately accepted, not an oversight.
+#
+# `record_state` survives, and means something weaker than it did: "a user has
+# marked this record finished. Nothing verifies that claim." It drives exactly
+# one thing, the drafts_only list filter, and is otherwise informational.
 #---------------------------------------
-
-REQUISITION_REQUIRED = {
-    "Store": [("reference_number", "Reference no.")],
-    "Engineering": [
-        ("reference_number", "Reference no."),
-        ("job_number", "Job no."),
-        ("mo_number", "MO no."),
-    ],
-    "Others": [("description", "Description")],
-}
-
-# Requisition types exempt from the item-code rule below — "Others" items are
-# not drawn from the item master, so there is often no code to give. A set
-# (not a bare "Others" check) so a future exempt type is a one-line change
-# here rather than a second if-statement.
-#
-# MIRRORED ON THE FRONT END: React_Frontend-main/frontend/src/features/
-# importsStatus/schema.ts (superRefine, keyed off the lowercase
-# requisitionType) makes the same field optional. Keep both in sync.
-ITEM_CODE_NOT_REQUIRED_FOR = {"Others"}
 
 
 #---------------------------------------
@@ -825,14 +850,11 @@ ITEM_CODE_NOT_REQUIRED_FOR = {"Others"}
 # person typing. THIS is the guarantee: a hand-rolled request, an older
 # client or a replayed payload all come through here.
 #
-# Run on every WRITE (create and update), not inside submission_errors —
-# that function is called on every READ too, to fill `missing_fields` in the
-# serializer, and mutating rows there would dirty the session on a plain list
-# fetch. Same call sites as recompute_derived, for the same reason.
+# Run on every WRITE (create and update). Same call sites as recompute_derived.
 #
 # A code matching nothing is left completely alone. That covers the "Others"
-# requisition type, where item_code is optional to begin with (see
-# ITEM_CODE_NOT_REQUIRED_FOR), and the loaded rows carrying a generated
+# requisition type, where a line often has no code to give because it is not
+# drawn from the item master at all, and the loaded rows carrying a generated
 # IMP-<hash> code the catalogue never held (loading/imports/item_codes.py).
 # Both are legitimately free text.
 #
@@ -946,60 +968,6 @@ def stamp_landed_cost_audit(item, user, stamp_elc, stamp_alc):
 def consignment_reference(consignment):
     return consignment.instrument_number or f"IMP-{consignment.id}"
 
-
-def submission_errors(consignment):
-    errors = []
-
-    if not consignment.branch_id:
-        errors.append("Branch is required")
-    if not consignment.supplier_id:
-        errors.append("Supplier is required")
-    if not consignment.origin:
-        errors.append("Country of origin is required")
-    if not consignment.currency:
-        errors.append("Currency is required")
-
-    active_items = [item for item in consignment.items if not item.is_deleted]
-
-    if not active_items:
-        errors.append("Add at least one item")
-
-    for index, item in enumerate(active_items, start=1):
-        if not item.item_name:
-            errors.append(f"Item {index}: item name is required")
-        if not item.item_code and item.requisition_type not in ITEM_CODE_NOT_REQUIRED_FOR:
-            errors.append(f"Item {index}: item code is required")
-        if item.quantity is None:
-            errors.append(f"Item {index}: quantity is required")
-        if not item.unit_of_measurement:
-            errors.append(f"Item {index}: unit of measure is required")
-
-        if not item.requisition_type:
-            errors.append(f"Item {index}: requisition type is required")
-        else:
-            for field, label in REQUISITION_REQUIRED.get(item.requisition_type, []):
-                if not getattr(item, field):
-                    errors.append(
-                        f"Item {index}: {label} is required for a {item.requisition_type} item"
-                    )
-
-    if not consignment.payment_instrument:
-        errors.append("Payment instrument is required")
-    if not consignment.instrument_number:
-        errors.append("Instrument number is required")
-    if not consignment.works:
-        errors.append("Works is required")
-    if consignment.exchange_rate is None:
-        errors.append("Exchange rate is required")
-    if not consignment.rate_booked_on:
-        errors.append("The date the rate was booked is required")
-    if not consignment.current_status:
-        errors.append("Status is required")
-
-    if consignment.etd and consignment.eta and consignment.eta < consignment.etd:
-        errors.append("ETA cannot be before ETD")
-
-    return errors
 
 
 #---------------------------------------

@@ -714,12 +714,19 @@ class Consignment(Base, TimestampMixin):
         index=True
     )
 
-    # Draft vs submitted. A draft saves with anything (or nothing) filled;
-    # submitting runs the full rule set (see helpers.submission_errors) and,
-    # only if it passes, flips this to "submitted". Submitting never locks the
-    # record — editing stays allowed after it. server_default so rows written
-    # straight to the table (the Excel loader) come in as drafts without the
-    # loader having to set it.
+    # "A user has marked this record finished. NOTHING VERIFIES THAT CLAIM."
+    #
+    # It used to mean "this record has passed the full rule set", which is a
+    # stronger statement; imports has no rule set any more. It now drives
+    # exactly one thing — the `drafts_only` list filter — and is otherwise
+    # informational and a column in the export.
+    #
+    # It is NOT half of the closed test. Closing is the status alone (see
+    # helpers.is_closed), so a submitted consignment and a draft at the same
+    # status are equally closed or equally open.
+    #
+    # server_default so rows written straight to the table (the Excel loader)
+    # come in as drafts without the loader having to set it.
     record_state: Mapped[str] = mapped_column(
         String(20),
         default="draft",
@@ -730,8 +737,13 @@ class Consignment(Base, TimestampMixin):
 
     # The closed lock. A consignment closes when its status reaches "Arrived
     # at works"; from then on nobody may edit it until an admin reopens it
-    # (which clears this flag). This is separate from record_state: a
-    # submitted consignment is still editable, a closed one is not.
+    # (which clears this flag). Independent of record_state entirely.
+    #
+    # WRITTEN BY THE UPDATE ROUTE, on the transition into that status, and
+    # nowhere else in the app. It was previously written by /submit and nowhere
+    # else, which is why CLAUDE.md's claim that the update route set it was
+    # wrong and why all 142 locked rows in production were locked by the Excel
+    # loader rather than by anybody using the system.
     is_locked: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

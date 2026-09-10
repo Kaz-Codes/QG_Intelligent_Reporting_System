@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 HEADERS = [
     "ID", "Branch", "Supplier", "Works", "Country of origin", "Currency",
-    "Type", "Incoterm", "Status", "Record state", "Requisition date",
+    "Type", "Incoterm", "Status", "Marked finished", "Requisition date",
     "Required date", "ETD", "ETA", "ETA works", "Payment instrument",
     "Instrument no.", "Exchange rate", "Rate booked on", "GD number",
     "GD filing date", "Free days", "Gate out", "Demurrage", "Container detention",
@@ -82,7 +82,7 @@ def export_consignments(
     branch_id : Optional[list[int]] = Query(None),
     supplier_id : Optional[list[int]] = Query(None),
     requisition_type : Optional[list[str]] = Query(None),
-    missing_only : Optional[bool] = False,
+    drafts_only : Optional[bool] = False,
     etd_from : Optional[date] = None,
     etd_to : Optional[date] = None,
     q : Optional[str] = None,
@@ -98,7 +98,7 @@ def export_consignments(
         consignments, _ = fetch_consignments_page(
             db, include_deleted, include_closed, status, stage,
             branch_id, supplier_id, requisition_type,
-            missing_only, etd_from, etd_to, q, page=1, page_size=1_000_000,
+            drafts_only, etd_from, etd_to, q, page=1, page_size=1_000_000,
         )
 
         rows = [_row(c) for c in consignments]

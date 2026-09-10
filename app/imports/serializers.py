@@ -66,14 +66,6 @@ def build_system_remarks(consignment):
 # THAT CAN BE SENT IN RESPONSE
 #---------------------------------------
 
-def _submission_errors(consignment):
-    # Deferred import: app.imports.helpers imports this module for
-    # serialize_many, so importing it at module level would be a cycle.
-    from app.imports.helpers import submission_errors
-
-    return submission_errors(consignment)
-
-
 def serialize_consignment(consignment, db, include_change_history=True):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
@@ -126,13 +118,11 @@ def serialize_consignment(consignment, db, include_change_history=True):
         "demurrage_or_detention_paid" : consignment.demurrage_or_detention_paid,
         "container_detention" : consignment.container_detention,
 
-        # The named gaps that stop this consignment being submitted — the same
-        # rule set /submit enforces, so the list's "N fields missing" tag and a
-        # failed submit can never disagree. Imported (Excel) rows are all still
-        # 'draft' and legitimately incomplete, so this is usually non-empty for
-        # them. Imported inside the function: helpers imports this module, so a
-        # module-level import would be circular.
-        "missing_fields" : _submission_errors(consignment),
+        # NO `missing_fields` KEY. Imports has no submit rule set any more (see
+        # app/imports/helpers.py, "THERE IS NO SUBMIT VALIDATION IN IMPORTS ANY
+        # MORE"), so there are no named gaps to publish and nothing on the front
+        # end blocks or badges on them. Logistics and trucking still publish
+        # theirs; this is the imports-only divergence, deliberately.
 
         # Cross-module hand-off. NULL = not sent; the list shows a "Sent"
         # column from these and disables each Send button once its own

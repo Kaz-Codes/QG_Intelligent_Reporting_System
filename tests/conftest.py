@@ -65,7 +65,7 @@ def item(**overrides):
 
 
 def consignment(**overrides):
-    """A consignment header, defaulted to complete and submittable."""
+    """A consignment header, defaulted to a live, open, mid-pipeline record."""
     base = dict(
         id=1,
         branch_id=1,
@@ -83,6 +83,11 @@ def consignment(**overrides):
         eta=None,
         foreign_total=None,
         pkr_total=None,
+        # The two state flags. They are independent now: `is_closed` tests the
+        # status alone, and `record_state` says only that a user marked the
+        # record finished. Defaults match what a fresh record carries.
+        record_state="draft",
+        is_locked=False,
     )
     base.update(overrides)
     return Obj(**base)

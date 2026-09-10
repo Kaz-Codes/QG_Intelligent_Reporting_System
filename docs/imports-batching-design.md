@@ -2605,6 +2605,29 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    line, every field, drafts and deleted excluded). Both independent, and the
    export forces a full field inventory before the model moves.
 2b. **Remove the submission rules and decouple closing from submitting** (§3.10).
+   **DONE**, as its own PR, ahead of step 6 — it deletes `submission_errors()`
+   outright, so repointing its `branch_id` / `supplier_id` rules onto the group
+   in step 6 would have been work thrown away, and it takes
+   `imports/helpers.py:953` off the 24-consumer list.
+
+   Built exactly as specified below, plus four things found while building:
+
+   - **`is_truly_closed` and `is_closed` agree on all existing data.** The
+     one-part and two-part tests both return 148 on the 178 live rows; zero
+     consignments are at "Arrived at Works" while unlocked. So the default
+     list is unchanged today and the new rule only affects records created
+     from now on — §4.9's finding, re-confirmed against the restored clone.
+   - **`revert_old_values` has the same silent-skip bug as
+     `revert_local_fields` had, for ITEM history, and no loud failure at all.**
+     Out of scope here; it is in step 6, together with routing (§4.7 item 1).
+   - **`itemPendingFields` survives the front-end deletion.** It is an
+     input-layer prompt beside a field being typed, not a prediction of a gate,
+     which is precisely where quality was moved TO. `consignmentSubmitSchema`,
+     `pendingFields` and `submitRequirements` all went; that one did not.
+   - **The production database carries no `alembic_version` row**, so the
+     `create_all` gate is not yet active on it and `alembic stamp head` has
+     still never been run there. Noted, not acted on.
+
    One change, because the pieces are only safe together:
    - `submission_errors()`, `missing_fields`, the eight frontend consumers, and
      imports' entry in `tests/test_submission_rules.py` — **not** logistics' or

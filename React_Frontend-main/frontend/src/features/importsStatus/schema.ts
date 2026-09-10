@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import type { SubmitRequirement } from '@/lib/submitRequirements'
 
 /**
  * Imports Status — consignment data contract.
@@ -376,69 +375,6 @@ export const consignmentDraftSchema = consignmentStepSchema
 export type ConsignmentDraft = z.infer<typeof consignmentDraftSchema>
 
 /* ------------------------------------------------------------------ */
-/* Submit-time rules                                                   */
-/* ------------------------------------------------------------------ */
-
-/**
- * Everything the draft lets slide, enforced here. Deliberately NOT required:
- * payments (a consignment can sit part-paid for months), the whole clearance
- * module (completed after landing), and landed cost (finalised by accounts
- * long after arrival).
- */
-export const consignmentSubmitSchema = consignmentDraftSchema.superRefine((v, ctx) => {
-  const need = (path: (string | number)[], message: string) =>
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path, message })
-
-  if (!v.branch) need(['branch'], 'Branch is required')
-  if (!v.supplier) need(['supplier'], 'Supplier is required')
-  if (!v.origin) need(['origin'], 'Country of origin is required')
-  if (!v.currency) need(['currency'], 'Currency is required')
-
-  if (v.items.length === 0) {
-    need(['items'], 'Add at least one item')
-  }
-
-  v.items.forEach((item, i) => {
-    if (!item.itemName) need(['items', i, 'itemName'], 'Item name is required')
-    // "Others" items aren't drawn from the item master, so there's often no
-    // code to give. MIRRORED ON THE BACKEND: app/imports/helpers.py
-    // (submission_errors, ITEM_CODE_NOT_REQUIRED_FOR) makes the same field
-    // optional, keyed off the capitalised requisition type. Keep both in sync.
-    if (!item.itemCode && item.requisitionType !== 'others') {
-      need(['items', i, 'itemCode'], 'Item code is required')
-    }
-    if (item.quantity === undefined) need(['items', i, 'quantity'], 'Quantity is required')
-    if (!item.uom) need(['items', i, 'uom'], 'Unit of measure is required')
-
-    if (!item.requisitionType) {
-      need(['items', i, 'requisitionType'], 'Requisition type is required')
-    } else {
-      // conditional requirements read from the same map the form uses
-      REQUISITION_FIELDS[item.requisitionType].forEach((f) => {
-        if (!item[f]) {
-          need(['items', i, f], `${f} is required for a ${item.requisitionType} item`)
-        }
-      })
-    }
-  })
-
-  if (!v.paymentInstrument) need(['paymentInstrument'], 'Payment instrument is required')
-  if (!v.instrumentNo) need(['instrumentNo'], 'Instrument number is required')
-  if (!v.works) need(['works'], 'Works is required')
-  if (v.exchangeRate === undefined) need(['exchangeRate'], 'Exchange rate is required')
-  if (!v.rateDate) need(['rateDate'], 'The date the rate was booked is required')
-
-  if (!v.status) need(['status'], 'Status is required')
-
-  if (v.etd && v.eta && new Date(v.eta) < new Date(v.etd)) {
-    need(['eta'], 'ETA cannot be before ETD')
-  }
-  if (v.gateOutDate && v.eta && new Date(v.gateOutDate) < new Date(v.eta)) {
-    need(['gateOutDate'], 'Gate out cannot be before arrival')
-  }
-})
-
-/* ------------------------------------------------------------------ */
 /* Defaults                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -601,23 +537,22 @@ export const totalExpenditure = (
 }
 
 /* ------------------------------------------------------------------ */
-/* Pending information                                                 */
+/* Per-item hints, while typing                                        */
 /* ------------------------------------------------------------------ */
 
 /**
- * Drives the per-item badges, the per-step banners and the list view's
- * "fields missing" flag. One implementation so a field added later surfaces
- * everywhere at once, and every gap is named rather than left blank.
+ * The badge beside an item row in Step 1 listing what it still lacks.
+ *
+ * THIS SURVIVED THE RULE-SET REMOVAL DELIBERATELY, and it is worth saying why,
+ * because everything around it went. `consignmentSubmitSchema`, `pendingFields`
+ * and `submitRequirements` were all deleted with the backend's
+ * `submission_errors()`: they existed to PREDICT a gate, and there is no gate
+ * left to predict.
+ *
+ * This one is not a prediction. It is an input-layer affordance — a prompt next
+ * to the field while somebody is filling it in — which is exactly where data
+ * quality was moved TO. It blocks nothing and gates nothing.
  */
-export const pendingFields = (d: ConsignmentDraft): string[] => {
-  const out: string[] = []
-  const parsed = consignmentSubmitSchema.safeParse(d)
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) out.push(issue.message)
-  }
-  return [...new Set(out)]
-}
-
 export const itemPendingFields = (item: ConsignmentItem): string[] => {
   const out: string[] = []
   if (!item.itemName) out.push('Item name')
@@ -637,107 +572,3 @@ export const itemPendingFields = (item: ConsignmentItem): string[] => {
   return out
 }
 
-/* ------------------------------------------------------------------ */
-/* What still blocks Submit                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * The outstanding submission requirements, each attributed to the step that
- * owns the field — drives the wizard's requirements banner and the disabled
- * Submit button.
- *
- *
- * MIRRORS app/imports/helpers.py::submission_errors, NOT consignmentSubmitSchema
- * ABOVE, and the two are not the same. The schema carries ONE EXTRA RULE the
- * backend does not enforce:
- *
- *     gateOutDate < eta  ->  "Gate out cannot be before arrival"
- *
- * The backend checks only eta < etd. So a consignment with a gate-out before
- * its arrival date submits perfectly well server-side, and deriving this
- * banner from the zod schema would disable Submit over something nothing
- * actually refuses. Predicting the backend is the whole job here, so this
- * list follows the backend.
- *
- * The extra rule is left in consignmentSubmitSchema untouched — it is a real
- * data-quality check and removing it is a separate decision, flagged rather
- * than silently resolved.
- *
- * Wording is kept close to the backend's own strings so this banner and a 422
- * that slips through anyway describe the same gap the same way.
- */
-
-/** A field the user has not provided. Number inputs hand back '' when
- *  cleared and the draft's preprocessed numbers widen to `unknown` on the
- *  INPUT side of the schema, so this covers all three spellings of absent.
- *  Matches the backend's `is None` / falsy checks. */
-const absent = (v: unknown) => v === undefined || v === null || v === ''
-
-export function submitRequirements(
-  d: z.input<typeof consignmentDraftSchema>,
-): SubmitRequirement[] {
-  const out: SubmitRequirement[] = []
-
-  const at = (step: number) => {
-    const def = stepByNumber(step)
-    return { step, stepLabel: def?.label ?? `Step ${step}` }
-  }
-
-  const need = (step: number, message: string) => out.push({ message, ...at(step) })
-
-  // --- Step 1: Consignment ---
-  if (!d.branch) need(1, 'Branch is required')
-  if (!d.supplier) need(1, 'Supplier is required')
-  if (!d.origin) need(1, 'Country of origin is required')
-  if (!d.currency) need(1, 'Currency is required')
-
-  const items = d.items ?? []
-  if (items.length === 0) need(1, 'Add at least one item')
-
-  const REQ_LABELS: Record<string, string> = {
-    referenceNo: 'Reference no.',
-    jobNo: 'Job no.',
-    moNo: 'MO no.',
-    othersDescription: 'Description',
-  }
-
-  items.forEach((item, i) => {
-    const n = i + 1
-    if (!item.itemName) need(1, `Item ${n}: item name is required`)
-    // "Others" lines are not drawn from the item master, so there is often no
-    // code — ITEM_CODE_NOT_REQUIRED_FOR on the backend, keyed off the
-    // capitalised type; the draft holds the lowercase one.
-    if (!item.itemCode && item.requisitionType !== 'others') {
-      need(1, `Item ${n}: item code is required`)
-    }
-    if (absent(item.quantity)) need(1, `Item ${n}: quantity is required`)
-    if (!item.uom) need(1, `Item ${n}: unit of measure is required`)
-
-    if (!item.requisitionType) {
-      need(1, `Item ${n}: requisition type is required`)
-    } else {
-      REQUISITION_FIELDS[item.requisitionType].forEach((f) => {
-        if (!item[f]) {
-          need(1, `Item ${n}: ${REQ_LABELS[f] ?? f} is required for a ${item.requisitionType} item`)
-        }
-      })
-    }
-  })
-
-  // --- Step 2: Finance ---
-  if (!d.paymentInstrument) need(2, 'Payment instrument is required')
-  if (!d.instrumentNo) need(2, 'Instrument number is required')
-  if (!d.works) need(2, 'Works is required')
-  if (absent(d.exchangeRate)) need(2, 'Exchange rate is required')
-  if (!d.rateDate) need(2, 'The date the rate was booked is required')
-
-  // --- Step 5: Status ---
-  if (!d.status) need(5, 'Status is required')
-
-  // --- Step 3: Shipping ---
-  if (d.etd && d.eta && new Date(d.eta) < new Date(d.etd)) {
-    need(3, 'ETA cannot be before ETD')
-  }
-
-  return out
-}
