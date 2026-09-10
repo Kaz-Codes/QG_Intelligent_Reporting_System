@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, sync_batch_group
 
 from app.imports.helpers import (
     fetch_consignment, consignment_reference, is_closed, CLOSED_STATUS_VALUE,
@@ -313,6 +313,13 @@ def update_consignment(
         # no longer carry, which is the drift the over-allocation CHECK cannot
         # see and `post_load`'s "Allocation totals" check exists to catch.
         sync_order_items(consignment, db)
+
+        # AND THE ORDER ABOVE THE BATCH, for the same reason one level up. The
+        # group holds the copy of supplier / currency / exchange rate that every
+        # dashboard now reads; without this an edit updated the batch and left
+        # the group showing the value it was created with, for ever. Only batch
+        # 1 writes it — see sync_batch_group.
+        sync_batch_group(consignment, db)
 
         # Recompute + store the derived money totals and per-line variance from
         # the now-updated lines and rate.

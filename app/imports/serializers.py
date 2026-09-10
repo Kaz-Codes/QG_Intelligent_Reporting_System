@@ -71,6 +71,19 @@ def serialize_consignment(consignment, db, include_change_history=True):
 
     data = {
         "id" : consignment.id,
+
+        # WHICH ORDER THIS CONSIGNMENT IS A BATCH OF, and where in it.
+        #
+        # Published because a list row that cannot say which order it belongs to
+        # cannot show two batches of one LC as anything but two unrelated rows.
+        # Both are server-controlled: `batch_sequence` is assigned at creation
+        # and never reused, so 177-2 identifies one shipment for ever.
+        #
+        # The DISPLAY form built from these ("177" alone while an order has one
+        # batch, "177-2" once it has more) is section 3.4's `consignment_number`
+        # and is not built yet — these are the raw values it will need.
+        "batch_group_id" : consignment.batch_group_id,
+        "batch_sequence" : consignment.batch_sequence,
         "branch" : serialize_master(consignment.branch),
         "supplier" : serialize_master(consignment.supplier),
         "works" : consignment.works,

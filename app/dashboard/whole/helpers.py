@@ -258,10 +258,24 @@ def imports_period_value(db, date_from, date_to, date_field=None, shafts_only=Fa
     scope = [*_imports_scope(shafts_only),
              _imports_window_membership(date_field, date_from, date_to)]
 
-    value, consignments = db.execute(
+    # TWO UNITS, BOTH PUBLISHED — never one silently.
+    #
+    # `consignments` counts BATCHES, and has to: VALUE is summed per batch row,
+    # so an order count beside a row-summed total would give a false average per
+    # unit. But once an LC can arrive in two shipments, "Rs 29bn across 14
+    # consignments" stops saying whether that is 14 orders or 14 arrivals, and
+    # the reader cannot tell which.
+    #
+    # So `orders` goes out alongside it. This is the reference-list rule in
+    # app/dashboard/references.py applied one level up: a figure may report a
+    # second unit, and must never report a different number with nothing saying
+    # why. The tile keeps counting batches; the panel can now say "2 batches
+    # across 1 order".
+    value, consignments, orders = db.execute(
         select(
             func.coalesce(func.sum(CONSIGNMENT_VALUE), 0),
             func.count(Consignment.id),
+            func.count(Consignment.batch_group_id.distinct()),
         )
         .where(*scope)
     ).one()
@@ -274,7 +288,7 @@ def imports_period_value(db, date_from, date_to, date_field=None, shafts_only=Fa
         .where(*scope)
     ).scalar()
 
-    return value, consignments, lines
+    return value, consignments, orders, lines
 
 
 def imports_value_undated(db, date_field=None, shafts_only=False):
@@ -792,14 +806,23 @@ def imports_population(db, date_from=None, date_to=None, date_field=None,
             func.count(Consignment.id),
             func.coalesce(func.sum(CONSIGNMENT_VALUE), 0),
             *bucket(in_process), *bucket(arrived), *bucket(cancelled),
+            # The second unit, as in imports_period_value. Only for the TOTAL:
+            # the three buckets are keyed on status, which is a per-batch fact,
+            # so an order whose two batches sat at different statuses would be
+            # counted under both and the buckets would stop adding up to the
+            # total. There is no honest order count per bucket, so none is
+            # published — a missing figure beats one that does not reconcile.
+            func.count(Consignment.batch_group_id.distinct()),
         ).where(*scope)
     ).one()
 
     keys = ("total", "in_process", "arrived", "cancelled")
-    return {
+    population = {
         key: {"count": row[i * 2], "value": row[i * 2 + 1]}
         for i, key in enumerate(keys)
     }
+    population["total"]["orders"] = row[8]
+    return population
 
 
 #-----------------------------------------------------

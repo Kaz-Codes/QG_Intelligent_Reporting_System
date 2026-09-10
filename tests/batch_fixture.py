@@ -73,6 +73,14 @@ def _pick_group(cur):
     Priced, because the split has to move VALUE as well as rows — a group whose
     lines carry no quantity or no price would produce two batches that both
     contribute zero, and every value assertion would pass trivially.
+
+    AND PREFERRING ONE WITH A CLEARING AGENT, SUPPLIER AND BRANCH, because those
+    three masters are where the count decision actually goes two ways: supplier
+    and branch count orders, the clearing agent counts batches (design section
+    3.2, #14). A group with no agent still splits fine and the check simply
+    skips that assertion — which means the one decision most likely to be got
+    wrong would be the one never exercised. Ordered rather than filtered, so a
+    database with no such group still produces a usable fixture.
     """
     cur.execute("""
         SELECT g.id, c.id
@@ -88,7 +96,11 @@ def _pick_group(cur):
                    AND i.is_deleted = false
                    AND i.quantity IS NOT NULL
                    AND i.quantity > 1) >= 1
-         ORDER BY g.id
+         ORDER BY
+           (c.clearing_agent_id IS NOT NULL) DESC,
+           (g.supplier_id IS NOT NULL) DESC,
+           (g.works_branch_id IS NOT NULL) DESC,
+           g.id
          LIMIT 1
     """)
     row = cur.fetchone()

@@ -1056,6 +1056,50 @@ def new_batch_group(consignment, user, db):
 
 
 #---------------------------------------
+# KEEPING THE GROUP IN STEP WITH ITS BATCH
+#
+# A BUG, FOUND WHILE MOVING THE READERS ONTO THE GROUP. `new_batch_group` above
+# copies the shared values onto the group ONCE, at creation, and until now
+# nothing copied them again. So editing a consignment's supplier, currency or
+# exchange rate updated the consignment and left the group holding the value
+# from the day it was created.
+#
+# It was harmless only because nothing read the group yet. It stops being
+# harmless in this change, which is the change that makes the group the copy
+# every screen reads: without this, a supplier corrected on Tuesday would show
+# the old supplier on every dashboard for ever. That is precisely the
+# "duplicated state becoming divergence" the expand-and-contract split exists to
+# prevent (section 4.7), arriving through the one path 4.7 did not name — not a
+# raw INSERT, but an ordinary ORM update of the copy that is no longer read.
+#
+# THIS IS TRANSITIONAL. It exists only while both copies are present. Once the
+# mapped attributes come off `Consignment` there is nothing left to mirror FROM:
+# the write path sets the group directly and this function goes with the
+# columns. It is here rather than deferred because the readers move first, and
+# they cannot safely move onto a copy nothing maintains.
+#---------------------------------------
+
+def sync_batch_group(consignment, db):
+    """Mirror the shared values from a batch onto the order above it.
+
+    Only from batch 1. A later batch does not own the order's commercial terms,
+    so letting it write them would make "what did we agree" depend on whichever
+    shipment was saved last — the exact drift the group exists to remove.
+    """
+    group = consignment.batch_group
+
+    if group is None or consignment.batch_sequence != 1:
+        return group
+
+    for field in GROUP_SHARED_FIELDS:
+        setattr(group, field, getattr(consignment, field, None))
+
+    group.works_branch_id = consignment.branch_id
+
+    return group
+
+
+#---------------------------------------
 # THE ORDER LINE ABOVE A SHIPMENT LINE
 #
 # While a group holds ONE batch, "what was ordered" and "what this shipment

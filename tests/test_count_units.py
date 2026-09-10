@@ -140,7 +140,15 @@ def counts_rows(stmt) -> bool:
 def counts_groups(stmt) -> bool:
     text = sql(stmt)
     return (
+        # Two spellings, both accepted deliberately: `col.distinct()` emits the
+        # DISTINCT keyword and `func.distinct(col)` emits a function call. They
+        # are the same thing to Postgres, and this suite is asserting what is
+        # COUNTED, not how the DISTINCT was spelled — over-specifying the syntax
+        # would fail a correct implementation for a stylistic reason.
         "count(DISTINCT consignments.batch_group_id)" in text
+        or "count(distinct(consignments.batch_group_id))" in text
+        # Where the query has already moved onto the group table (masters
+        # supplier / branch), a plain row count IS an order count.
         or "count(consignment_batch_groups.id)" in text
     )
 

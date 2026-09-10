@@ -300,11 +300,22 @@ else:
               _lt == rows_all and _lt != groups_all,
               f"{_lt} vs {rows_all} batches / {groups_all} orders")
 
-        _both = c.get("/consignments/", params={"page": 1, "page_size": 200,
-                                                "include_closed": True}).json()["data"]
-        _ids = [r["id"] for r in _both if r.get("batch_group_id") == _split]
+        # PAGED, not one big request: the list route clamps page_size, so
+        # asking for 200 silently returns 20 and "the row is missing" would be
+        # a bug in this check rather than in the list.
+        _ids, _page = [], 1
+        while True:
+            _body = c.get("/consignments/", params={"page": _page, "page_size": 50,
+                                                    "include_closed": True}).json()
+            _ids += [r["id"] for r in _body["data"]
+                     if r.get("batch_group_id") == _split]
+            if _page >= (_body["pagination"]["total_pages"] or 1):
+                break
+            _page += 1
         check("both batches of the split order appear as separate rows",
-              len(_ids) == 2, f"group {_split} -> {_ids}")
+              len(_ids) == 2, f"group {_split} -> {sorted(_ids)}")
+        check("the list publishes which order a row belongs to",
+              all(r.get("batch_group_id") for r in _body["data"]))
 
         # --- #3 and #9: rows on the tile, orders published alongside ---
         WIDE = ("2000-01-01", "2035-12-31")
