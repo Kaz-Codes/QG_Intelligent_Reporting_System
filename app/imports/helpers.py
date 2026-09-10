@@ -1084,7 +1084,23 @@ def sync_batch_group(consignment, db):
 
     Only from batch 1. A later batch does not own the order's commercial terms,
     so letting it write them would make "what did we agree" depend on whichever
-    shipment was saved last — the exact drift the group exists to remove.
+    shipment was saved last - the exact drift the group exists to remove.
+
+    THE BATCH-1 RULE IS A PROPERTY OF THIS MIRROR. IT IS NOT THE ANSWER TO "WHO
+    EDITS THE ORDER", AND IT MUST NOT BECOME ONE.
+
+    It is the right rule for a mirror, because a mirror needs exactly one source
+    and batch 1 is the only non-arbitrary choice of source. It is the WRONG rule
+    for editing: any batch may be deleted, the founding one included, and once
+    batch 1 is gone this function can never fire again - so under this rule as a
+    permanent design, an order whose first shipment was deleted would have terms
+    nobody could correct, silently.
+
+    That costs nothing today only because the mirror is temporary. It disappears
+    with the columns it mirrors from: once the shared attributes come off
+    `Consignment` there is one copy again, and the write path sets the group
+    directly rather than through any batch. Step 7 edits the group AS THE GROUP
+    (design section 3.8) - not through a privileged batch, and not through this.
     """
     group = consignment.batch_group
 

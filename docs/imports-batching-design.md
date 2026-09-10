@@ -91,6 +91,67 @@ runs against a scratch database and changes no schema.
 
 ---
 
+## A LIVE BUG, FOUND HERE, THAT IS NOT THIS PROJECT'S — 172 of 178 consignments cannot be saved
+
+**Not a batching problem, not caused by any of this work, and older than all of
+it.** Found while step 6 drove the real routes; recorded here because this is
+where it surfaced and it needs its own change.
+
+**A loaded consignment cannot be re-saved. The `PUT` 422s on a field the user
+never touched.**
+
+The detail route returns `mode_of_shipment: "Sea"`. The wizard posts the whole
+draft back on every save (it must — the update route diffs items against the
+payload). `ConsignmentSchema` types that field as `ModeOfShipment`, which holds
+`Sea freight FCL / Sea freight LCL / Air freight / Land/courier`. `"Sea"` is
+none of them, so the save is rejected. Reproduced end to end against a clone.
+
+**Nothing on the front end normalises it.** `importsMap.apiToDraft` casts with
+`as ConsignmentDraft['modeOfShipment']` — a compile-time assertion with no
+runtime effect — and `draftToPayload` passes the raw string through
+`strOrUndef`. CLAUDE.md's claim that the map gates *"enum values against the
+backend sets so an unmapped value is omitted, not 422'd"* holds for
+`consignment_type` alone (`CONSIGNMENT_TYPE_TO_API`); the other five fields have
+no gate. The zod draft schema rejects the value too, so the wizard is
+inconsistent with itself as well.
+
+**Measured on this dev box's 178 live consignments** (production has 191 and
+will differ):
+
+| Column | Out of enum | Detail |
+|---|---|---|
+| `mode_of_shipment` | **171 of 178** | Not one stored value is valid. `Sea` (93), `By Sea` (37), `Air` (23), `By Air` (5), `LCL` (1), plus 12 rows holding container specs — `1 x 20' O/T`, `3 x 20' Std.` |
+| `payment_instrument` | **87 of 178** | `Advance` (71), `FOC` (6), `Exp` (5), `TT` (3), `100%LC` (1), `Contract` (1). Valid: `LC` 64, `CAD` 17 |
+| `currency` | 0 | all valid or NULL |
+| `consignment_type` | 0 | all valid or NULL |
+| `incoterm` | 0 | NULL on every row |
+| `rate_source` | 0 | NULL on every row |
+| `requisition_type` | 0 | NULL on all 450 lines |
+
+**172 of 178 live consignments (96.6%) carry at least one such value.**
+
+**It has gone unnoticed only because nobody has edited a loaded consignment
+yet** — which is exactly the condition that is about to end.
+
+**Deliberately NOT fixed in step 6, and it is not a one-line coercion.** Each
+available fix is a decision somebody has to make:
+
+- **Gate at `apiToDraft`** (drop what does not match): one line per field, and it
+  blanks `mode_of_shipment` on 171 rows the moment anyone saves. Silent data
+  loss dressed as a fix.
+- **Normalise the data**: `Sea` → FCL or LCL is a business call and is not
+  inferable; the 12 container-spec rows are not a shipment mode at all and
+  belong in a different column.
+- **Widen the enums**: `TT` is a real payment method the enum simply lacks;
+  `FOC`, `Exp` and `Contract` need someone to say what they are. Adding a value
+  is a one-line change by design (CLAUDE.md, "Enums"), but *which* values is the
+  question.
+
+All three touch data the business owns, so this stops here and goes back rather
+than being resolved silently.
+
+---
+
 ## Verifying this work
 
 ```
@@ -1209,6 +1270,25 @@ is only one value. Editing the field means editing the group.
 Drift is possible; keeping the copies aligned needs a propagation write to every
 sibling on every save.
 
+> **Revision 7 — and the same distinction applies to WRITING, so record it
+> before the transitional mirror sets a precedent.**
+>
+> Step 6 adds `helpers.sync_batch_group`, which mirrors the shared values from
+> **batch 1 only** onto the group. That is correct for a MIRROR: a mirror needs
+> exactly one source, and batch 1 is the only non-arbitrary choice.
+>
+> **It is not the answer to "who edits the order", and it must not become one.**
+> Any batch may be deleted, the founding one included. Under a batch-1 rule as a
+> permanent design, an order whose first shipment was deleted would have
+> commercial terms nobody could ever correct — and it would fail silently, since
+> the write would simply not propagate.
+>
+> **Step 7 edits the group AS THE GROUP**: one row, addressed directly, with the
+> §3.9 freeze as the only thing standing in front of it. No batch is privileged.
+> The mirror is temporary and disappears with the columns it mirrors from — once
+> the shared attributes come off `Consignment` there is one copy again and
+> nothing to propagate, which is the whole point of (i).
+
 **I am implementing (i)** for every field in the "shared" and "entered once on
 batch 1" lists — supplier, origin, currency, consignment type, incoterm, payment
 instrument and number, exchange rate, rate booked on, rate source, works, and
@@ -2047,6 +2127,39 @@ had to be checked rather than assumed:
 3. **Raw SQL anywhere else.** There is none against these columns outside the
    loaders and the dashboards, and the dashboards only read. Named for
    completeness.
+
+4. **AN ORDINARY ORM UPDATE OF THE COPY NOBODY READS — added in revision 7,
+   after it actually happened.** This is the one that got through, and it is
+   worth stating separately because the first three are all about writes that
+   bypass the model, and this one does not bypass anything.
+
+   *"SQLAlchemy cannot write a column it does not know about"* is true, and it
+   was never the whole story. **The control is only as good as the moment the
+   attributes come off** — and between the migration and that moment, both
+   copies exist and both are perfectly writable. The failure needs no raw SQL
+   and no loader: `new_batch_group` copied the shared values onto the group once
+   at creation and nothing copied them again, so an ordinary `PUT` updated the
+   consignment and left the group holding its creation-day value. No error, no
+   raw INSERT, no bypass — just two copies and one writer.
+
+   It was invisible because it is the *unread* copy that goes stale, and an
+   unread copy diverging costs nothing until the day it is read. The change that
+   moves the readers is therefore the change that detonates it, which is exactly
+   the worst time to find out.
+
+   **The general form, which is what to carry forward: during an
+   expand-and-contract gap, EVERY write path has to maintain BOTH copies, not
+   just the ones outside the ORM.** `helpers.sync_batch_group` is the fix and it
+   is deliberately transitional — once the attributes are gone there is one copy
+   again and nothing to mirror.
+
+   **This is the third time this document named a risk and got the mechanism
+   wrong.** The verification command was worthless for exactly the class of
+   change it was meant to cover (revision 6); the circular foreign key could
+   never have been inserted as specified (revision 6); and §4.7 guarded the
+   three exotic write paths while the ordinary one diverged. The pattern is not
+   that the risks were wrong — all three were real — but that the *mechanism*
+   was reasoned about rather than exercised. Build it before believing it.
 
 #### The failure this uncovered: revert across the migration boundary
 
