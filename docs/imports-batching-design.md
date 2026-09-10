@@ -1,9 +1,35 @@
 # Imports batching — design
 
-**Status: approved; PHASE 1 IS BUILT.** Alembic revision `a1c4f27b93de`
-(revision A — expand), the model changes it needs, the minimum create logic, the
-loaders and the `post_load` checks are written and verified against a scratch
-database. Everything from §9 step 6 onward is still a proposal.
+**Status: approved; PHASE 1 AND STEP 2b ARE BUILT.** Alembic revision
+`a1c4f27b93de` (revision A — expand), the model changes it needs, the minimum
+create logic, the loaders and the `post_load` checks are written and verified
+against a scratch database. **Step 2b** (submission rules removed, closing
+decoupled from submitting — §3.10) shipped as its own PR ahead of step 6.
+**Step 6's decisions are now DECIDED and recorded below** — §3.2 for the 14
+counts, §3.3 for the four consumer groups — but not yet built. Everything from
+§9 step 6 onward is still a proposal.
+
+---
+
+## Changelog — revision 7 (step 6 decided, not yet built)
+
+**This revision converts proposals into decisions.** §3.2 previously said "each
+of the 14 needs a recorded decision"; it now records them. §3.3 previously
+grouped the 24 consumers; it now says what each group becomes and how. Three
+entries below are corrections to this document rather than new decisions.
+
+| What moved | Why |
+|---|---|
+| **§3.2 — the 14 counts are DECIDED, per site** | Twelve count rows, one (masters) splits three ways: supplier and branch count GROUPS, clearing agent counts ROWS. Recorded in the table there with the reason for each, and to be written into the code rather than a commit message. |
+| **§3.2 — #3 and #9 publish BOTH units** | `imports_period_value` and `imports_population` keep counting rows on the tile (they must, to stay reconcilable with their buckets and their value) and additionally publish the group count. CLAUDE.md's reference rule already requires both units rather than one silently; this is an added field, not a changed one. |
+| **§3.3 — the four consumer groups are DECIDED**, with the mechanics | Branch → `group.works_branch_id` (10). `required_date` splits FOUR ways, not one — a shared correlated MIN (4), Python reads over loaded lines (3), two sites that gain a genuine per-line column (2), and the ranked drill-down (2). `requisition_date` → the order item, no aggregate (3), with the write path keeping the header key. |
+| **§3.3 — a consequence recorded because it is a real gap** | `consignment_order_items.branch_id` is written, back-filled and displayed, and **nothing aggregates on it**. Every branch total in the app stays one-branch-per-order. Moving branch reporting onto the item is a deliberate separate change, not something to slip into this one. |
+| **§4.7 — CORRECTION: it is 219 references across 19 files, not "around 116"** | And not 24. The 24 are the sites whose MEANING changes; the attribute removal also takes the `Consignment.branch` / `.supplier` / `ConsignmentItem.item` RELATIONSHIPS with their join columns, so every `.branch.name` read goes too. It also **inverts the write path**, which §4.7 never said. |
+| **§4.7 — the revert routing is TWO paths, not one** | `revert_old_values` has the identical mapper-driven silent-skip bug for ITEM history and, unlike `revert_local_fields`, **no loud failure at all**. Item history rows carry `item_code`, `item_name`, `unit_price` — all of which stop matching `ConsignmentItem`. Route to `ConsignmentOrderItem` and raise on neither. |
+| **§5.2 — CORRECTION: two stale claims** | It says the masters branch count goes "through the order item"; **§3.3 settled it on `group.works_branch_id`** and §5.2 was never updated. It also names `notify_created` but misses **`app/notifications/scanner.py:629`**, which reads `Consignment.instrument_number` and `payment_instrument` — both moving to the group. |
+| **§9 step 2b — DONE**, and moved ahead of step 6 | It deletes `submission_errors()` outright, so repointing its branch/supplier rules in step 6 was work about to be thrown away. It also takes `imports/helpers.py:953` off the 24-consumer list. Four findings from building it are recorded at step 2b. |
+| **The count assertions need data that does not exist yet** | Every group holds exactly one batch today, so rows and groups are numerically identical at all 14 sites and no HTTP-level assertion can tell a correct choice from a flipped one. Both halves are built: a pytest suite pinning each site's unit against the compiled SQL, and hand-built fixture rows in a scratch database for the reconciliation check. |
+| **Sanity check: no dashboard puts a consignment count on a tile FACE** | Every KPI face across the five dashboards is money, a percentage or days; counts live in the sub-line. The only face-value counts are bar charts (by country/supplier/works, in-process by stage), all status- or attribute-shaped, where rows is the only coherent reading. The real "reads as an LC" risk is the reference LISTS — see §3.4's note. |
 
 ---
 
@@ -549,32 +575,97 @@ would return 1 for a page showing 2 and paging would break.
 *Added:* an index on `batch_group_id`; the group's number and batch label in the
 serialized row; the blue "pending allocation" flag (§3.7).
 
-**Dashboard counts — the real cost.** Fourteen sites:
-
-| File | Lines |
-|---|---|
-| `app/dashboard/imports/helpers.py` | 73, 78 |
-| `app/dashboard/whole/helpers.py` | 264, 292, 310, 350, 556, 575, 792, 860, 863 |
-| `app/dashboard/whole/references.py` | 518 |
-| `app/imports/helpers.py` | 270 |
-| `app/masters/helpers.py` | 250 |
-
-(`whole/helpers.py:270`, `whole/references.py:652`, `imports/helpers.py:313`
-count items and history rows and are unaffected.)
+**Dashboard counts — the real cost. DECIDED, per site.**
 
 An LC split in two counts as **2** where today it counts as 1. Each of the 14
-needs a recorded decision: *how many LCs* (count distinct `batch_group_id`) or
-*how many arrivals* (count rows)?
+sites therefore has to say whether it means *how many LCs* (count distinct
+`batch_group_id`) or *how many arrivals* (count rows). Line numbers are the
+current tree; several drifted in Phase 1.
 
-My default per site: **arrival-shaped figures count rows** (in-process by stage,
-status splits, delay counts — a late batch is a late arrival regardless of its
-siblings); **commercial-shaped figures count groups** (the Branch master's
-"used" counts at `masters/helpers.py:164` and `:250`). A judgement per site, not
-a rule applied blind, and the largest single line item in the build.
+| # | Site | Figure | Unit | Why |
+|---|---|---|---|---|
+| 1 | `dashboard/imports/helpers.py:73` | `source_coverage` — total | **rows** | Its own docstring settles it: the coverage denominator has to be the population on screen, and the screen lists batches. |
+| 2 | `dashboard/imports/helpers.py:78` | `source_coverage` — in-period | **rows** | Numerator of #1. A different unit makes the percentage meaningless. |
+| 3 | `whole/helpers.py:264` | `imports_period_value` — `consignments` | **rows**, + group count published | Value is summed per batch row, so a group count beside a row-summed value gives a false average. See "both units" below. |
+| 4 | `whole/helpers.py:292` | `imports_value_undated` — count | **rows** | The complement of #3's population. Dated + undated must add back to it. |
+| 5 | `whole/helpers.py:310` | `imports_date_coverage` — total | **rows** | A completeness ratio over the same population as #3. |
+| 6 | `whole/helpers.py:350` | `imports_in_process_by_stage` | **rows** | Groups is not expressible here: status is per batch, and two batches of one LC are legitimately at different stages. |
+| 7 | `whole/helpers.py:556` | `shipments_handled` — import total / datable | **rows** | The figure's name is the unit. A batch *is* a shipment handled. |
+| 8 | `whole/helpers.py:575` | `shipments_handled` — in-window | **rows** | Same figure as #7, windowed. |
+| 9 | `whole/helpers.py:792` | `imports_population` — total + buckets | **rows**, + group count published | The buckets are status-keyed so they can only be rows (#6). The total must match its buckets AND equal #3. |
+| 10 | `whole/helpers.py:860` | `imports_coverage` — total | **rows** | The Overview's twin of #1. |
+| 11 | `whole/helpers.py:863` | `imports_coverage` — in-period | **rows** | The Overview's twin of #2. |
+| 12 | `whole/references.py:518` | `imports_delayed_references` — total | **rows** | Must equal `imports_delay`'s count (`:821`–`823`, already row-shaped). A batch arrives late on its own account. |
+| 13 | `imports/helpers.py:273` | list pagination total | **rows — forced** | It counts the rows the page returns. Groups here breaks paging, not merely the number. |
+| 14 | `masters/helpers.py:250` | `_grouped_count`, 3 callers | **split** | The column's new home decides it — below. |
 
-Given CLAUDE.md's history of two screens disagreeing on one metric, the
-group-vs-row choice goes into `tests/check_dashboard_consistency.py` in the same
-change.
+(`whole/helpers.py:270`, `whole/references.py:652`, `imports/helpers.py:316`
+count items and history rows and are unaffected.)
+
+**#14 splits three ways**, because one function serves three masters whose
+columns land in different places:
+
+- `:161` **supplier** → **groups**. `supplier_id` lives on the group, so the
+  query moves to `consignment_batch_groups` and counting its rows *is* counting
+  groups. "Used by N orders."
+- `:164` **branch** → **groups**, on `group.works_branch_id`. The clearest case
+  in the set: splitting one LC must not inflate a branch's usage.
+- `:190` **clearing agent** → **rows**. `clearing_agent_id` stays per batch
+  (§3.3, Step 3). An agent who cleared two batches of one LC did two
+  clearances, and **understating that in a deactivation guard fails in the
+  dangerous direction** — it invites someone to switch off an agent the
+  business is still using.
+
+**Twelve rows, two groups, one rows-on-a-per-batch-column. The shape of that
+answer is itself worth stating:** every imports *dashboard* figure comes out as
+rows because all of them are arrival- or status-shaped. The only
+commercial-shaped counts in the whole system are the masters usage counts.
+
+**#3 and #9 publish BOTH units.** "Rs 29bn across 14 consignments" turns
+ambiguous the moment one of those is a second batch. The tile keeps counting
+**rows** — it has to, to stay reconcilable with its buckets and its value — and
+the payload additionally carries the group count, so a panel can read *"2
+batches across 1 order, 3 lines"*. This is CLAUDE.md's existing reference rule
+(*"Both units are published, never one silently"*) applied one level up, and it
+is an added field rather than a changed one.
+
+**Is any of this read as "LCs" on screen? No — checked, not assumed.** Across
+all five dashboards every KPI tile FACE is money, a percentage or a day count;
+consignment counts live in the sub-line beneath, which is exactly where the
+second unit lands. The only places a count is the primary number are bar charts
+(Consignments by Country / Supplier / Works, Imports in process by stage) and
+all of them are status- or attribute-shaped, where rows is the only coherent
+reading. The genuine "reads as one LC shown twice" risk is not a count at all —
+it is the reference LISTS, which label each import row by `instrument_number`,
+so two batches of one LC render as two rows with an identical reference. That is
+§3.4's job (`consignment_number()` / `payment_reference()`, build-order step 1,
+**not yet shipped**), not a count decision.
+
+**The decisions go in the CODE, not in a commit message**, and each is asserted
+so a later change cannot flip one silently — see "Proving the count decisions"
+below.
+
+#### Proving the count decisions
+
+Given CLAUDE.md's history of two screens disagreeing about one metric, the
+group-vs-row choice is asserted rather than trusted. **Both halves are needed,
+and the reason is a fact about the data:**
+
+**Every group in the database holds exactly one batch.** Revision A gave each
+existing consignment a group of its own, and step 7 has not built batch
+creation yet. So at all 14 sites `count(rows)` and `count(distinct group)`
+return the identical number, and **no assertion driven through HTTP against
+the real data can distinguish a correct choice from a flipped one.** It would
+pass either way — the "both screens looked right" failure, in the very test
+written to prevent it.
+
+- **A pytest suite pins each site's unit**, against the compiled SQL rather
+  than against data. Pure, no database, runs in the default suite — so it is
+  the one that actually fails on a later edit.
+- **`tests/check_dashboard_consistency.py` proves the screens reconcile**,
+  against a scratch database carrying **hand-built fixture rows**: one group
+  with two batches, which is the only state in which rows and groups differ.
+  Scratch database only; it never touches an operational table.
 
 **`cross_module.py` `source_ref`.** No change required — each batch is a
 `Consignment` with its own id, `sent_to_trucking_at`, queue entry and reverse
@@ -634,15 +725,93 @@ and leaves 14 untouched**, because the 24 are not all branch consumers:
 
 | | Count | Sites | Effect |
 |---|---|---|---|
-| **Branch** | **10** | `imports/helpers.py:201`, `:920`; `dashboard/imports/helpers.py:149`, `:208`; `whole/references.py:89`, `:521`, `:533`, `:629`, `:657`; `masters/helpers.py:164` | **Covered.** Repoint from `Consignment.branch_id` to `group.works_branch_id`. |
+| **Branch** | **10** | `imports/helpers.py:204`, ~~`:953`~~; `dashboard/imports/helpers.py:149`, `:208`; `whole/references.py:89`, `:521`, `:533`, `:629`, `:657`; `masters/helpers.py:164` | **Covered.** Repoint from `Consignment.branch_id` to `group.works_branch_id`. |
 | **`required_date`** | **11** | `serializers.py:101`; `dashboard/imports/helpers.py:43`, `:125`; `dashboard/imports/calculations.py:631`, `:768`; `whole/helpers.py:71`, `:169`, `:821`, `:823`; `whole/references.py:501`, `:503` | **Not covered.** No header-level successor. Needs the earliest-across-items rule from §6 Q2. |
 | **`requisition_date`** | **3** | `serializers.py:100`; `reports/helpers.py:165`, `:167` | **Covered, and by a better route than an aggregate** — see below. |
+
+`imports/helpers.py:953` was `submission_errors`'s branch check and is **struck
+out: step 2b deleted the function**, so the branch group is 9 live sites, not
+10. That is the whole reason 2b went first.
 
 So the works answer is a real simplification — it removes the hardest third of
 the problem — but **it does not make §7 item 2 go away.** Fourteen date
 consumers still read a column that is moving down a level, and eleven of them
 now need the "earliest across the batch's items" rule applied consistently
 rather than only in the list column.
+
+#### What each group BECOMES — decided, revision 7
+
+The three rows above say where each consumer points afterwards. This says how,
+because the mechanics differ inside a group and one of them hides an N+1.
+
+**A — Branch → `group.works_branch_id`.** One substitution, two forms. Seven
+are SQL joins (`outerjoin(Branch, Branch.id == Consignment.branch_id)` in
+`dashboard/imports/helpers.py:149`, `:208` and `whole/references.py:89`, `:521`,
+`:533`, `:629`, `:657`) and become a join through `ConsignmentBatchGroup` — an
+extra join, not a subquery. Two are filters reading the group directly
+(`imports/helpers.py:204`'s list filter, `masters/helpers.py:164`'s usage
+count, the latter counting groups per §3.2 #14).
+
+**B — `required_date` → earliest across the batch's order items.** §6 Q2 fixes
+the rule (`min(order_item.required_date)` over the batch's live lines, ignoring
+lines with none). Applying it splits four ways:
+
+- **B1 · a shared correlated MIN, as a SQL column (4).**
+  `dashboard/imports/helpers.py:43` and `whole/helpers.py:71` (the two
+  `DATE_FIELDS` map entries), and `whole/helpers.py:821`, `:823`
+  (`imports_delay`'s `measurable` / `late`). **Defined once and imported, never
+  restated** — these four decide window membership and the Delayed tile, so two
+  spellings here is precisely the drift CLAUDE.md is a record of.
+- **B2 · Python reads over already-loaded lines (3).**
+  `dashboard/imports/calculations.py:631` (`delivery_delay`), `:768`
+  (`category_delays`), and `serializers.py:101`. **This is where the N+1
+  lands**: all three walk the whole filtered set, so
+  `selectinload(Consignment.items).joinedload(ConsignmentItem.order_item)` must
+  be added to `fetch_consignments`, `fetch_filtered_consigments` and
+  `fetch_consignments_page` in the same change. `serializers.py:101` is the one
+  §6 Q2 warns is easy to miss: the list payload carries no lines, so the SERVER
+  has to supply the minimum or the front end's `requiredDelayDays` silently
+  reads nothing while keeping its signature.
+- **B3 · two sites that GAIN a real per-line column (2).**
+  `dashboard/imports/helpers.py:125` and `whole/helpers.py:169`
+  (`line_date_column` / `_imports_line_column`) today fall back to the header
+  for `required_date`, with a comment saying no line equivalent exists. One now
+  does. They stop being fallbacks and filter `order_item.required_date` per
+  line — so **window membership under `date_field=required_date` gets strictly
+  more precise and row counts on that filter will change.** Correct, and stated
+  rather than discovered.
+- **B4 · the ranked drill-down (2).** `whole/references.py:501`, `:503`
+  (`days_late`). **Keeps the batch minimum**, deliberately: the rows are
+  consignments and the list must total the KPI it drills into (#12), which is
+  the failure CLAUDE.md is a record of. If the reader needs to know WHICH line
+  is late, that belongs in the row's detail string, not in what the row counts.
+
+**C — `requisition_date` → the order item's own column, no aggregate (3).**
+`reports/helpers.py:165`, `:167` move from `Consignment.requisition_date` to
+`ConsignmentOrderItem.requisition_date`; `_MODEL` already queries the line table
+and `_JOINS` back to the header, so it is a join hop. Row counts narrow,
+correctly — the same precision gain CLAUDE.md records for the shaft and category
+filters.
+
+`serializers.py:100` leaves the header payload and appears per line. **The WRITE
+path keeps accepting the header key**, fanning it onto every order item exactly
+as Phase 1's `sync_order_item_from_line` already does. Without that, step 6
+breaks the wizard (`importsMap.ts:257`, `:454`, `:549` read and write it as a
+header field) and step 8 would have to ship alongside it.
+
+#### The consequence nothing aggregates on
+
+**`consignment_order_items.branch_id` is written, back-filled on all 455 rows,
+and displayed — and nothing aggregates on it.** Branch-grouped figures all read
+`group.works_branch_id`, so every branch total in the app stays
+one-branch-per-order, exactly as it is today.
+
+That is the decision (§7 item 2 originally proposed grouping by item and this
+section settles it the other way), and it is recorded here rather than left to
+be noticed because it is a real gap rather than a detail. **If the business
+later wants branch reporting to follow the item, that is a deliberate separate
+change** — it moves every branch figure in the app — and not something to slip
+into this one.
 
 **Two further consequences of putting the branch on the group rather than the
 batch**, neither of which is a defect but both of which change a number:
@@ -1765,6 +1934,41 @@ this is not a convention — it is a structural impossibility for every ORM path
 > This is also what exposed the verification command as worthless for exactly
 > this class of change — see "Verifying this work" at the top.
 
+> **Revision 7 — CORRECTION: "around 116 call sites" is an undercount of
+> roughly half. It is 219 references across 19 files.** Counted, not estimated.
+>
+> | Cluster | Refs |
+> |---|---|
+> | `imports/helpers.py` | 44 |
+> | `dashboard/imports/helpers.py` | 38 |
+> | `dashboard/imports/calculations.py` | 23 |
+> | `dashboard/whole/references.py` | 22 |
+> | `imports/serializers.py` | 15 |
+> | `cross_module.py` | 14 |
+> | `reports/helpers.py` | 13 |
+> | the other 12 files | 50 |
+>
+> **And 219 is not 24.** The 24 in §3.3 are the sites whose *meaning* changes.
+> The rest change *location*, and they exist because removing a mapped
+> attribute removes the RELATIONSHIP built on it: `Consignment.branch_id` and
+> `supplier_id` carry `Consignment.branch` / `.supplier`, and
+> `ConsignmentItem.item_id` carries `ConsignmentItem.item`. So every
+> `consignment.branch.name`, every `item.item.category` and every
+> `joinedload(Consignment.supplier)` goes too — including
+> `CONSIGNMENT_VALUE`'s `Consignment.exchange_rate`, `_LINE_VALUE`'s
+> `ConsignmentItem.unit_price` and `shaft_consignment_ids()`'s
+> `ConsignmentItem.item_name`, which between them underpin every money figure
+> and the shafts filter on every screen.
+>
+> **It also INVERTS THE WRITE PATH, which this section never said.** Phase 1's
+> `sync_order_item_from_line` (`imports/helpers.py`) reads `item.item_code`,
+> `item.unit_price` and `consignment.branch_id` off the very attributes being
+> removed, and `new_batch_group` reads `consignment.branch_id`. After the
+> removal, create and update must write the group and the order item DIRECTLY
+> rather than mirroring from columns that no longer exist — which pulls the
+> Pydantic schemas in with them. **That, not the repointing, is what makes step
+> 6 large.** It is not a rename.
+
 Two things make that a complete control here rather than a partial one, and both
 had to be checked rather than assumed:
 
@@ -1853,6 +2057,35 @@ still exist while the attributes do not.
    The current silent skip is what made this class of bug invisible, and removing
    it is a two-line change worth making **before** the migration (build order
    step 3) so the boundary behaviour is observable rather than assumed.
+
+**Revision 7 — this is TWO paths, not one, and the second one is worse.**
+
+Everything above describes `revert_local_fields`, which walks
+`Consignment.__mapper__.column_attrs` and which Phase 1 made raise. **The
+CHILD-row equivalent, `revert_old_values` (`imports/helpers.py`), has the
+identical mapper-driven bug and no loud failure at all** — Phase 1 hardened only
+the header half.
+
+It walks `inspect(consignment_data).mapper.column_attrs` for each
+`ConsignmentItem` and applies whichever history keys match. **Every
+`ConsignmentChangeHistory` row ever written carries `item_code`, `item_name`,
+`unit_price`, `specification`, `requisition_type` and the rest under its item
+diffs** — thirteen keys that stop matching `ConsignmentItem` the moment those
+attributes move to `ConsignmentOrderItem`. Today they would all be skipped in
+silence, and an item revert would report success having restored the line's
+quantity and landed cost and nothing else.
+
+So step 6 does both halves, symmetrically:
+
+- **Header keys** that are not `Consignment` attributes but ARE
+  `ConsignmentBatchGroup` attributes → written to the group.
+- **Item keys** that are not `ConsignmentItem` attributes but ARE
+  `ConsignmentOrderItem` attributes → written to the line's order item.
+- **Anything matching neither, on either path, raises**, naming the keys.
+
+The destination is unambiguous on both, and for the same reason: every
+pre-migration consignment is a group of one, and every pre-migration line
+back-filled exactly one order item (§4.3).
 
 3. **The stored history JSON is not rewritten.** It is tempting to translate old
    rows in the migration so the keys nest under the group. Against: the history
@@ -2053,6 +2286,15 @@ raises a create event — right in principle, but it interacts badly with findin
 11: a wizard that creates empty rows would now create empty *batches*. Fixing
 finding 11 must ship in the same release, and the requirements demand it anyway.
 
+> **Revision 7 — this missed the SCANNER, which is the part that reads moving
+> columns.** `app/notifications/scanner.py:629` selects
+> `Consignment.instrument_number` and `Consignment.payment_instrument` for the
+> payment-due notification; both move to the group. `:525`–`:526` and `:578`
+> read `instrument_number` again for the clearance-aging and demurrage scans.
+> These are live paths that run on a schedule with nobody watching, so a break
+> here surfaces as notifications quietly not being sent. **In scope for step
+> 6.**
+
 **Loading scripts.** `load_all` and `reload_changed` both drop and rebuild the
 consignment family through raw psycopg2. Both must populate the two new tables
 and the FKs explicitly (no Python defaults run), and `etl_common.bump_sequence`
@@ -2073,8 +2315,14 @@ own verification touches it.
 **Excel export.** Finding 12, and the requirements go further than "unfold it":
 every field from all steps as a column, drafts and deleted rows excluded.
 
-**Masters.** `masters/helpers.py:164` and `:250` — the Branch "used" count, now
-counting through the order item.
+**Masters.** `masters/helpers.py:164` and `:250` — the Branch "used" count.
+
+> **Revision 7 — CORRECTION: NOT "through the order item".** §3.3 settled the
+> branch on `group.works_branch_id`, and this line was never updated to match.
+> The count reads the GROUP and counts groups (§3.2 #14). `masters/helpers.py`
+> also carries two more callers of the same function that this entry never
+> mentioned: **supplier** (`:161`, → groups) and **clearing agent** (`:190`, →
+> rows, because that column stays per batch).
 
 ---
 
@@ -2666,10 +2914,30 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    save is a 500 rather than a missing feature. Allocation, batch creation,
    numbering and the freeze stay at step 7.
 6. **Remove the mapped attributes** (moved here from step 5, §4.7) together
-   with **the 24 header-field consumers** (§3.3, §7 item 2) — 10 branch sites onto
-   `works_branch_id`, 14 date sites onto the order item with their aggregation
-   rules — and **the 14 count decisions** (§3.2) with their consistency
-   assertions. The largest piece, and the one to do while the flag is off.
+   with **the 24 header-field consumers** (§3.3, §7 item 2) — 9 live branch
+   sites onto `works_branch_id` (the 10th died with step 2b), 14 date sites onto
+   the order item per §3.3's four groups — and **the 14 count decisions**
+   (§3.2) with their assertions. The largest piece, and the one to do while the
+   flag is off.
+
+   **Decided in revision 7, not yet built.** Scope, now that it has been
+   counted rather than estimated:
+
+   - the attribute removal is **219 references across 19 files**, not 24 and not
+     116 (§4.7), because it takes three RELATIONSHIPS with it;
+   - it **inverts the write path** — create/update must write the group and
+     order item directly, which pulls the Pydantic schemas in (§4.7);
+   - **both revert paths** get routing and a loud failure, not just the header
+     one (§4.7);
+   - `notifications/scanner.py` is in scope (§5.2);
+   - the count assertions are **two suites**, because no HTTP assertion can
+     discriminate rows from groups until a group holds two batches (§3.2).
+
+   Verification: `configure_mappers()` against a scratch database — the bare
+   import cannot see a broken mapper, and this step is almost entirely mapped
+   attributes moving. Then the real HTTP routes: create, update, list, detail,
+   submit, revert and all five dashboards, because what remains after that is
+   read paths, which the helpers cannot prove.
 7. **Backend:** group and order-item models, allocation with the row lock
    (§6 B3), batch creation, numbering (§3.5), the group freeze (§3.9).
 8. **Frontend:** the Step 3 allocation screen, list rows and blue highlight,
