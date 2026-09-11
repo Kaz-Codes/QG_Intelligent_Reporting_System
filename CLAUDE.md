@@ -207,6 +207,25 @@ financial is gated. The account-creation checkbox on the front end sets
 - **Enums** live in `enums.py` as `(str, Enum)` and are stored in **String**
   columns (not DB enum types), so adding a value is a one-line change, no
   `ALTER TYPE`. Status values are Title Case and must match the frontend's.
+  - **A STRING COLUMN DOES NOT ENFORCE THE ENUM, AND THE LOADERS GO ROUND IT.**
+    The only thing that validates these values is the Pydantic request schema,
+    which the loaders never touch — so a workbook can put anything in an
+    enum-backed column and nothing objects until somebody tries to SAVE that
+    record, at which point the `PUT` 422s on a field they never touched. Imports
+    was in exactly that state on 96.6% of its rows (`mode_of_shipment`,
+    `payment_instrument`, `unit_of_measurement`), repaired by Alembic revision
+    `d5e81b6a2c07`.
+  - **Trucking and logistics are still in it.** Measured, not fixed:
+    trucking `payment_status` (`Paid` 210, `To pay` 91, `Topay` 2),
+    `trucking_vehicles.container_type` (`20 FT` 94, `40 FT` 11),
+    `tracking_status` (`On Road` 23, `Planned` 4) — **309 of 1369 jobs cannot be
+    saved**; logistics `department` (`G.I Floor Mills` 1) — **1 of 745 orders**.
+    `logistics_containers.container_type` holds `LCL`/`AIR` but its schema types
+    that field as a plain `str`, so it does not reject.
+  - **So a loader writing an enum-backed column must normalise onto the enum**,
+    the way `load_06_logistics` already does for its status vocabulary. A
+    `post_load` check for out-of-enum values in every such column is the
+    durable fix and does not exist yet.
 - **Server-side defaults for loader-written flags.** A Python-side `default=`
   never runs on a raw `psycopg2` insert (the loaders), so flags the loaders rely
   on (`record_state`, `is_locked`) use `server_default` too.
@@ -1250,8 +1269,21 @@ The imports module is wired end-to-end (the pattern to follow for the others):
 - `lib/api/masters.ts` — fetches master lists and builds name→id maps (the
   wizard picks masters by name; the backend wants ids).
 - `lib/api/importsMap.ts` — `apiToRow` / `apiToDraft` / `draftToPayload`, bridging
-  camelCase↔snake_case, names↔ids, and gating enum values against the backend
-  sets so an unmapped value is omitted, not 422'd.
+  camelCase↔snake_case and names↔ids.
+
+  **IT DOES NOT GATE ENUM VALUES. This file used to claim it did, and that claim
+  is why a live bug went unnoticed for months.** `apiToDraft` casts with
+  `as ConsignmentDraft['modeOfShipment']` — a compile-time assertion with **no
+  runtime effect** — and `draftToPayload` passes the raw string straight back
+  through `strOrUndef`. The only field with a real gate is `consignment_type`
+  (`CONSIGNMENT_TYPE_TO_API`).
+
+  The consequence: **a loaded consignment could not be saved.** The detail route
+  returned `mode_of_shipment: "Sea"`, the wizard posted the whole draft back, and
+  `ConsignmentSchema` rejected it — a 422 on a field the operator never touched,
+  on 172 of 178 live records (96.6%). Fixed in the data by Alembic revision
+  `d5e81b6a2c07`, not in the map; the map still does not gate, so **anything
+  reaching these columns from outside the app must already be canonical.**
 - `lib/api/useImports.ts` — React Query hooks; mutations invalidate the list + record.
 - List/detail/wizard are wired; the wizard creates on first save then `PUT`s,
   and the final Submit calls `/submit`.

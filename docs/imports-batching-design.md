@@ -2161,6 +2161,34 @@ had to be checked rather than assumed:
    that the risks were wrong — all three were real — but that the *mechanism*
    was reasoned about rather than exercised. Build it before believing it.
 
+5. **A DATA MIGRATION — added after it happened too, which is what makes the
+   rule general.** Alembic revision `d5e81b6a2c07` normalises the enum values
+   the workbooks loaded. It updated `consignments.payment_instrument` and not
+   `consignment_batch_groups.payment_instrument` — so it corrected the copy
+   nothing reads, left the copy everything reads holding `Advance`, `FOC` and
+   `Contract`, and a loaded consignment still rejected its own save **while
+   every test in that revision passed.**
+
+   **The rule, now stated once rather than re-learned per path:**
+
+   > **During the gap between expand and contract a value exists TWICE, and
+   > every write path has to maintain both copies — the ORM, the loaders, a
+   > data migration, a repair script, anything. "SQLAlchemy cannot write a
+   > column it does not know about" describes the contract side of the
+   > migration, not the gap, and the gap is where all the work happens.**
+
+   Paths 1–3 are writes that go *around* the model. Paths 4 and 5 do not go
+   around anything — path 4 is an ordinary `PUT`, path 5 is an `UPDATE` in a
+   migration — which is exactly why the control §4.7 was built around could not
+   see either of them. **Two of the five bypass paths were found by running the
+   code; neither was predicted.**
+
+   The tell is the same both times and is worth recognising early: **it is the
+   UNREAD copy that goes stale, so the cost is zero until the day something
+   reads it.** Anything that writes one copy during the gap is suspect on sight,
+   and "I checked the column and it was clean" means nothing unless the column
+   checked is the one the code actually reads.
+
 #### The failure this uncovered: revert across the migration boundary
 
 `revert_local_fields` walks the mapper's attributes and applies any matching key
