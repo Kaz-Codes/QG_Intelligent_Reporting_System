@@ -151,8 +151,16 @@ def load_export_map(conn) -> dict:
         return {(e, b): i for e, b, i in cur.fetchall()}
 
 
-def bulk_insert(conn, table, columns, rows, conflict_clause=""):
-    """Insert many rows with execute_values. rows = list of tuples."""
+def bulk_insert(conn, table, columns, rows, conflict_clause="", commit=True):
+    """Insert many rows with execute_values. rows = list of tuples.
+
+    `commit=False` leaves the transaction open, which two tables holding
+    DEFERRABLE foreign keys onto each other REQUIRE: consignments and
+    consignment_batch_groups each reference the other with a NOT NULL column,
+    so neither insert can stand alone. Committing between them checks the
+    deferred constraint while the other half is still missing and the load
+    fails. Insert both with commit=False and commit once afterwards.
+    """
     if not rows:
         print(f"  {table}: nothing to insert")
         return
@@ -161,7 +169,8 @@ def bulk_insert(conn, table, columns, rows, conflict_clause=""):
     )
     with conn.cursor() as cur:
         execute_values(cur, sql, rows, page_size=500)
-    conn.commit()
+    if commit:
+        conn.commit()
     print(f"  {table}: inserted {len(rows)} rows")
 
 

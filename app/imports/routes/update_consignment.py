@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items
 
 from app.imports.helpers import fetch_consignment, consignment_reference, CLOSED_STATUS_VALUE
 from app.imports.models import ConsignmentItem, Payment
@@ -234,6 +234,12 @@ def update_consignment(
             # Record who entered any landed-cost figure supplied on a new line.
             stamp_landed_cost_audit(item, user, item.elc is not None, item.alc is not None)
 
+        # BEFORE THE FLUSH, because order_item_id is NOT NULL: a line added just
+        # above has no order line above it yet, and the flush below would insert
+        # it with a NULL and fail. Runs a second time further down, once the
+        # field updates have actually landed on the lines.
+        sync_order_items(consignment, db)
+
         created_payments = []
         for payment_schema in new_payments:
             payment_dict = payment_schema.model_dump()
@@ -283,6 +289,14 @@ def update_consignment(
         # specification from there, whatever the payload said — applied after
         # the line updates land, so it is the stored value that gets corrected.
         apply_item_master_values(consignment, db)
+
+        # AFTER the line updates and the master correction, so the order line
+        # mirrors what the line actually ends up holding. This is the call that
+        # matters for an EDIT: a changed quantity or a soft-deleted line would
+        # otherwise leave `allocated_quantity` describing quantities the lines
+        # no longer carry, which is the drift the over-allocation CHECK cannot
+        # see and `post_load`'s "Allocation totals" check exists to catch.
+        sync_order_items(consignment, db)
 
         # Recompute + store the derived money totals and per-line variance from
         # the now-updated lines and rate.

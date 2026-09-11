@@ -6,8 +6,8 @@ from app.database import Base
 from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
-    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
-    text,
+    JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer,
+    Numeric, String, text,
 )
 from sqlalchemy.orm import (
     Mapped, mapped_column, relationship, declarative_mixin,
@@ -48,13 +48,453 @@ if TYPE_CHECKING:
 
 
 #--------------------------------
+# CONSIGNMENT BATCH GROUPS TABLE
+#
+# The LC / order that one or more consignments (batches) are shipped against.
+#
+# A consignment used to BE the order: one row held the commercial terms, the
+# finance and the goods together. Splitting one order across several shipments
+# needs the commercial half to live once, above the shipments, or the same LC's
+# supplier and exchange rate exist in as many copies as there are batches and
+# nothing says which copy is authoritative.
+#
+# THE GROUP HAS NO NUMBER COLUMN. The number an operator sees is the FOUNDING
+# consignment's id, which is why founding_consignment_id is here and a `number`
+# is not: a stored number would be a second copy of an identity that already
+# exists, and two copies drift. Every consignment migrated by revision A founds
+# its own group, so every existing number displays exactly as it does today.
+#
+# A dedicated table, rather than a self-referential FK from batch to founding
+# batch: deleting the founding batch must not orphan the group, and the rules
+# say every batch is equal and any of them may be deleted.
+#--------------------------------
+
+class ConsignmentBatchGroup(Base, TimestampMixin):
+    __tablename__ = "consignment_batch_groups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # The batch whose id IS this group's displayed number. Not "batch 1" in any
+    # privileged sense - it may be deleted like any other - only the row whose
+    # id the number was taken from.
+    # DEFERRABLE, and so is Consignment.batch_group_id. The two tables
+    # reference each other and BOTH columns are NOT NULL, so with the checks
+    # done per statement there is no order in which a new order and its first
+    # batch can be inserted at all: the group needs a consignment that does not
+    # exist yet, and the consignment needs a group that does not exist yet.
+    # Deferring to COMMIT still enforces both - a transaction leaving either
+    # side dangling fails - it only lets the pair be inserted together.
+    founding_consignment_id: Mapped[int] = mapped_column(
+        # use_alter tells create_all to add THIS constraint by ALTER once both
+        # tables exist. Without it SQLAlchemy cannot sort the two tables (they
+        # depend on each other), warns that it is ignoring the cycle, and says
+        # the warning may become an error in a later release. It affects only
+        # how create_all emits DDL on a brand-new database; Alembic is the
+        # source of truth for schema changes either way.
+        ForeignKey("consignments.id", ondelete="RESTRICT",
+                   deferrable=True, initially="DEFERRED", use_alter=True),
+        nullable=False,
+        index=True
+    )
+
+    # How many batches this group has EVER held: incremented on creation, never
+    # decremented. It exists so the display rule - a suffix only once a group
+    # has held two or more - is a column read rather than a window function
+    # over soft-deleted siblings on every list query.
+    #
+    # server_default because the loaders insert through raw psycopg2, where a
+    # Python-side default never runs.
+    batches_ever: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+        nullable=False
+    )
+
+    #--- shared across every batch in the group ---
+    # These are facts about the ORDER, not about a shipment. They stay on
+    # `consignments` as well until revision B drops them there; the group is the
+    # only one of the two copies that is read.
+    supplier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    origin: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
+    currency: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True
+    )
+
+    consignment_type: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True
+    )
+
+    incoterm: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True
+    )
+
+    payment_instrument: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True
+    )
+
+    instrument_number: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    #--- entered once, on the first batch: Step 2 Finance ---
+    # The rate is booked against the ORDER, so every batch of one LC converts at
+    # the same rate. Held per batch instead, two shipments of one order could
+    # report different PKR values for the same money.
+    exchange_rate: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(12, 6),
+        nullable=True
+    )
+
+    rate_booked_on: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    rate_source: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True
+    )
+
+    # The header-level branch, and the successor to BOTH Consignment.works (free
+    # text) and Consignment.branch_id (the FK the sheet's "Works" column filled).
+    # Works and Branch were always the same thing to the business; this is the
+    # one column that says so. Items carry their own branch_id for the per-item
+    # variation.
+    works_branch_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("branches.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    #--- Step 4 Payments, LC-level ---
+    # Insurance is taken out on the order, not on each shipment. NOTHING WRITES
+    # THIS YET: the payment move is a later phase, and the column is here
+    # because section 4.1 of the design puts it here.
+    insurance_amount: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(20, 2),
+        nullable=True
+    )
+
+    #--- state ---
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    deleted_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    # Nullable, unlike Consignment.created_by_id, because the back-fill creates
+    # a group for every consignment that already exists and the person who
+    # founded the ORDER is not a fact the old rows record. It is the
+    # consignment's creator where one is known and NULL is never guessed.
+    created_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True
+    )
+
+    #--- relationships ---
+    # `batches` needs an explicit foreign_keys: consignments and this table
+    # reference each other in both directions (batch_group_id one way,
+    # founding_consignment_id the other), so the join is ambiguous without it.
+    batches: Mapped[list["Consignment"]] = relationship(
+        back_populates="batch_group",
+        foreign_keys="Consignment.batch_group_id"
+    )
+
+    founding_consignment: Mapped["Consignment"] = relationship(
+        foreign_keys=[founding_consignment_id]
+    )
+
+    order_items: Mapped[list["ConsignmentOrderItem"]] = relationship(
+        back_populates="batch_group",
+        cascade="all, delete-orphan"
+    )
+
+    supplier: Mapped[Optional["Supplier"]] = relationship()
+
+    works_branch: Mapped[Optional["Branch"]] = relationship()
+
+    created_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[created_by_id]
+    )
+
+    deleted_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[deleted_by_id]
+    )
+
+
+#--------------------------------
+# CONSIGNMENT ORDER ITEMS TABLE
+#
+# One row per item ON THE ORDER - what was bought - against which each batch's
+# ConsignmentItem rows record what that shipment actually carried.
+#
+# The rule that decides which of the two tables a field belongs to: a fact about
+# what was ORDERED lives here; a fact about what happened to a PARTICULAR
+# SHIPMENT lives on consignment_items. So the item's identity, the ordered
+# quantity, the price and the demand dates are here, while the arrival date, the
+# landed cost and the physical weights stay on the line - landed cost is
+# incurred per arrival, and two batches of one item legitimately land at
+# different costs.
+#
+# NOTHING WRITES TO THIS TABLE YET. Revision A creates it and back-fills one row
+# per existing consignment line; allocation and batch creation are a later
+# phase.
+#--------------------------------
+
+class ConsignmentOrderItem(Base, TimestampMixin):
+    __tablename__ = "consignment_order_items"
+
+    __table_args__ = (
+        # THE BACKSTOP, NOT THE ENFORCEMENT. The real rule is that the SUM of a
+        # group's batch lines may not exceed what was ordered, and no CHECK can
+        # express that: the quantities being summed live on rows of a different
+        # table, under different consignments. The server holds a row lock on
+        # this row and checks the sum before writing - that is the enforcement.
+        #
+        # `allocated_quantity` is that sum, denormalised onto the parent row
+        # where a CHECK *can* see it. It catches any path that skips the server
+        # check - including the loaders, which bypass the ORM entirely and are
+        # exactly the kind of code that forgets.
+        CheckConstraint(
+            "allocated_quantity <= ordered_quantity",
+            name="ck_allocation_within_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    batch_group_id: Mapped[int] = mapped_column(
+        ForeignKey("consignment_batch_groups.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    #--- identity, moved up from the line ---
+    item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("items.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    item_code: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    item_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
+    placeholder_name: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
+    specification: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True
+    )
+
+    hs_code: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True
+    )
+
+    #--- quantity ---
+    # What was bought. Each batch line's own `quantity` is an allocation against
+    # this, and the sum of those allocations is mirrored into
+    # allocated_quantity below.
+    ordered_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3),
+        nullable=False
+    )
+
+    allocated_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3),
+        default=0,
+        server_default=text("0"),
+        nullable=False
+    )
+
+    unit_of_measurement: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True
+    )
+
+    #--- money ---
+    # Which of the two prices below applies. See enums.PriceBasis: both formulas
+    # are real and the choice is per line, so neither price column ever has to
+    # carry the other's meaning.
+    price_basis: Mapped[str] = mapped_column(
+        String(20),
+        default="quantity",
+        server_default="quantity",
+        nullable=False
+    )
+
+    # Price for one `unit_of_measurement`, in the group's currency. Widened from
+    # the line's Numeric(14,4) to the Numeric(18,4) the conventions ask for for
+    # a unit price - a widening, so every copied value survives it exactly.
+    unit_price: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 4),
+        nullable=True
+    )
+
+    # Price per KILOGRAM, used only when price_basis is 'weight'.
+    weight_unit_price: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 4),
+        nullable=True
+    )
+
+    # Kilograms PER UNIT - deliberately not the line's total. A separate column
+    # from ConsignmentItem.net_weight, which is documented as the total for the
+    # whole quantity and keeps that meaning; multiplying quantity by a total
+    # would count the quantity twice.
+    unit_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    #--- the demand this line came from ---
+    # Per item, because one order can carry lines demanded by different branches
+    # on different dates.
+    branch_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("branches.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    requisition_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    required_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    requisition_type: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True
+    )
+
+    reference_number: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    job_number: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    mo_number: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    description: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True
+    )
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    batch_group: Mapped["ConsignmentBatchGroup"] = relationship(
+        back_populates="order_items"
+    )
+
+    item: Mapped[Optional["Item"]] = relationship()
+
+    branch: Mapped[Optional["Branch"]] = relationship()
+
+    lines: Mapped[list["ConsignmentItem"]] = relationship(
+        back_populates="order_item"
+    )
+
+
+#--------------------------------
 # CONSIGNMENTS TABLE
 #--------------------------------
 
 class Consignment(Base, TimestampMixin):
     __tablename__ = "consignments"
 
+    __table_args__ = (
+        # A sequence number is unique WITHIN its group and is never reused, so
+        # 177-2 identifies one shipment for ever. Deleting a batch leaves a gap
+        # rather than renumbering its siblings: renumbering would make an old
+        # 177-3 become 177-2, and a number already on an invoice would then
+        # resolve to a different shipment with both parties believing they
+        # agree.
+        Index(
+            "uq_consignments_group_sequence",
+            "batch_group_id", "batch_sequence",
+            unique=True,
+        ),
+    )
+
     id: Mapped[int] = mapped_column(primary_key=True)
+
+    #--- which order this consignment is a batch of ---
+    # NOT NULL: revision A back-fills a group of one for every consignment that
+    # already exists, so there is no window in which a consignment has no order
+    # above it and no code that has to handle the NULL case.
+    # No index=True: uq_consignments_group_sequence in __table_args__ above is a
+    # unique index LEADING with this column, so it already serves lookups by
+    # group and the foreign key check. A second index on the same column would
+    # cost a write on every save and answer nothing the first cannot.
+    batch_group_id: Mapped[int] = mapped_column(
+        ForeignKey("consignment_batch_groups.id", ondelete="RESTRICT",
+                   deferrable=True, initially="DEFERRED"),
+        nullable=False
+    )
+
+    # This batch's position in its group. Assigned at creation, NEVER reused and
+    # never changed - see the unique index above for why. server_default
+    # because the loaders insert through raw psycopg2.
+    batch_sequence: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+        nullable=False
+    )
 
     branch_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("branches.id", ondelete="SET NULL"),
@@ -388,6 +828,14 @@ class Consignment(Base, TimestampMixin):
         back_populates="consignments"
     )
 
+    # foreign_keys is explicit because consignments and consignment_batch_groups
+    # point at each other: this column one way, founding_consignment_id the
+    # other. Without it the join is ambiguous.
+    batch_group: Mapped["ConsignmentBatchGroup"] = relationship(
+        back_populates="batches",
+        foreign_keys=[batch_group_id]
+    )
+
 #--------------------------------
 # CONSIGNMENT ITEMS TABLE
 #--------------------------------
@@ -400,6 +848,17 @@ class ConsignmentItem(Base, TimestampMixin):
     consignment_id: Mapped[int] = mapped_column(
         ForeignKey("consignments.id", ondelete="CASCADE"),
         nullable=False
+    )
+
+    # THE ORDER LINE THIS SHIPMENT LINE IS AN ALLOCATION AGAINST.
+    #
+    # `quantity` below becomes the quantity allocated to THIS batch; what was
+    # ordered lives once, on the order item. NOT NULL: revision A back-fills one
+    # order item per existing line, so no line is left without one.
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("consignment_order_items.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True
     )
 
     item_id: Mapped[Optional[int]] = mapped_column(
@@ -599,6 +1058,10 @@ class ConsignmentItem(Base, TimestampMixin):
 
     item: Mapped[Optional["Item"]] = relationship(
         back_populates="consignment_items"
+    )
+
+    order_item: Mapped["ConsignmentOrderItem"] = relationship(
+        back_populates="lines"
     )
 
 #--------------------------------
