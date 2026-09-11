@@ -16,6 +16,7 @@ from app.dashboard.imports.serializers import serialize_imports_dashboard
 from typing import Optional
 from datetime import date
 import logging
+from app.imports.order_view import order_branch_name, order_origin, order_supplier_name
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +76,18 @@ def imports_dashboard(
         statuses = set()
 
         for consignment in consignments:
-            if consignment.branch and consignment.branch.name:
-                works.add(consignment.branch.name)
-            if consignment.supplier:
-                suppliers.add(consignment.supplier.name)
-            if consignment.origin:
-                countries.add(consignment.origin)
+            # Works, supplier and origin are the ORDER's. These dropdowns are
+            # built from the data itself rather than from the enums, so they
+            # follow the values up to the group.
+            branch_name = order_branch_name(consignment)
+            if branch_name:
+                works.add(branch_name)
+            supplier_name = order_supplier_name(consignment)
+            if supplier_name:
+                suppliers.add(supplier_name)
+            origin = order_origin(consignment)
+            if origin:
+                countries.add(origin)
             for item in consignment.items:
                 if item.item and item.item.category:
                     item_categories.add(item.item.category)

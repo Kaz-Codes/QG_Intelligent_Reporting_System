@@ -199,6 +199,24 @@ function derivePayment(c: ApiConsignment, foreignValue: number | null) {
   return { state, label }
 }
 
+
+/** The earliest non-empty value of a per-LINE date across a consignment's live
+ *  lines. The demand dates moved onto the item lines, and the two places that
+ *  still want one value per consignment (the list row, the wizard's single
+ *  input) take the earliest — the same rule the server applies to
+ *  `required_date`, so the two cannot disagree about which date is shown. */
+function earliestLineDate(
+  c: ApiConsignment,
+  key: 'requisition_date' | 'required_date',
+): string | null {
+  const dates = (c.items ?? [])
+    .filter((i) => !i.is_deleted)
+    .map((i) => i[key])
+    .filter((d): d is string => !!d)
+    .sort()
+  return dates[0] ?? null
+}
+
 export function apiToRow(c: ApiConsignment): ImportsListRow {
   const items = (c.items ?? []).filter((i) => !i.is_deleted).map(mapItem)
 
@@ -254,7 +272,10 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
     status,
     statusCanonical: CANONICAL_STATUSES.has(status),
 
-    requisitionDate: c.requisition_date,
+    // The requisition date is per LINE now, so a list row takes the earliest of
+    // its lines for display; requiredDate is the earliest too, computed server-
+    // side (the list payload carries no lines, so it has to be).
+    requisitionDate: earliestLineDate(c, 'requisition_date'),
     requiredDate: c.required_date,
     etd: c.etd,
     eta: c.eta,
@@ -545,7 +566,14 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
     consignmentType: (c.consignment_type ? (CONSIGNMENT_TYPE_FROM_API[c.consignment_type] ?? '') : '') as ConsignmentDraft['consignmentType'],
     incoterm: (c.incoterm ?? '') as ConsignmentDraft['incoterm'],
     poDate: c.po_date ?? '',
-    requisitionDate: c.requisition_date ?? '',
+    // A BRIDGE, AND STEP 8 REMOVES IT. The wizard has ONE header-level input
+    // for each of these; the data model now has one per line. Reading the
+    // earliest line keeps that single input round-tripping — it writes back to
+    // EVERY line (draftToPayload sends the header key, which the server fans
+    // out), so reading one value and writing one value stays symmetric. Without
+    // this the input would show blank on every reload while the stored value was
+    // perfectly intact, which looks like data loss and is not.
+    requisitionDate: earliestLineDate(c, 'requisition_date') ?? '',
     requiredDate: c.required_date ?? '',
 
     items: (c.items ?? []).filter((i) => !i.is_deleted).map((item, i) => ({

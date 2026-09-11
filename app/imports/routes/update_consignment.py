@@ -16,6 +16,7 @@ from app.notifications.emit import emit
 from app.notifications.lifecycle import notify_status_changed, notify_completed
 from datetime import date
 import logging
+from app.imports.order_view import order_branch_name, order_reference, order_supplier_name
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,8 @@ def _notify_major_eta_slip(db, updation_dict, consignment):
             "imports.eta_slipped_major",
             payload={
                 # Same reference the reports and list screens show.
-                "consignment_no": consignment.instrument_number or f"IMP-{consignment.id}",
-                "supplier": consignment.supplier.name if consignment.supplier else "unknown supplier",
+                "consignment_no": order_reference(consignment),
+                "supplier": order_supplier_name(consignment) or "unknown supplier",
                 "old_eta": old_eta.isoformat(),
                 "new_eta": new_eta.isoformat(),
                 "slip_days": slip_days,
@@ -93,7 +94,7 @@ def _notify_major_eta_slip(db, updation_dict, consignment):
             entity_id=consignment.id,
             # The indexed column, not a template variable — it is what a feed
             # is narrowed by.
-            branch=consignment.branch.name if consignment.branch else None,
+            branch=order_branch_name(consignment),
             # One notification per consignment per landed-on ETA: re-saving
             # the same revision, or two people saving it at once, is one
             # event. Revising AGAIN to a different date is a new one.
@@ -140,13 +141,13 @@ def _notify_status_lifecycle(db, updation_dict, consignment):
             return
 
         reference = consignment_reference(consignment)
-        branch = consignment.branch.name if consignment.branch else None
+        branch = order_branch_name(consignment)
 
         if new_status == CLOSED_STATUS_VALUE:
             notify_completed(
                 db, "imports", consignment.id,
                 reference=reference,
-                party=consignment.supplier.name if consignment.supplier else "unknown supplier",
+                party=order_supplier_name(consignment) or "unknown supplier",
                 status=new_status,
                 branch=branch,
             )

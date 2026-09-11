@@ -11,6 +11,7 @@ from app.imports.helpers import create_consignment_item_object, create_consignme
 
 from app.imports.serializers import serialize_consignment
 import logging
+from app.imports.order_view import order_branch_name, order_supplier_name
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,8 @@ def create_consignment(
         notify_created(
             db, "imports", consignment.id,
             reference=consignment_reference(consignment),
-            party=consignment.supplier.name if consignment.supplier else "unknown supplier",
-            branch=consignment.branch.name if consignment.branch else None,
+            party=order_supplier_name(consignment) or "unknown supplier",
+            branch=order_branch_name(consignment),
         )
 
         return {

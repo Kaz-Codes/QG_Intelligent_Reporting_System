@@ -23,6 +23,12 @@ export interface ApiConsignmentItem {
   unit_price: string | number | null
   unit_of_measurement: string | null
   batch_no: string | null
+  /** THE DEMAND THIS LINE CAME FROM. Both live on the order line above this
+   *  shipment line, not on the line itself, and the server adds them to the
+   *  item payload explicitly (serialize_items) — a mapper walk over
+   *  `consignment_items` cannot see them. */
+  requisition_date: string | null
+  required_date: string | null
   requisition_type: string | null
   reference_number: string | null
   job_number: string | null
@@ -85,8 +91,16 @@ export interface ApiConsignment {
   consignment_type: string | null
   incoterm: string | null
   mode_of_shipment: string | null
-  requisition_date: string | null
+  /** THE EARLIEST required date across this batch's item lines — computed by the
+   *  server, not a stored header column. The list payload carries no lines, so
+   *  `requiredDelayDays` needs the minimum supplied here. */
   required_date: string | null
+  /** NOT SENT ANY MORE. The requisition date moved onto the item lines (one
+   *  order can carry lines requisitioned months apart), and unlike
+   *  `required_date` it has no header-level consumer so nothing aggregates it.
+   *  Read it from `items[].requisition_date`. Still ACCEPTED on write, where it
+   *  fans onto every line — see draftToPayload. */
+  requisition_date?: undefined
   cargo_readiness_date: string | null
   etd: string | null
   eta: string | null

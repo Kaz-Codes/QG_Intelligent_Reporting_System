@@ -9,6 +9,7 @@ from app.imports.helpers import fetch_consignment
 from app.imports.serializers import serialize_consignment
 from datetime import datetime, timezone
 import logging
+from app.imports.order_view import order_branch_name, order_supplier_name
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,10 @@ def delete_consignment(
         notify_deleted(
             db, "imports", consignment.id,
             reference=consignment_reference(consignment),
-            party=consignment.supplier.name if consignment.supplier else "unknown supplier",
+            party=order_supplier_name(consignment) or "unknown supplier",
             value=format_money(consignment.pkr_total),
             deleted_by=user.username,
-            branch=consignment.branch.name if consignment.branch else None,
+            branch=order_branch_name(consignment),
         )
 
         return {

@@ -12,7 +12,7 @@ from app.dashboard.inventory.calculations import (
 from app.dashboard.inventory.helpers import issuance_windows, reorder_level_map
 from app.enums import ItemRank
 from app.imports.helpers import STAGE_GROUPS
-from app.imports.models import Consignment, Payment
+from app.imports.models import Consignment, ConsignmentBatchGroup, Payment
 from app.loading.schemas.stores_schemas import Stock
 from app.logistics.models import LogisticsConsignment, LogisticsItem
 from app.masters.models import Item
@@ -522,12 +522,17 @@ def check_clearance_aging(db, today):
     rows = db.execute(
         select(
             key.label("state_key"),
-            Consignment.id, Consignment.instrument_number,
+            Consignment.id, ConsignmentBatchGroup.instrument_number,
             Consignment.current_status, since.label("since"),
             NotificationState.state_value,
             entering.label("is_aging"),
         )
         .select_from(Consignment)
+        # THE ORDER CARRIES THE PAYMENT REFERENCE NOW. These scans run on a
+        # schedule with nobody watching, so a break here surfaces as
+        # notifications quietly not being sent rather than as an error.
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
         .outerjoin(NotificationState, NotificationState.state_key == key)
         .where(Consignment.is_deleted == False)  # noqa: E712
         .where(Consignment.current_status.in_(clearance_statuses))
@@ -575,12 +580,17 @@ def check_demurrage_risk(db, today):
     rows = db.execute(
         select(
             key.label("state_key"),
-            Consignment.id, Consignment.instrument_number,
+            Consignment.id, ConsignmentBatchGroup.instrument_number,
             Consignment.eta, Consignment.free_days_allowed,
             NotificationState.state_value,
             entering.label("at_risk"),
         )
         .select_from(Consignment)
+        # THE ORDER CARRIES THE PAYMENT REFERENCE NOW. These scans run on a
+        # schedule with nobody watching, so a break here surfaces as
+        # notifications quietly not being sent rather than as an error.
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
         .outerjoin(NotificationState, NotificationState.state_key == key)
         .where(Consignment.is_deleted == False)  # noqa: E712
         .where(Consignment.eta.isnot(None))
@@ -626,12 +636,15 @@ def check_payment_overdue(db, today):
         select(
             key.label("state_key"),
             Payment.id, Payment.retirement_date, Payment.consignment_id,
-            Consignment.instrument_number, Consignment.payment_instrument,
+            ConsignmentBatchGroup.instrument_number,
+            ConsignmentBatchGroup.payment_instrument,
             NotificationState.state_value,
             entering.label("is_overdue"),
         )
         .select_from(Payment)
         .join(Consignment, Consignment.id == Payment.consignment_id)
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
         .outerjoin(NotificationState, NotificationState.state_key == key)
         .where(Payment.is_deleted == False)  # noqa: E712
         .where(Consignment.is_deleted == False)  # noqa: E712

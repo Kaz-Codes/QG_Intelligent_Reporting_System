@@ -9,6 +9,7 @@ from app.imports.serializers import serialize_consignment
 from app.enums import Incoterm
 from datetime import datetime, timezone
 import logging
+from app.imports.order_view import order_incoterm
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def _send(request, consignment_id, field, label):
 
         # FOB is what makes a consignment eligible: on other incoterms the
         # supplier arranges the onward legs, so there is nothing to hand over.
-        if consignment.incoterm != Incoterm.FOB.value:
+        if order_incoterm(consignment) != Incoterm.FOB.value:
             raise HTTPException(
                 status_code=400,
                 detail=(

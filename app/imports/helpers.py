@@ -123,8 +123,8 @@ def fetch_consignment(db, consignment_id):
     query = select(Consignment).where(
         Consignment.id == consignment_id
     ).options(
-        joinedload(Consignment.branch),
-        joinedload(Consignment.supplier),
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.supplier),
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.works_branch),
         joinedload(Consignment.loading_port),
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),
@@ -204,10 +204,15 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         conditions.append(not_(is_truly_closed))
 
     if branch_id:
-        conditions.append(Consignment.branch_id.in_(branch_id))
+        # The header branch is the ORDER's works_branch now.
+        conditions.append(Consignment.batch_group.has(
+            ConsignmentBatchGroup.works_branch_id.in_(branch_id)
+        ))
 
     if supplier_id:
-        conditions.append(Consignment.supplier_id.in_(supplier_id))
+        conditions.append(Consignment.batch_group.has(
+            ConsignmentBatchGroup.supplier_id.in_(supplier_id)
+        ))
 
     if requisition_type:
         conditions.append(
@@ -257,12 +262,18 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         pattern = "%" + needle + "%"
 
         searches = [
-            Consignment.origin.ilike(pattern),
             Consignment.gd_number.ilike(pattern),
-            Consignment.instrument_number.ilike(pattern),
-            Consignment.works.ilike(pattern),
-            Consignment.supplier.has(Supplier.name.ilike(pattern)),
-            Consignment.branch.has(Branch.name.ilike(pattern)),
+            # Everything the ORDER identifies itself by, in one subquery: the
+            # payment reference, the origin, the supplier and the works/branch.
+            #  (free text) is gone - works_branch is its successor, and
+            # searching the dead column would match only rows the loader left
+            # NULL, which is all of them.
+            Consignment.batch_group.has(or_(
+                ConsignmentBatchGroup.instrument_number.ilike(pattern),
+                ConsignmentBatchGroup.origin.ilike(pattern),
+                ConsignmentBatchGroup.supplier.has(Supplier.name.ilike(pattern)),
+                ConsignmentBatchGroup.works_branch.has(Branch.name.ilike(pattern)),
+            )),
             Consignment.items.any(
                 (ConsignmentItem.is_deleted == False) &  # noqa: E712
                 or_(
@@ -286,8 +297,8 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
 
     # the page itself, newest first
     query = select(Consignment).where(*conditions).options(
-        joinedload(Consignment.branch),
-        joinedload(Consignment.supplier),
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.supplier),
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.works_branch),
         joinedload(Consignment.loading_port),
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),

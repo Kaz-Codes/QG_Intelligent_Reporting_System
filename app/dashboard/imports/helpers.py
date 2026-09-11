@@ -1,7 +1,10 @@
 from sqlalchemy import select, func, or_
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.imports.models import Consignment, ConsignmentItem
+from app.imports.models import (
+    Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
+)
+from app.imports.demand_dates import EARLIEST_REQUIRED_DATE, earliest_required_date
 from app.masters.models import Supplier, Item, Branch
 from app.enums import Status
 from app.dashboard.period import coverage
@@ -27,8 +30,8 @@ def fetch_consignments(db):
         Consignment.is_deleted == False
     ).options(
         selectinload(Consignment.items).joinedload(ConsignmentItem.item),
-        joinedload(Consignment.supplier),
-        joinedload(Consignment.branch)
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.supplier),
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.works_branch),
     )
 
     return db.execute(query).scalars().all()
@@ -40,7 +43,14 @@ def fetch_consignments(db):
 # through a map rather than interpolated, so an unknown name cannot reach SQL.
 DATE_FIELDS = {
     "eta_works": Consignment.eta_works,
-    "required_date": Consignment.required_date,
+    # THE EARLIEST REQUIRED DATE ACROSS THIS BATCH'S LINES, not a header column.
+    # `required_date` is a fact about the demand and lives on the order item now,
+    # so a batch carrying three lines has three of them and a column showing one
+    # has to aggregate. Imported rather than spelled out here — eleven sites read
+    # this and four of them decide window MEMBERSHIP, so a second spelling would
+    # change which records a period contains rather than merely restating a
+    # number. See app/imports/demand_dates.py.
+    "required_date": EARLIEST_REQUIRED_DATE,
 }
 DATE_FIELD_DEFAULT = "eta_works"
 
@@ -110,19 +120,32 @@ LINE_ETA = func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 # sheet's per-line PKR is summed into the consignment's `pkr_total` and not kept
 # per row, so this is the only per-line figure available.
 LINE_VALUE_PKR = (
-    ConsignmentItem.quantity * ConsignmentItem.unit_price * Consignment.exchange_rate
+    ConsignmentItem.quantity * ConsignmentItem.unit_price * ConsignmentBatchGroup.exchange_rate
 )
 
 
 def line_date_column(date_field):
     """Which date a LINE is filtered on.
 
-    Only ETA at works exists per line; `required_date` is a header attribute
-    with no line equivalent, so that choice falls back to the header for lines
-    too rather than silently filtering on the wrong column.
+    BOTH CHOICES ARE NOW GENUINELY PER LINE, and that is a change in precision
+    rather than a repoint. This used to fall back to `Consignment.required_date`
+    with a comment saying no line equivalent existed — one does now
+    (`consignment_order_items.required_date`), because the requirements moved the
+    demand dates onto the item.
+
+    A CONSEQUENCE TO EXPECT, not a bug: under `date_field='required_date'` window
+    membership gets stricter. It used to mean "this consignment's header date is
+    in the window", which pulled in every line of a qualifying consignment
+    including ones needed months outside it. It now means "THIS line was needed
+    in the window". Row counts on that filter will fall, and the rows that
+    remain are the right ones — the same precision gain CLAUDE.md records for the
+    shaft and category filters when reports moved to one row per line.
+
+    Callers must join `ConsignmentOrderItem`; `_line_query` and
+    `fetch_shaft_lines` below do.
     """
     if (date_field or DATE_FIELD_DEFAULT) == "required_date":
-        return Consignment.required_date
+        return ConsignmentOrderItem.required_date
     return LINE_ETA
 
 
@@ -131,12 +154,12 @@ def _line_query(shafts_only=False):
         select(
             ConsignmentItem.id,
             Consignment.id.label("consignment_id"),
-            Consignment.instrument_number,
+            ConsignmentBatchGroup.instrument_number,
             ConsignmentItem.item_name,
             ConsignmentItem.quantity,
             ConsignmentItem.unit_of_measurement,
             ConsignmentItem.unit_price,
-            Consignment.exchange_rate,
+            ConsignmentBatchGroup.exchange_rate,
             LINE_ETA.label("line_eta"),
             Consignment.current_status,
             Supplier.name.label("supplier"),
@@ -145,8 +168,17 @@ def _line_query(shafts_only=False):
         )
         .select_from(ConsignmentItem)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
+        # The ORDER above the batch, and the ORDER LINE above the shipment line.
+        # Supplier and branch are terms of the order and live on the group now;
+        # the demand dates live on the order item. Inner joins on both: every
+        # consignment has a group and every line has an order item, both NOT
+        # NULL since revision A, so there is no row to lose.
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        .join(ConsignmentOrderItem,
+              ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
+        .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
+        .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(ConsignmentItem.is_deleted.is_(False))
         .where(Consignment.is_deleted.is_(False))
     )
@@ -173,7 +205,7 @@ def fetch_period_lines(db, date_from=None, date_to=None, date_field=None,
     if supplier:
         query = query.where(Supplier.name == supplier)
     if country:
-        query = query.where(Consignment.origin == country)
+        query = query.where(ConsignmentBatchGroup.origin == country)
 
     return db.execute(query.order_by(LINE_VALUE_PKR.desc(), ConsignmentItem.id)).all()
 
@@ -186,30 +218,13 @@ def fetch_shaft_lines(db, date_from=None, date_to=None, date_field=None,
     header-dated consignment list — otherwise a consignment whose header sits
     outside the window would take its in-window lines with it.
     """
-    query = (
-        select(
-            ConsignmentItem.id,
-            Consignment.id.label("consignment_id"),
-            Consignment.instrument_number,
-            ConsignmentItem.item_name,
-            ConsignmentItem.quantity,
-            ConsignmentItem.unit_of_measurement,
-            ConsignmentItem.unit_price,
-            Consignment.exchange_rate,
-            LINE_ETA.label("line_eta"),
-            Consignment.current_status,
-            Supplier.name.label("supplier"),
-            Branch.name.label("branch"),
-            LINE_VALUE_PKR.label("value"),
-        )
-        .select_from(ConsignmentItem)
-        .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
-        .where(ConsignmentItem.is_deleted.is_(False))
-        .where(Consignment.is_deleted.is_(False))
-        .where(or_(*[ConsignmentItem.item_name.ilike(f"%{name}%")
-                     for name in SHAFT_ITEMS]))
+    # BUILT ON _line_query, not copied from it. This used to restate the whole
+    # select list and all four joins, which is two places for the same query to
+    # drift — and the joins just changed (supplier and branch moved to the order,
+    # the demand dates to the order line), so the copy would have had to change
+    # identically or this tab would have quietly kept reading the old columns.
+    query = _line_query().where(
+        or_(*[ConsignmentItem.item_name.ilike(f"%{name}%") for name in SHAFT_ITEMS])
     )
 
     if date_from is not None and date_to is not None:
@@ -219,7 +234,7 @@ def fetch_shaft_lines(db, date_from=None, date_to=None, date_field=None,
     if supplier:
         query = query.where(Supplier.name == supplier)
     if country:
-        query = query.where(Consignment.origin == country)
+        query = query.where(ConsignmentBatchGroup.origin == country)
 
     return db.execute(query.order_by(LINE_VALUE_PKR.desc(), ConsignmentItem.id)).all()
 
@@ -244,9 +259,20 @@ def fetch_filtered_consigments(
     query = select(Consignment).where(
         Consignment.is_deleted == False
     ).options(
+        # THE ORDER LINE BEHIND EACH SHIPMENT LINE IS NOT OPTIONAL HERE.
+        #
+        # delivery_delay and category_delays both call
+        # demand_dates.earliest_required_date, which walks
+        # line.order_item.required_date for every line of every consignment in
+        # the filtered set. Without this joinedload that is one query PER LINE
+        # across the whole set — the same N+1 the item-master load below was
+        # added to kill, and worse, because there are ~2.5 lines per row.
         selectinload(Consignment.items).joinedload(ConsignmentItem.item),
-        joinedload(Consignment.supplier),
-        joinedload(Consignment.branch)
+        selectinload(Consignment.items).joinedload(ConsignmentItem.order_item),
+        # Supplier and branch hang off the ORDER now, so the group has to come
+        # with them or every `.supplier.name` read is a query of its own.
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.supplier),
+        joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.works_branch),
     )
 
     # ARRIVED AT WORKS IS NO LONGER EXCLUDED BY DEFAULT.
@@ -282,9 +308,12 @@ def fetch_filtered_consigments(
         # reference, its GD number, the supplier, or an item on it.
         term = f"%{search.strip()}%"
         query = query.where(or_(
-            Consignment.instrument_number.ilike(term),
             Consignment.gd_number.ilike(term),
-            Consignment.origin.ilike(term),
+            # The payment reference and the origin are terms of the ORDER now.
+            Consignment.batch_group.has(or_(
+                ConsignmentBatchGroup.instrument_number.ilike(term),
+                ConsignmentBatchGroup.origin.ilike(term),
+            )),
             Consignment.id.in_(
                 select(ConsignmentItem.consignment_id)
                 .where(ConsignmentItem.is_deleted.is_(False))
@@ -293,16 +322,19 @@ def fetch_filtered_consigments(
                 .distinct()
                 .scalar_subquery()
             ),
-            Consignment.supplier_id.in_(
-                select(Supplier.id).where(Supplier.name.ilike(term)).scalar_subquery()
+            # Supplier, works/branch and origin are all terms of the ORDER now,
+            # so each of these three filters resolves through the group. Matched
+            # with `.has(...)` rather than a join so adding a filter cannot
+            # change the row count of the others.
+            Consignment.batch_group.has(
+                ConsignmentBatchGroup.supplier.has(Supplier.name.ilike(term))
             ),
         ))
 
     if work:
-        query = (
-            query.join(Consignment.branch)
-                 .where(Branch.name == work)
-        )
+        query = query.where(Consignment.batch_group.has(
+            ConsignmentBatchGroup.works_branch.has(Branch.name == work)
+        ))
 
     if status:
        query = query.where(
@@ -317,15 +349,14 @@ def fetch_filtered_consigments(
         )
 
     if supplier:
-        query = (
-            query.join(Consignment.supplier)
-                 .where(Supplier.name == supplier)
-        )
+        query = query.where(Consignment.batch_group.has(
+            ConsignmentBatchGroup.supplier.has(Supplier.name == supplier)
+        ))
 
     if country:
-        query = query.where(
-            Consignment.origin == country
-        )
+        query = query.where(Consignment.batch_group.has(
+            ConsignmentBatchGroup.origin == country
+        ))
         
     if from_date:
         query = query.where(Consignment.eta_works >= from_date)
@@ -352,6 +383,14 @@ def fetch_filtered_consigments(
         query = query.where(Consignment.id.in_(
             select(ConsignmentItem.consignment_id)
             .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
+            # Needed for the required_date choice, which now reads the ORDER
+            # LINE (line_date_column above) rather than falling back to a header
+            # column. Joined unconditionally rather than only for that branch:
+            # order_item_id is NOT NULL so it loses no row, and a join that
+            # appears and disappears with a parameter is how the two branches
+            # come to disagree about which rows they see.
+            .join(ConsignmentOrderItem,
+                  ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
             .where(ConsignmentItem.is_deleted.is_(False))
             .where(line_date_column(date_field).between(date_from, date_to))
             .distinct()
