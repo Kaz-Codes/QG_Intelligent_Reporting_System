@@ -27,3 +27,7 @@ chatbot_backend/backend/metadata/data_profile.json
 chatbot_backend/backend/metadata/learned_terms.json
 
 chatbot_backend/backend/metadata/query_cache.json
+
+# Output of server-survey.ps1 — machine-specific, regenerated per run,
+# and it embeds real usernames and paths. The SCRIPT is tracked; its output is not.
+server-survey-*.txt
