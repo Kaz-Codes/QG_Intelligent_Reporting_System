@@ -4,6 +4,11 @@ from app.dashboard.references import paginate, search_filter
 
 from app.dashboard.period import build_trend
 from app.enums import Status
+from app.imports.demand_dates import earliest_required_date
+from app.imports.order_view import (
+    order_branch_name, order_exchange_rate, order_reference, order_supplier_name,
+    order_type,
+)
 
 #-------------------------------------
 # THE NUMBERS THE IMPORTS DASHBOARD SHOWS
@@ -51,10 +56,10 @@ def computed_value_pkr(consignment):
             foreign_total += item.quantity * item.unit_price
             priced = True
 
-    if not priced or consignment.exchange_rate is None:
+    if not priced or order_exchange_rate(consignment) is None:
         return None
 
-    return foreign_total * consignment.exchange_rate
+    return foreign_total * order_exchange_rate(consignment)
 
 
 def value_basis(consignment):
@@ -340,14 +345,14 @@ def consignment_reference(consignment):
         detail += f" +{len(items) - 2} more"
 
     meta = " · ".join(part for part in (
-        consignment.supplier.name if consignment.supplier else None,
-        consignment.branch.name if consignment.branch else None,
+        order_supplier_name(consignment),
+        order_branch_name(consignment),
         f"GD {consignment.gd_number}" if consignment.gd_number else None,
     ) if part)
 
     return {
         "id": consignment.id,
-        "reference": consignment.instrument_number or f"IMP-{consignment.id}",
+        "reference": order_reference(consignment),
         "detail": detail or None,
         "meta": meta or None,
         "badge": consignment.current_status,
@@ -495,10 +500,10 @@ def shafts_value(consignments, page=None, page_size=None):
 
         for item in shaft_lines:
             if (item.quantity is None or item.unit_price is None
-                    or consignment.exchange_rate is None):
+                    or order_exchange_rate(consignment) is None):
                 missing = True
                 continue
-            total += item.quantity * item.unit_price * consignment.exchange_rate
+            total += item.quantity * item.unit_price * order_exchange_rate(consignment)
 
         if missing:
             incomplete += 1
@@ -534,7 +539,7 @@ def efs_split(consignments, page=None, page_size=None, search=None):
     # 12 EFS shipments worth Rs 400m and 12 worth Rs 4m are not the same news.
 
     for consignment in consignments:
-        name = consignment.consignment_type or NOT_STATED
+        name = order_type(consignment) or NOT_STATED
         counts[name] = counts.get(name, 0) + 1
         by_class.setdefault(name, []).append(consignment)
 
@@ -628,7 +633,7 @@ def delivery_delay(consignments, page=None, page_size=None, search=None):
     late_consignments = []   # (days_late, consignment), so the list can rank
 
     for consignment in consignments:
-        required = consignment.required_date
+        required = earliest_required_date(consignment)
         arrival = consignment.eta_works
 
         if required is None or arrival is None:
@@ -702,7 +707,7 @@ def supplier_spend_pareto(consignments, limit=10):
     counts = {}
 
     for consignment in consignments:
-        name = consignment.supplier.name if consignment.supplier else "(no supplier)"
+        name = order_supplier_name(consignment) or "(no supplier)"
         totals[name] = totals.get(name, Decimal("0")) + consignment_value_pkr(consignment)
         counts[name] = counts.get(name, 0) + 1
 
@@ -765,7 +770,7 @@ def category_delays(consignments, limit=10):
     stats = {}
 
     for consignment in consignments:
-        required = consignment.required_date
+        required = earliest_required_date(consignment)
         if required is None:
             continue
 

@@ -93,10 +93,10 @@ export function ImportsStatusDetail() {
 
   const editable = (can(user, 'editAny', 'imports') || can(user, 'editOwnDraft', 'imports')) && !row?.isLocked
   // Same permission as edit — submit is create-or-edit-and-own, per CLAUDE.md.
-  // Disabled (not hidden) when requirements aren't met yet, so the reason is
-  // visible via the tooltip rather than the button just not being there.
+  // NEVER BLOCKED: imports has no submit rule set, so there is no state in
+  // which submitting should refuse. It is simply not offered once the record is
+  // already marked finished.
   const submittable = editable && !!row && row.recordState !== 'submitted'
-  const submitBlocked = !!row && row.missing.length > 0
 
   if (loading) {
     return (
@@ -186,8 +186,7 @@ export function ImportsStatusDetail() {
             <Button
               variant="outline"
               onClick={() => void handleSubmit()}
-              disabled={submitting || submitBlocked}
-              title={submitBlocked ? `Missing: ${row.missing.join(', ')}` : undefined}
+              disabled={submitting}
             >
               {submitting ? 'Submitting…' : 'Submit'}
             </Button>
@@ -231,15 +230,10 @@ export function ImportsStatusDetail() {
           sub={row.gateOut ? `Cleared ${dateShort(row.gateOut)}` : left !== null ? `${left} left` : 'Not yet arrived'}
           warn={left !== null && left <= 2 && !row.gateOut}
         />
-        <KeyFigure label="Information" value={row.missing.length ? `${row.missing.length} pending` : 'Complete'} sub="See below" warn={row.missing.length > 0} />
+        {/* NO "Information: N pending" FIGURE and no pending-information
+            banner. Both read `missing_fields`, which the imports API no longer
+            publishes — there is no rule set to derive it from. */}
       </div>
-
-      {row.missing.length > 0 && (
-        <div className="rounded-r border-l-4 border-[var(--color-watch)] bg-[var(--color-watch-bg)] px-3.5 py-2.5 text-sm text-[var(--color-watch)]">
-          <b className="font-semibold">Pending information:</b> {row.missing.join(', ')}.{' '}
-          Recorded as a {row.recordState} — nothing here blocks the consignment progressing.
-        </div>
-      )}
 
       {/* section nav */}
       <nav className="sticky top-0 z-20 -mx-1 flex gap-1 overflow-x-auto rounded-lg border border-line bg-surface p-1 shadow-sm">

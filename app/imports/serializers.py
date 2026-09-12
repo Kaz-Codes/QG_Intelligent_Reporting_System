@@ -2,6 +2,15 @@
 from sqlalchemy.inspection import inspect
 from datetime import date
 
+from app.imports.demand_dates import (
+    earliest_required_date, line_required_date, line_requisition_date,
+)
+from app.imports.order_view import (
+    order_branch, order_currency, order_exchange_rate, order_incoterm,
+    order_instrument_number, order_origin, order_payment_instrument,
+    order_rate_booked_on, order_rate_source, order_supplier, order_type,
+)
+
 
 #----------------------------------------
 # AUTO-GENERATED SYSTEM REMARKS
@@ -66,27 +75,32 @@ def build_system_remarks(consignment):
 # THAT CAN BE SENT IN RESPONSE
 #---------------------------------------
 
-def _submission_errors(consignment):
-    # Deferred import: app.imports.helpers imports this module for
-    # serialize_many, so importing it at module level would be a cycle.
-    from app.imports.helpers import submission_errors
-
-    return submission_errors(consignment)
-
-
 def serialize_consignment(consignment, db, include_change_history=True):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
     data = {
         "id" : consignment.id,
-        "branch" : serialize_master(consignment.branch),
-        "supplier" : serialize_master(consignment.supplier),
+
+        # WHICH ORDER THIS CONSIGNMENT IS A BATCH OF, and where in it.
+        #
+        # Published because a list row that cannot say which order it belongs to
+        # cannot show two batches of one LC as anything but two unrelated rows.
+        # Both are server-controlled: `batch_sequence` is assigned at creation
+        # and never reused, so 177-2 identifies one shipment for ever.
+        #
+        # The DISPLAY form built from these ("177" alone while an order has one
+        # batch, "177-2" once it has more) is section 3.4's `consignment_number`
+        # and is not built yet — these are the raw values it will need.
+        "batch_group_id" : consignment.batch_group_id,
+        "batch_sequence" : consignment.batch_sequence,
+        "branch" : serialize_master(order_branch(consignment)),
+        "supplier" : serialize_master(order_supplier(consignment)),
         "works" : consignment.works,
         "clearing_agent" : serialize_master(consignment.clearing_agent),
         "loading_port" : serialize_master(consignment.loading_port),
         "delivery_port" : serialize_master(consignment.delivery_port),
 
-        "items" : serialize_many(consignment.items),
+        "items" : serialize_items(consignment.items),
         "eta_revisions" : serialize_many(consignment.eta_revisions),
         "status_updates" : serialize_many(consignment.status_updates),
         "payments" : serialize_many(consignment.payments),
@@ -95,24 +109,43 @@ def serialize_consignment(consignment, db, include_change_history=True):
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,
         "created_at" : consignment.created_at,
 
-        "origin" : consignment.origin,
+        "origin" : order_origin(consignment),
         "po_date" : consignment.po_date,
-        "requisition_date" : consignment.requisition_date,
-        "required_date" : consignment.required_date,
-        "currency" : consignment.currency,
-        "consignment_type" : consignment.consignment_type,
-        "incoterm" : consignment.incoterm,
+
+        # THE TWO DEMAND DATES, TREATED DIFFERENTLY ON PURPOSE.
+        #
+        # Both moved onto the order line, because one order can carry lines
+        # requisitioned and needed months apart. What they need from the header
+        # payload is not the same, though:
+        #
+        # `required_date` KEEPS a header-level value, and it is the EARLIEST
+        # across this batch's lines. The list's delay column is a header-level
+        # comparison that has to show ONE number and be sortable, and the list
+        # payload carries no item lines at all — so the server has to supply the
+        # minimum or the front end's `requiredDelayDays` silently reads nothing
+        # while keeping its signature. Earliest, not latest: the column exists to
+        # say "something in here is late", and the first date to pass is the
+        # first thing that is late.
+        #
+        # `requisition_date` is GONE from the header and appears per line below.
+        # It has no header-level consumer — it was a filter and a display, and
+        # both are better per line — so nothing aggregates it and nothing should.
+        # The requirements remove both from the main list anyway.
+        "required_date" : earliest_required_date(consignment),
+        "currency" : order_currency(consignment),
+        "consignment_type" : order_type(consignment),
+        "incoterm" : order_incoterm(consignment),
         "mode_of_shipment" : consignment.mode_of_shipment,
         "etd" : consignment.etd,
         "eta" : consignment.eta,
         "eta_works" : consignment.eta_works,
         "cargo_readiness_date" : consignment.cargo_readiness_date,
-        "payment_instrument" : consignment.payment_instrument,
-        "instrument_number" : consignment.instrument_number,
+        "payment_instrument" : order_payment_instrument(consignment),
+        "instrument_number" : order_instrument_number(consignment),
         "opening_or_retirement_date" : consignment.opening_or_retirement_date,
-        "exchange_rate" : consignment.exchange_rate,
-        "rate_booked_on" : consignment.rate_booked_on,
-        "rate_source" : consignment.rate_source,
+        "exchange_rate" : order_exchange_rate(consignment),
+        "rate_booked_on" : order_rate_booked_on(consignment),
+        "rate_source" : order_rate_source(consignment),
         "foreign_total" : consignment.foreign_total,
         "pkr_total" : consignment.pkr_total,
         "current_status" : consignment.current_status,
@@ -126,13 +159,11 @@ def serialize_consignment(consignment, db, include_change_history=True):
         "demurrage_or_detention_paid" : consignment.demurrage_or_detention_paid,
         "container_detention" : consignment.container_detention,
 
-        # The named gaps that stop this consignment being submitted — the same
-        # rule set /submit enforces, so the list's "N fields missing" tag and a
-        # failed submit can never disagree. Imported (Excel) rows are all still
-        # 'draft' and legitimately incomplete, so this is usually non-empty for
-        # them. Imported inside the function: helpers imports this module, so a
-        # module-level import would be circular.
-        "missing_fields" : _submission_errors(consignment),
+        # NO `missing_fields` KEY. Imports has no submit rule set any more (see
+        # app/imports/helpers.py, "THERE IS NO SUBMIT VALIDATION IN IMPORTS ANY
+        # MORE"), so there are no named gaps to publish and nothing on the front
+        # end blocks or badges on them. Logistics and trucking still publish
+        # theirs; this is the imports-only divergence, deliberately.
 
         # Cross-module hand-off. NULL = not sent; the list shows a "Sent"
         # column from these and disables each Send button once its own
@@ -196,6 +227,31 @@ def serialize_many(models_list):
         )
 
     return serialized_models
+
+
+#----------------------------------
+# SHIPMENT LINES, WITH THE DEMAND THEY CAME FROM
+#
+# `serialize_many` above is MAPPER-DRIVEN: it emits one key per column attribute
+# of whatever it is given. That is why it cannot do this on its own — the demand
+# dates are not columns of `consignment_items`, they are columns of the ORDER
+# LINE above it, and a mapper walk over the shipment line will never see them.
+#
+# So the two are added explicitly, per line. They are the per-item half of the
+# header change: `required_date` also appears on the header payload as the
+# earliest across the batch (the delay column needs one sortable number), while
+# `requisition_date` appears ONLY here, because nothing wants a batch-level
+# version of it.
+#----------------------------------
+
+def serialize_items(items):
+    rows = serialize_many(items)
+
+    for row, item in zip(rows, items):
+        row["requisition_date"] = line_requisition_date(item)
+        row["required_date"] = line_required_date(item)
+
+    return rows
 
 
 #----------------------------------

@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload, joinedload
 from app.logistics.models import LogisticsConsignment
 from app.imports.models import Consignment
 from app.trucking.models import TruckingConsignment
+from app.imports.order_view import order_instrument_number, order_origin, order_supplier_name
 
 #-----------------------------------------------------
 # CROSS-MODULE LINKAGE
@@ -179,9 +180,9 @@ def derive_open_requests(db):
             "source": "from-import-fob",
             "source_ref": ref,
             "movement_type": "Inbound",
-            "label": f"Import {ref} — {consignment.supplier.name if consignment.supplier else consignment.origin or ''}".strip(" —"),
-            "supplier": consignment.supplier.name if consignment.supplier else None,
-            "instrument_number": consignment.instrument_number,
+            "label": f"Import {ref} — {order_supplier_name(consignment) or order_origin(consignment) or ''}".strip(" —"),
+            "supplier": order_supplier_name(consignment),
+            "instrument_number": order_instrument_number(consignment),
             "snapshot": _import_snapshot(consignment),
             "days_open": _days_open(consignment.sent_to_trucking_at),
         })
@@ -275,9 +276,9 @@ def derive_import_fob_jobs(db):
             "source": "from-import-fob",
             "source_ref": str(consignment.id),
             "consignment_id": consignment.id,
-            "instrument_number": consignment.instrument_number,
-            "supplier": consignment.supplier.name if consignment.supplier else None,
-            "origin": consignment.origin,
+            "instrument_number": order_instrument_number(consignment),
+            "supplier": order_supplier_name(consignment),
+            "origin": order_origin(consignment),
             "item_summary": (
                 f"{first}{f' +{more} more' if more > 0 else ''}" if first else None
             ),

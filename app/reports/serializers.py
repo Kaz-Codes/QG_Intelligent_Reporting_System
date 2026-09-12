@@ -6,6 +6,12 @@ from app.dashboard.logistics.calculations import (
     total_logistics_cost, cost_per_kg, shipment_stage,
 )
 from app.reports.helpers import reorder_levels_for
+from app.imports.demand_dates import line_required_date, line_requisition_date
+from app.imports.order_view import (
+    order_currency, order_exchange_rate, order_incoterm, order_origin,
+    order_payment_instrument, order_reference, order_supplier_name,
+    order_branch_name, order_type,
+)
 
 
 #-----------------------------------------------------
@@ -76,9 +82,10 @@ def _line_value_pkr(ci, c):
     whole-consignment `pkr_total` this used to show on every row: repeating a
     5-line consignment's full total on each of its 5 rows would 5x it the
     moment someone sums the Value column."""
-    if ci.quantity is None or ci.unit_price is None or c.exchange_rate is None:
+    rate = order_exchange_rate(c)
+    if ci.quantity is None or ci.unit_price is None or rate is None:
         return None
-    return ci.quantity * ci.unit_price * c.exchange_rate
+    return ci.quantity * ci.unit_price * rate
 
 
 #-------------------------------------
@@ -120,16 +127,27 @@ def _serialize_import(ci):
     row.update({
         # No dedicated human reference exists on the consignment; the bank
         # instrument number is the natural one, falling back to the id.
-        "ref": c.instrument_number or f"IMP-{c.id}",
+        "ref": order_reference(c),
         "item": ci.item_name,
         "item_code": ci.item_code,
-        "supplier": c.supplier.name if c.supplier else None,
-        "branch": c.branch.name if c.branch else None,
+        "supplier": order_supplier_name(c),
+        "branch": order_branch_name(c),
         "category": ci.item.category if ci.item else None,
         "status": c.current_status,
         "value": _line_value_pkr(ci, c),
-        "date": c.requisition_date,
-        "country": c.origin,
+        # BOTH DEMAND DATES, AND BOTH PER LINE. `date` is the shared key the
+        # cross-type table sorts on and keeps meaning "requisition date" for
+        # imports, exactly as before — it has just moved from the header to the
+        # order line, which is where one order carrying lines requisitioned
+        # months apart can state them honestly.
+        #
+        # `required_date` was previously null on every imports row (the column
+        # existed only for purchases) because there was no per-line value to
+        # put in it. There is now, so the column fills in rather than staying
+        # empty — no aggregate, the line's own.
+        "date": line_requisition_date(ci),
+        "required_date": line_required_date(ci),
+        "country": order_origin(c),
         "mode_of_shipment": c.mode_of_shipment,
         "hs_code": ci.hs_code,
         "quantity": ci.quantity,
@@ -149,17 +167,17 @@ def _serialize_import(ci):
         "clearing_agent": c.clearing_agent.name if c.clearing_agent else None,
         "loading_port": c.loading_port.name if c.loading_port else None,
         "delivery_port": c.delivery_port.name if c.delivery_port else None,
-        "incoterm": c.incoterm,
-        "currency": c.currency,
-        "consignment_type": c.consignment_type,
+        "incoterm": order_incoterm(c),
+        "currency": order_currency(c),
+        "consignment_type": order_type(c),
         "works": c.works,
         "po_date": c.po_date,
         "etd": c.etd,
         "gd_number": c.gd_number,
         "gd_filing_date": c.gd_filing_date,
         "gate_out_date": c.gate_out_date,
-        "exchange_rate": c.exchange_rate,
-        "payment_instrument": c.payment_instrument,
+        "exchange_rate": order_exchange_rate(c),
+        "payment_instrument": order_payment_instrument(c),
         "gross_weight": ci.gross_weight,
     })
     return row

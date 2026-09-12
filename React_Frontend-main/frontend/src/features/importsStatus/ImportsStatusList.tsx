@@ -60,7 +60,7 @@ export function ImportsStatusList() {
   const [supplierFilter, setSupplierFilter] = useState<string[]>([])
   const [requisitionFilter, setRequisitionFilter] = useState<string[]>([])
   const [includeClosed, setIncludeClosed] = useState(false)
-  const [missingOnly, setMissingOnly] = useState(false)
+  const [draftsOnly, setDraftsOnly] = useState(false)
   const [etdFrom, setEtdFrom] = useState('')
   const [etdTo, setEtdTo] = useState('')
   const [page, setPage] = useState(1)
@@ -130,7 +130,7 @@ export function ImportsStatusList() {
     supplierId: supplierIds,
     requisitionType: requisitionFilter,
     includeClosed,
-    missingOnly,
+    draftsOnly,
     etdFrom: etdFrom || undefined,
     etdTo: etdTo || undefined,
     search: debouncedSearch,
@@ -140,7 +140,7 @@ export function ImportsStatusList() {
     // rather than hidden away on a separate screen.
     includeDeleted: !!user?.isAdmin,
   }), [page, stage, statusFilter, branchIds, supplierIds, requisitionFilter,
-       includeClosed, missingOnly, etdFrom, etdTo, debouncedSearch, user?.isAdmin])
+       includeClosed, draftsOnly, etdFrom, etdTo, debouncedSearch, user?.isAdmin])
 
   // Any filter change puts us back on page 1 — staying on page 7 of a result
   // set that now has 2 pages would show an empty table.
@@ -149,7 +149,7 @@ export function ImportsStatusList() {
     if (firstRender.current) { firstRender.current = false; return }
     setPage(1)
   }, [stage, statusFilter, branchIds, supplierIds, requisitionFilter,
-      includeClosed, missingOnly, etdFrom, etdTo, debouncedSearch])
+      includeClosed, draftsOnly, etdFrom, etdTo, debouncedSearch])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -297,18 +297,9 @@ export function ImportsStatusList() {
     {
       key: 'status', label: 'Status', width: 180,
       sortValue: (r) => r.status,
-      render: (r) => (
-        <div className="space-y-1">
-          <StatusPill status={r.status} canonical={r.statusCanonical} />
-          {r.missing.length > 0 && (
-            <div>
-              <Tag tone="warning" title={`Missing: ${r.missing.join(', ')}`}>
-                {r.missing.length} field{r.missing.length > 1 ? 's' : ''} missing
-              </Tag>
-            </div>
-          )}
-        </div>
-      ),
+      // NO "N fields missing" TAG. Imports has no submit rule set, so there is
+      // nothing to count and a tag that can never fire is worse than no tag.
+      render: (r) => <StatusPill status={r.status} canonical={r.statusCanonical} />,
     },
     {
       key: 'requisition', label: 'Requisition / Required', width: 150,
@@ -632,7 +623,7 @@ export function ImportsStatusList() {
           onChange={setSupplierFilter}
         />
         <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" checked={missingOnly} onChange={(e) => setMissingOnly(e.target.checked)} />
+          <input type="checkbox" checked={draftsOnly} onChange={(e) => setDraftsOnly(e.target.checked)} />
           Missing information only
         </label>
         <label className="flex items-center gap-2 text-sm text-ink">
@@ -685,7 +676,6 @@ export function ImportsStatusList() {
       <SortableTable
         columns={columns}
         rows={rows}
-        flagged={(r) => r.missing.length > 0}
         rowClassName={(r) => (r.isDeleted ? DELETED_ROW_CLASS : undefined)}
         rowKey={(r) => String(r.id)}
         renderExpanded={(r) => <ConsignmentItemsPanel row={r} />}

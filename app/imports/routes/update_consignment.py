@@ -5,15 +5,18 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, sync_batch_group
 
-from app.imports.helpers import fetch_consignment, consignment_reference, CLOSED_STATUS_VALUE
+from app.imports.helpers import (
+    fetch_consignment, consignment_reference, is_closed, CLOSED_STATUS_VALUE,
+)
 from app.imports.models import ConsignmentItem, Payment
 from app.imports.serializers import serialize_consignment, serialize_many
 from app.notifications.emit import emit
 from app.notifications.lifecycle import notify_status_changed, notify_completed
 from datetime import date
 import logging
+from app.imports.order_view import order_branch_name, order_reference, order_supplier_name
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +84,8 @@ def _notify_major_eta_slip(db, updation_dict, consignment):
             "imports.eta_slipped_major",
             payload={
                 # Same reference the reports and list screens show.
-                "consignment_no": consignment.instrument_number or f"IMP-{consignment.id}",
-                "supplier": consignment.supplier.name if consignment.supplier else "unknown supplier",
+                "consignment_no": order_reference(consignment),
+                "supplier": order_supplier_name(consignment) or "unknown supplier",
                 "old_eta": old_eta.isoformat(),
                 "new_eta": new_eta.isoformat(),
                 "slip_days": slip_days,
@@ -91,7 +94,7 @@ def _notify_major_eta_slip(db, updation_dict, consignment):
             entity_id=consignment.id,
             # The indexed column, not a template variable — it is what a feed
             # is narrowed by.
-            branch=consignment.branch.name if consignment.branch else None,
+            branch=order_branch_name(consignment),
             # One notification per consignment per landed-on ETA: re-saving
             # the same revision, or two people saving it at once, is one
             # event. Revising AGAIN to a different date is a new one.
@@ -138,13 +141,13 @@ def _notify_status_lifecycle(db, updation_dict, consignment):
             return
 
         reference = consignment_reference(consignment)
-        branch = consignment.branch.name if consignment.branch else None
+        branch = order_branch_name(consignment)
 
         if new_status == CLOSED_STATUS_VALUE:
             notify_completed(
                 db, "imports", consignment.id,
                 reference=reference,
-                party=consignment.supplier.name if consignment.supplier else "unknown supplier",
+                party=order_supplier_name(consignment) or "unknown supplier",
                 status=new_status,
                 branch=branch,
             )
@@ -258,11 +261,25 @@ def update_consignment(
         # Applying updates
         apply_updates(updation_dict, consignment)
 
-        # A plain draft save never closes the consignment, even if this
-        # update sets status to "Arrived at works" on an already-submitted
-        # record — submission is what closes it (see submit_consignment.py),
-        # not merely saving while both conditions happen to be true. Only the
-        # /submit endpoint locks.
+        # THE CLOSED LOCK IS WRITTEN HERE, AND ONLY HERE.
+        #
+        # Reaching "Arrived at works" closes the consignment: the goods are at
+        # the factory, so it is finished whether or not anyone marks it so.
+        # /submit used to be the only place is_locked was ever set to True and
+        # no longer sets it at all, so if this line is ever deleted the closed
+        # lock ceases to exist rather than moving somewhere else.
+        #
+        # PLACEMENT IS LOAD-BEARING, in two ways:
+        #
+        #   - AFTER apply_updates, because the new status has to be on the
+        #     record before is_closed() can see it.
+        #   - AFTER the is_locked guard at the top of this route, or the very
+        #     request that closes the consignment would reject itself.
+        #
+        # Setting it when it is already true is a no-op, so a later edit that
+        # somehow reaches a locked record cannot un-close it.
+        if is_closed(consignment):
+            consignment.is_locked = True
 
         consignment_items_map = {item.id : item for item in consignment.items}
 
@@ -297,6 +314,13 @@ def update_consignment(
         # no longer carry, which is the drift the over-allocation CHECK cannot
         # see and `post_load`'s "Allocation totals" check exists to catch.
         sync_order_items(consignment, db)
+
+        # AND THE ORDER ABOVE THE BATCH, for the same reason one level up. The
+        # group holds the copy of supplier / currency / exchange rate that every
+        # dashboard now reads; without this an edit updated the batch and left
+        # the group showing the value it was created with, for ever. Only batch
+        # 1 writes it — see sync_batch_group.
+        sync_batch_group(consignment, db)
 
         # Recompute + store the derived money totals and per-line variance from
         # the now-updated lines and rate.

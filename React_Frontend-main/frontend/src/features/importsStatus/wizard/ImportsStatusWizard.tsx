@@ -12,18 +12,15 @@ import { can } from '@/lib/roleAccess'
 import { ApiError } from '@/lib/api/client'
 import {
   getConsignment, createConsignment, updateConsignmentApi, submitConsignmentApi,
-  parseSubmitErrors, type ConsignmentPayload,
+  type ConsignmentPayload,
 } from '@/lib/api/imports'
 import {
   draftToPayload, apiToDraft, syncItemBackendIds, syncPaymentBackendIds, type WizardMasters,
 } from '@/lib/api/importsMap'
 import {
   consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, CLOSED_STATUS,
-  submitRequirements,
   type ConsignmentDraft, type ConsignmentItem, type Payment,
 } from '../schema'
-import { SubmitRequirements } from '@/components/SubmitRequirements'
-import { requirementsTooltip } from '@/lib/submitRequirements'
 import { MastersProvider, useMasters } from './MastersContext'
 import { WizardStepper } from '@/components/ui/WizardStepper'
 import { useStepNavigation } from '@/lib/useStepNavigation'
@@ -46,8 +43,8 @@ const STEP_COMPONENTS = [
  * the first time, PUT after) and only move once that succeeds; if it fails,
  * the error shows and the page stays put. "Next" reads "Save and Next" for
  * exactly that reason. Submit (available on every step) saves the same way,
- * then calls the strict /submit endpoint, which validates server-side and
- * reports back anything still missing.
+ * then calls /submit, which marks it finished. There is no rule set behind
+ * that in imports, so a submit cannot fail on validation and is never blocked.
  *
  * Clicking a STEP PILL is different: via useStepNavigation/WizardStepper
  * (shared with logistics and trucking), it jumps there directly with no save
@@ -97,13 +94,12 @@ function ImportsStatusWizardInner() {
   const [notFound, setNotFound] = useState(false)
   const [loadErrorMsg, setLoadErrorMsg] = useState<string | null>(null)
   const [isLocked, setIsLocked] = useState(false)
-  // The status/record_state this consignment was loaded with. The backend
-  // only actually closes a consignment when BOTH current_status is
-  // "Arrived at Works" AND record_state is "submitted" (helpers.is_closed) —
-  // so the confirmation needs both, not status alone. A new consignment has
-  // neither, so it never matches on its own.
+  // The status this consignment was loaded with. Closing is the STATUS ALONE
+  // now (helpers.is_closed), so this is all the confirmation needs — it fires
+  // when a save would move the record INTO "Arrived at Works" from anything
+  // else. `record_state` used to be read here too, as the second half of the
+  // old two-part close test; it is not part of closing any more.
   const [originalStatus, setOriginalStatus] = useState('')
-  const [recordState, setRecordState] = useState('draft')
 
   const loadRecord = useCallback(() => {
     if (!id) return
@@ -115,7 +111,6 @@ function ImportsStatusWizardInner() {
         setConsignmentId(c.id)
         setIsLocked(c.is_locked)
         setOriginalStatus(c.current_status ?? '')
-        setRecordState(c.record_state ?? 'draft')
         methods.reset(apiToDraft(c))
       })
       .catch((err: unknown) => {
@@ -132,7 +127,6 @@ function ImportsStatusWizardInner() {
   const [saving, setSaving] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null)
-  const [submitErrors, setSubmitErrors] = useState<string[] | null>(null)
   const [justSaved, setJustSaved] = useState(false)
 
   // Same actions the list/detail views gate on — a viewer or a user without
@@ -171,23 +165,33 @@ function ImportsStatusWizardInner() {
     saveAndNavigateToStep: saveAndNavigateToStepConfirmed,
   })
 
-  /** "Arrived at Works" locks the consignment for everyone but an admin —
-   *  worth a confirmation, since it's not obviously reversible from the
-   *  wizard itself. A plain draft save never closes it, no matter what
-   *  status is set or whether the record is already submitted — only
-   *  submitting does (the backend's update route no longer locks at all;
-   *  see update_consignment.py). So this only fires for the Submit action. */
-  function willClose(isSubmitAction: boolean): boolean {
-    if (!isSubmitAction) return false
+  /** THE CONFIRMATION IS ON THE STATUS CHANGE, NOT ON SUBMIT.
+   *
+   *  It used to fire only for the Submit action, because submitting was what
+   *  locked the record. It no longer is: submit just marks the record finished,
+   *  and the UPDATE route locks on the transition into "Arrived at Works". So
+   *  ANY save that closes the consignment — Save, Save and Next, a step pill
+   *  that saves on the way past — is the irreversible one and asks first.
+   *
+   *  `record_state` is deliberately not consulted. Closing is the status alone
+   *  now, so a draft at "Arrived at Works" is just as closed as a submitted one.
+   *
+   *  WHAT THE DIALOG CANNOT DO, recorded because its absence is the trade this
+   *  change makes: it warns about permanence but cannot say what is missing.
+   *  `missing_fields` is gone with the imports rule set, so there is no list of
+   *  gaps to show and no way to say "you are about to close this with no
+   *  supplier and no exchange rate". */
+  function willClose(): boolean {
     const closing = methods.getValues('status') === CLOSED_STATUS
-    const alreadyClosed = originalStatus === CLOSED_STATUS && recordState === 'submitted'
-    return closing && !alreadyClosed
+    return closing && originalStatus !== CLOSED_STATUS
   }
 
   /** Every button that can trigger a save routes its action through here, so
-   *  one that would close the consignment pauses for confirmation first. */
-  function runWithCloseConfirm(action: () => void, opts: { isSubmit?: boolean } = {}) {
-    if (willClose(!!opts.isSubmit)) setPendingAction(() => action)
+   *  one that would close the consignment pauses for confirmation first. The
+   *  `isSubmit` option is gone: closing is about the status the save writes,
+   *  not about which button wrote it. */
+  function runWithCloseConfirm(action: () => void) {
+    if (willClose()) setPendingAction(() => action)
     else action()
   }
 
@@ -204,7 +208,6 @@ function ImportsStatusWizardInner() {
   async function saveDraft(): Promise<{ id: number; isLocked: boolean } | null> {
     setSaving(true)
     setSaveErrorMsg(null)
-    setSubmitErrors(null)
     try {
       const payload = buildPayload()
       const response = consignmentId
@@ -213,7 +216,6 @@ function ImportsStatusWizardInner() {
 
       if (!consignmentId) setConsignmentId(response.id)
       setOriginalStatus(response.current_status ?? '')
-      setRecordState(response.record_state ?? 'draft')
       setIsLocked(response.is_locked)
 
       // Newly-created lines had no id when the request went out; attach the
@@ -280,17 +282,15 @@ function ImportsStatusWizardInner() {
     if (isNew) navigate(`/imports-status/${saved.id}/edit/${stepDef.step}`, { replace: true })
   }
 
-  /** Save, then run the strict server-side rule set. Available on every step
-   *  (not just the last), and disabled until the draft satisfies those rules
-   *  — see `outstanding` / `blocked` below, built by submitRequirements(),
-   *  which mirrors app/imports/helpers.py::submission_errors rather than the
-   *  zod submit schema (the two differ; the mismatch is documented there).
+  /** Save, then mark the record finished.
    *
-   *  A 422 is still handled and shown inline: the client-side list predicts
-   *  the server's answer, it does not replace it, and anything that gets past
-   *  the prediction must still be readable rather than silent. */
+   *  Submit is never blocked and never 422s in imports — there is no rule set
+   *  behind it any more, so there is no client-side prediction to keep in step
+   *  with one either. It still routes through runWithCloseConfirm, but only
+   *  because a submit saves first and that save might be the one that closes
+   *  the consignment. */
   function handleSubmit() {
-    runWithCloseConfirm(() => void doHandleSubmit(), { isSubmit: true })
+    runWithCloseConfirm(() => void doHandleSubmit())
   }
 
   async function doHandleSubmit() {
@@ -298,18 +298,10 @@ function ImportsStatusWizardInner() {
     if (saved === null) return
 
     setSubmitting(true)
-    setSubmitErrors(null)
     try {
       await submitConsignmentApi(saved.id)
       navigate(`/imports-status/${saved.id}`)
     } catch (err) {
-      if (err instanceof ApiError) {
-        const parsed = parseSubmitErrors(err.detail)
-        if (parsed) {
-          setSubmitErrors(parsed.errors)
-          return
-        }
-      }
       setSaveErrorMsg(err instanceof Error ? err.message : 'Could not submit')
     } finally {
       setSubmitting(false)
@@ -364,12 +356,10 @@ function ImportsStatusWizardInner() {
   const busy = saving || submitting
   const isLastStep = stepDef.step === WIZARD_STEPS.length
 
-  // WATCHED, NOT READ ONCE: the banner and the Submit button have to reflect
-  // what is on screen right now, so this re-evaluates on every edit rather
-  // than only after a save. methods.watch() with no argument subscribes to the
-  // whole draft, which is what these rules read.
-  const outstanding = submitRequirements(methods.watch())
-  const blocked = outstanding.length > 0
+  // NO REQUIREMENTS BANNER AND NO BLOCKED SUBMIT. Imports has no submit rule
+  // set, so there is nothing to list and nothing to disable the button on.
+  // SubmitRequirements is still used by the logistics and trucking wizards,
+  // which keep theirs — this file simply stopped importing it.
 
   return (
     <div className="flex flex-col gap-6">
@@ -394,23 +384,6 @@ function ImportsStatusWizardInner() {
               {saveErrorMsg && (
                 <p className="mt-4 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">{saveErrorMsg}</p>
               )}
-              {submitErrors && submitErrors.length > 0 && (
-                <div className="mt-4 rounded-lg bg-risk-bg px-3 py-2.5 text-sm text-risk">
-                  <p className="font-medium">This consignment can’t be submitted yet:</p>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                    {submitErrors.map((e, i) => <li key={i}>{e}</li>)}
-                  </ul>
-                </div>
-              )}
-
-              {/* Shown on EVERY step, so a step 1 gap is visible while the
-                  user is on step 5 rather than only after they hit Submit. */}
-              <SubmitRequirements
-                requirements={outstanding}
-                currentStep={stepDef.step}
-                onGoToStep={goToStep}
-              />
-
               <div className="mt-6 flex items-center justify-between">
                 <Button
                   type="button"
@@ -432,14 +405,12 @@ function ImportsStatusWizardInner() {
                       {saving ? 'Saving…' : 'Save and Next'}
                     </Button>
                   )}
-                  {/* DISABLED WITH A REASON, never hidden — the same
-                      principle as the FOB send buttons. The tooltip names
-                      exactly what is outstanding, so the button explains
-                      itself without the banner having to be open. */}
+                  {/* Never blocked. Submit means "I am finished editing this"
+                      and nothing verifies the claim, so there is no state in
+                      which it should refuse. */}
                   <Button
                     type="button"
-                    disabled={busy || blocked}
-                    title={requirementsTooltip(outstanding)}
+                    disabled={busy}
                     onClick={handleSubmit}
                   >
                     {submitting ? 'Submitting…' : 'Submit'}

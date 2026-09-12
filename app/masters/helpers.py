@@ -3,7 +3,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
-from app.imports.models import Consignment, ConsignmentItem
+from app.imports.models import Consignment, ConsignmentBatchGroup, ConsignmentItem
 from app.logistics.models import LogisticsConsignment
 from app.masters.models import HsCode, Item
 from app.trucking.models import TruckingConsignment
@@ -157,11 +157,24 @@ def used_counts(master, ids, db):
     if not ids:
         return counts
 
+    # SUPPLIER AND BRANCH COUNT ORDERS, NOT SHIPMENTS.
+    #
+    # Both columns now live on the batch GROUP (the LC), so the count is over
+    # `consignment_batch_groups` and one row there is one order however many
+    # batches it arrived in. Counting `consignments` instead would inflate a
+    # supplier's usage every time one of its orders was split across two
+    # shipments — the same supplier, the same agreement, counted twice.
+    #
+    # Branch reads `works_branch_id`, the group's header-level branch, which is
+    # the successor to both `Consignment.works` and `Consignment.branch_id`.
+    # NOT `consignment_order_items.branch_id`: items carry their own branch for
+    # display, and nothing in the app aggregates on it — every branch total is
+    # one-branch-per-order, deliberately (design section 3.3).
     if master == "supplier":
-        return _grouped_count(Consignment.supplier_id, ids, db, counts)
+        return _grouped_count(ConsignmentBatchGroup.supplier_id, ids, db, counts)
 
     if master == "branch":
-        return _grouped_count(Consignment.branch_id, ids, db, counts)
+        return _grouped_count(ConsignmentBatchGroup.works_branch_id, ids, db, counts)
 
     if master == "customer":
         # The only master counted against LOGISTICS orders rather than import
@@ -186,6 +199,13 @@ def used_counts(master, ids, db):
         # Branch), but the branch is left here so an older caller cannot crash.
         return counts
 
+    # THE CLEARING AGENT COUNTS SHIPMENTS, and it is the odd one out on purpose.
+    #
+    # `clearing_agent_id` stays on the batch: a different agent per shipment is
+    # normal, so it is a per-arrival fact rather than a term of the order. An
+    # agent who cleared two batches of one LC did two clearances, and this count
+    # exists so nobody deactivates a master the business is still leaning on —
+    # understating usage there fails in the dangerous direction.
     if master == "agent":
         return _grouped_count(Consignment.clearing_agent_id, ids, db, counts)
 
@@ -246,9 +266,19 @@ def used_counts(master, ids, db):
 
 
 def _grouped_count(column, ids, db, counts):
+    """"Used in N" for one master column, counting whatever that column hangs off.
+
+    THE UNIT FOLLOWS THE COLUMN, which is why the model is read off the column
+    rather than hardcoded to `Consignment` as it used to be. A column on
+    `consignment_batch_groups` counts ORDERS; one on `consignments` counts
+    SHIPMENTS. See the call sites above — supplier and branch are the first,
+    the clearing agent is the second, and the difference is real rather than
+    stylistic.
+    """
+    model = column.parent.class_
     rows = db.execute(
-        select(column, func.count(Consignment.id))
-        .where(Consignment.is_deleted == False)
+        select(column, func.count(model.id))
+        .where(model.is_deleted == False)  # noqa: E712
         .where(column.in_(ids))
         .group_by(column)
     ).all()

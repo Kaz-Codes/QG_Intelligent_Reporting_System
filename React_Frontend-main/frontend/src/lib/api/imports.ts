@@ -23,6 +23,12 @@ export interface ApiConsignmentItem {
   unit_price: string | number | null
   unit_of_measurement: string | null
   batch_no: string | null
+  /** THE DEMAND THIS LINE CAME FROM. Both live on the order line above this
+   *  shipment line, not on the line itself, and the server adds them to the
+   *  item payload explicitly (serialize_items) — a mapper walk over
+   *  `consignment_items` cannot see them. */
+  requisition_date: string | null
+  required_date: string | null
   requisition_type: string | null
   reference_number: string | null
   job_number: string | null
@@ -85,8 +91,16 @@ export interface ApiConsignment {
   consignment_type: string | null
   incoterm: string | null
   mode_of_shipment: string | null
-  requisition_date: string | null
+  /** THE EARLIEST required date across this batch's item lines — computed by the
+   *  server, not a stored header column. The list payload carries no lines, so
+   *  `requiredDelayDays` needs the minimum supplied here. */
   required_date: string | null
+  /** NOT SENT ANY MORE. The requisition date moved onto the item lines (one
+   *  order can carry lines requisitioned months apart), and unlike
+   *  `required_date` it has no header-level consumer so nothing aggregates it.
+   *  Read it from `items[].requisition_date`. Still ACCEPTED on write, where it
+   *  fans onto every line — see draftToPayload. */
+  requisition_date?: undefined
   cargo_readiness_date: string | null
   etd: string | null
   eta: string | null
@@ -113,7 +127,6 @@ export interface ApiConsignment {
   payments: ApiPayment[]
   eta_revisions: ApiEtaRevision[]
   status_updates: ApiStatusUpdate[]
-  missing_fields: string[]
   /** Cross-module hand-off. NULL = not sent. Set only by the send routes. */
   sent_to_logistics_at: string | null
   sent_to_trucking_at: string | null
@@ -216,8 +229,8 @@ export interface ConsignmentQuery {
   requisitionType?: string[]
   /** Show the closed status ("Arrived at Works") too. */
   includeClosed?: boolean
-  /** Only records still incomplete (server-side: record_state === 'draft'). */
-  missingOnly?: boolean
+  /** Only records nobody has marked finished (server-side: record_state === 'draft'). */
+  draftsOnly?: boolean
   /** Only consignments handed to logistics and/or trucking — the "Forwarded" view. */
   sentOnly?: boolean
   includeDeleted?: boolean
@@ -235,7 +248,7 @@ function buildQuery(q: ConsignmentQuery): URLSearchParams {
   // the same way, but leaving it off keeps the URL clean.
   if (q.stage && q.stage !== 'all') params.set('stage', q.stage)
   if (q.includeClosed) params.set('include_closed', 'true')
-  if (q.missingOnly) params.set('missing_only', 'true')
+  if (q.draftsOnly) params.set('drafts_only', 'true')
   if (q.sentOnly) params.set('sent_only', 'true')
   if (q.includeDeleted) params.set('include_deleted', 'true')
   if (q.etdFrom) params.set('etd_from', q.etdFrom)
@@ -393,9 +406,12 @@ export async function updateConsignmentApi(id: number | string, payload: Consign
   return res.data
 }
 
-/** POST /consignments/{id}/submit — runs the full rule set server-side and
- *  only flips record_state to 'submitted' if nothing is missing. A 422's
- *  ApiError.message is a JSON string; parse it with parseSubmitErrors(). */
+/** POST /consignments/{id}/submit — flips record_state to 'submitted'.
+ *
+ *  That is ALL it does. There is no rule set in imports any more, so it cannot
+ *  422 and it does not lock the record; a consignment closes on reaching
+ *  "Arrived at Works", which is a PUT, not this. Logistics and trucking keep
+ *  their rule sets and their 422s — this divergence is imports-only. */
 export async function submitConsignmentApi(id: number | string): Promise<ApiConsignment> {
   const res = await apiFetch<DetailEnvelope>(`/consignments/${id}/submit`, { method: 'POST' })
   return res.data

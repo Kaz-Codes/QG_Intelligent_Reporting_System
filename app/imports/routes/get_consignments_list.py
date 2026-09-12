@@ -25,7 +25,7 @@ def get_consignments_list(
     branch_id : Optional[list[int]] = Query(None),
     supplier_id : Optional[list[int]] = Query(None),
     requisition_type : Optional[list[str]] = Query(None),
-    missing_only : Optional[bool] = False,
+    drafts_only : Optional[bool] = False,
     etd_from : Optional[date] = None,
     etd_to : Optional[date] = None,
     q : Optional[str] = None,
@@ -54,7 +54,7 @@ def get_consignments_list(
         consignments, total = fetch_consignments_page(
             db, include_deleted, include_closed, status, stage,
             branch_id, supplier_id, requisition_type,
-            missing_only, etd_from, etd_to, q, page, page_size,
+            drafts_only, etd_from, etd_to, q, page, page_size,
             sent_only=sent_only
         )
 

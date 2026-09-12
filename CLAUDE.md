@@ -207,6 +207,25 @@ financial is gated. The account-creation checkbox on the front end sets
 - **Enums** live in `enums.py` as `(str, Enum)` and are stored in **String**
   columns (not DB enum types), so adding a value is a one-line change, no
   `ALTER TYPE`. Status values are Title Case and must match the frontend's.
+  - **A STRING COLUMN DOES NOT ENFORCE THE ENUM, AND THE LOADERS GO ROUND IT.**
+    The only thing that validates these values is the Pydantic request schema,
+    which the loaders never touch — so a workbook can put anything in an
+    enum-backed column and nothing objects until somebody tries to SAVE that
+    record, at which point the `PUT` 422s on a field they never touched. Imports
+    was in exactly that state on 96.6% of its rows (`mode_of_shipment`,
+    `payment_instrument`, `unit_of_measurement`), repaired by Alembic revision
+    `d5e81b6a2c07`.
+  - **Trucking and logistics are still in it.** Measured, not fixed:
+    trucking `payment_status` (`Paid` 210, `To pay` 91, `Topay` 2),
+    `trucking_vehicles.container_type` (`20 FT` 94, `40 FT` 11),
+    `tracking_status` (`On Road` 23, `Planned` 4) — **309 of 1369 jobs cannot be
+    saved**; logistics `department` (`G.I Floor Mills` 1) — **1 of 745 orders**.
+    `logistics_containers.container_type` holds `LCL`/`AIR` but its schema types
+    that field as a plain `str`, so it does not reject.
+  - **So a loader writing an enum-backed column must normalise onto the enum**,
+    the way `load_06_logistics` already does for its status vocabulary. A
+    `post_load` check for out-of-enum values in every such column is the
+    durable fix and does not exist yet.
 - **Server-side defaults for loader-written flags.** A Python-side `default=`
   never runs on a raw `psycopg2` insert (the loaders), so flags the loaders rely
   on (`record_state`, `is_locked`) use `server_default` too.
@@ -355,12 +374,17 @@ Endpoints mirror imports (`POST /`, `GET /`, `GET /export`, `GET /filter-options
 `GET /{id}`, `GET /{id}/trucking-jobs`, `PUT`, `POST /{id}/submit`,
 `POST /{id}/reopen`, `DELETE`, undo-delete, change-history, revert).
 
-**Closes/locks at "Delivered" AND submitted** — the same two-part rule as
-imports, not status alone. Only `POST /{id}/submit` sets `is_locked`; the update
-route never closes an order, so a draft may sit at "Delivered" and stay
-editable. `serialize_consignment` returns `missing_fields` (from
-`submission_errors`, imported inside the function to dodge the helpers cycle)
-so a disabled Submit and a failed submit can't disagree.
+**Closes/locks at "Delivered" AND submitted** — the two-part rule, not status
+alone. Only `POST /{id}/submit` sets `is_locked`; the update route never closes
+an order, so a draft may sit at "Delivered" and stay editable.
+`serialize_consignment` returns `missing_fields` (from `submission_errors`,
+imported inside the function to dodge the helpers cycle) so a disabled Submit
+and a failed submit can't disagree.
+
+**Logistics NO LONGER MATCHES IMPORTS on either of these.** Imports moved to a
+one-part close test and deleted its rule set (rule 8); logistics and trucking
+kept both. Do not "fix" this file's two-part wording to match imports — the
+divergence is deliberate and imports-only.
 
 `shipment_mode` (**EFS / Regular**, `ShipmentMode`) is an order-level attribute
 like department. Nullable and NULL on every loaded row — the workbooks have no
@@ -423,9 +447,9 @@ Endpoints mirror imports, plus **`GET /open-requests`** (see cross-module) and
 **`GET /filter-options`**.
 
 **Closes/locks when every active vehicle is "Delivered" AND the job is
-submitted** — the same two-part rule as imports and logistics, not the vehicles
-alone. Only `POST /{id}/submit` sets `is_locked`; the update route never closes
-a job. `serialize_consignment` returns `missing_fields`, and the history
+submitted** — the two-part rule, as in logistics (**not** imports, which moved
+to the status alone — rule 8), not the vehicles alone. Only
+`POST /{id}/submit` sets `is_locked`; the update route never closes a job. `serialize_consignment` returns `missing_fields`, and the history
 serializer returns `changed_at` (both imported inside the function to dodge the
 helpers cycle).
 
@@ -1103,8 +1127,10 @@ masters filter by **id**, enums/statuses by stored value. The contract:
 
 - **Imports** `GET /consignments/`: `status[]`, `stage` (6 pipeline groups →
   statuses), `branch_id[]`, `supplier_id[]`, `requisition_type[]` (via items),
-  `missing_only` (= draft), `etd_from`/`etd_to`, `include_closed` (default false
-  hides "Arrived at Works"), `include_deleted`, `q`, `page`, `page_size`.
+  `drafts_only` (= `record_state == 'draft'`; **renamed** from `missing_only`,
+  which promised a completeness check that no longer exists — see rule 8),
+  `etd_from`/`etd_to`, `include_closed` (default false hides "Arrived at Works"
+  and "Order Cancelled"), `include_deleted`, `q`, `page`, `page_size`.
 - **Logistics** `GET /logistics/`: `status[]`, `order_type[]`, `customer[]`,
   `gate_out_from`/`gate_out_to`, `include_deleted`, `q`, `page`, `page_size`.
 - **Trucking** `GET /trucking/`: `movement_type[]`, `source[]`, `open_only`,
@@ -1161,22 +1187,56 @@ one input.
 **7. Payments are a child table.** Partial payments are normal; instrument
 drives the number/date labels (LC→LC number/Retirement; Adv/DP/CAD→reference/Opening).
 
-**8. Draft vs submitted + the closed lock.** State is `record_state`
-(`'draft'`/`'submitted'`, `server_default 'draft'`), server-controlled. Save
-draft = the permissive create/`PUT`. **Submit** = `POST /{id}/submit`, runs the
-full rule set (`submission_errors`, mirroring the frontend) and flips to
-`'submitted'` only if complete, else `422` with the gaps. Rules are application
-checks, never DB constraints (drafts + submitted share one table). Submit rule
-set: branch_id, supplier_id, origin, currency present; ≥1 item; each item has
-name, code, quantity, UoM, requisition_type + its conditional fields; payment
-instrument+number, works, exchange rate, rate date, status present; eta ≥ etd.
+**8. Draft vs submitted + the closed lock. IMPORTS HAS NO SUBMIT RULE SET.**
 
-The **closed lock** is separate: a consignment closes when its status reaches
-"Arrived at Works"; `is_locked` (`server_default false`) is set on that update
-and afterwards **no role** may edit — update/submit return `423`. Only an
-**admin** reopens via `POST /{id}/reopen`. Submitting never locks; only closing
-does. Loaded rows import unlocked. Logistics closes at "Delivered", trucking when
-all vehicles are delivered.
+`record_state` (`'draft'`/`'submitted'`, `server_default 'draft'`) means only
+**"a user has marked this record finished. Nothing verifies that claim."** Save
+draft = the permissive create/`PUT`. **Submit** = `POST /{id}/submit`, which
+sets `record_state` and does nothing else: it runs no rules, cannot `422`, and
+never locks. It drives exactly one thing, the `drafts_only` list filter, and is
+otherwise informational and a column in the export (headed "Marked finished").
+
+`submission_errors()`, `missing_fields`, `REQUISITION_REQUIRED` and the three
+front-end mirrors (the zod submit schema, `submitRequirements`, the requirements
+banner) are **deleted**. Data quality moves to the input layer — dropdowns,
+masters, required-at-entry. The rule set encoded the same requirements three
+times in two languages, and the three could disagree.
+
+**This is an imports-only divergence, deliberately.** `app/logistics/helpers.py`
+and `app/trucking/helpers.py` keep their own `submission_errors()`, still block
+submit, still publish `missing_fields` and still use the shared
+`SubmitRequirements` component. A user working across all three modules will
+find imports behaves differently. That is a cost of the decision, not an
+oversight. Nothing replaces imports' "N fields missing" tag, row highlight,
+disabled Submit or pending-information banner.
+
+The **closed lock** is separate and is the **status alone**:
+`helpers.is_closed(c)` is `c.current_status == "Arrived at Works"` —
+`record_state` is *not* half of it, so a draft at that status is closed too.
+Closing is a statement about the world (the goods are at the factory), not
+about an administrative gesture.
+
+**`is_locked` is written by `update_consignment.py`, on the transition into
+that status, and nowhere else.** It used to be written by
+`submit_consignment.py` and nowhere else — CLAUDE.md previously claimed the
+update route set it and that was wrong, which is why all 142 locked rows in
+production were locked by the Excel loader rather than by anyone using the app.
+The two writes are only safe to change together: deleting one without adding
+the other removes the closed lock from the system silently. The write sits
+*after* the `423` guard and *after* the status is applied, or the request that
+closes the consignment would reject itself.
+
+Once locked, **no role** may edit — update/submit return `423`. Only an
+**admin** reopens via `POST /{id}/reopen`. The confirmation dialog is on the
+**status change**, not on submit; it warns about permanence but **cannot say
+what is missing**, because `missing_fields` is gone. `helpers.py`'s list-side
+`is_truly_closed` is the same one-part test in SQL and must move with
+`is_closed` — left as the two-part test it would match almost nothing and
+`include_closed=False` (the default) would quietly stop hiding closed rows.
+
+Loaded rows import unlocked. Logistics closes at "Delivered", trucking when
+all vehicles are delivered — **both keep their two-part test and their rule
+sets**; only imports changed.
 
 **9. Status list (ordered — do not reorder).** TT/LC in Process, Under
 Production, Ready Awaiting Sailing, In Transit, Arrived at Port, Under Custom
@@ -1209,8 +1269,21 @@ The imports module is wired end-to-end (the pattern to follow for the others):
 - `lib/api/masters.ts` — fetches master lists and builds name→id maps (the
   wizard picks masters by name; the backend wants ids).
 - `lib/api/importsMap.ts` — `apiToRow` / `apiToDraft` / `draftToPayload`, bridging
-  camelCase↔snake_case, names↔ids, and gating enum values against the backend
-  sets so an unmapped value is omitted, not 422'd.
+  camelCase↔snake_case and names↔ids.
+
+  **IT DOES NOT GATE ENUM VALUES. This file used to claim it did, and that claim
+  is why a live bug went unnoticed for months.** `apiToDraft` casts with
+  `as ConsignmentDraft['modeOfShipment']` — a compile-time assertion with **no
+  runtime effect** — and `draftToPayload` passes the raw string straight back
+  through `strOrUndef`. The only field with a real gate is `consignment_type`
+  (`CONSIGNMENT_TYPE_TO_API`).
+
+  The consequence: **a loaded consignment could not be saved.** The detail route
+  returned `mode_of_shipment: "Sea"`, the wizard posted the whole draft back, and
+  `ConsignmentSchema` rejected it — a 422 on a field the operator never touched,
+  on 172 of 178 live records (96.6%). Fixed in the data by Alembic revision
+  `d5e81b6a2c07`, not in the map; the map still does not gate, so **anything
+  reaching these columns from outside the app must already be canonical.**
 - `lib/api/useImports.ts` — React Query hooks; mutations invalidate the list + record.
 - List/detail/wizard are wired; the wizard creates on first save then `PUT`s,
   and the final Submit calls `/submit`.
@@ -1302,10 +1375,15 @@ What it covers, chosen for consequence rather than coverage percentage:
   every dashboard, report and export, all agreeing because they all read the
   same wrong number. Pins Decimal exactness, the null-vs-zero rules
   (a missing rate leaves `pkr_total` NULL, never 0) and idempotence.
-- `test_submission_rules.py` — `submission_errors`. Gates whether work can
-  move forward, and is mirrored twice on the front end (the zod submit schema
-  and the wizard's requirements banner), so it can silently disagree with two
-  other places. Includes the "Others" item-code exemption.
+- `test_closed_lock.py` — `is_closed` and the transition that writes the lock.
+  It exists because **no existing data exercises this path**: every locked row
+  in production was locked by the Excel loader, so the app-side lock has never
+  run in anger, and a regression shows up as a consignment quietly staying
+  editable after its goods arrived rather than as an error. Pins the one-part
+  test (status alone, `record_state` irrelevant), that cancelling does not
+  lock, and that submitting has no side effect.
+  **It replaces `test_submission_rules.py`, which was deleted with
+  `submission_errors()`** — recorded here rather than left to look accidental.
 - `test_notification_transitions.py` — the crossing rule, the hysteresis
   band, the rank filter and the stockout movement gate. A regression here is
   not an error message, it is a flood.
@@ -1355,7 +1433,7 @@ something, which have no business changing anything in order to do it.
 
 Read-only diagnosis is the same rule seen from the other side: prefer a
 question the database can answer over an experiment it has to be changed for.
-`recipients_for()`, `submission_errors()` and every serializer are pure reads
+`recipients_for()`, `is_closed()` and every serializer are pure reads
 and can be called freely against production data. Where a check genuinely needs
 a mutation, it needs a scratch database, not a `finally:` block.
 

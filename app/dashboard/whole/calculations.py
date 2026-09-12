@@ -69,7 +69,7 @@ def resolve_period(date_from, date_to, today=None):
 #-------------------------------------
 
 def imports_period_value(total, rows, undated_rows=0, undated_value=None,
-                         lines=None, date_field=None):
+                         lines=None, date_field=None, orders=None):
     """Value of the WHOLE consignments dated inside the window.
 
     Dated and valued exactly as the Imports module's own "Total Value" hero
@@ -80,6 +80,13 @@ def imports_period_value(total, rows, undated_rows=0, undated_value=None,
     ones individually dated inside it) — the reference list shows exactly
     those lines, so the two reconcile.
 
+    THREE UNITS, ALL THREE PUBLISHED: `orders` (the LCs), `consignments` (the
+    batches those LCs arrived in) and `lines`. An LC can arrive in more than one
+    shipment, so `consignments` >= `orders`, and a reader given only the middle
+    number cannot tell which question it answers. The tile counts BATCHES,
+    because the value beside it is summed per batch; `orders` is the second unit
+    a panel can state alongside rather than a replacement for it.
+
     `undated` is the money no window can reach: consignments carrying a value
     but no date at all. Reported beside the period figure so the gap is visible
     instead of being quietly dropped from every period at once.
@@ -87,6 +94,7 @@ def imports_period_value(total, rows, undated_rows=0, undated_value=None,
     return {
         "value": _num(total),
         "consignments": rows,
+        "orders": orders,
         "lines": lines,
         "basis": "consignment required date" if date_field == "required_date"
                  else "consignment ETA at works",

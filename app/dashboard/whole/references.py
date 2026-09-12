@@ -21,7 +21,10 @@ from datetime import timedelta
 
 from sqlalchemy import select, func, or_, desc
 
-from app.imports.models import Consignment, ConsignmentItem
+from app.imports.models import (
+    Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
+)
+from app.imports.demand_dates import EARLIEST_REQUIRED_DATE
 from app.logistics.models import LogisticsConsignment
 from app.trucking.models import TruckingConsignment
 from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData
@@ -78,15 +81,17 @@ def _consignment_query():
     return (
         select(
             Consignment.id,
-            Consignment.instrument_number,
+            ConsignmentBatchGroup.instrument_number,
             Consignment.current_status,
             Supplier.name,
             Branch.name,
             CONSIGNMENT_VALUE.label("value"),
         )
         .select_from(Consignment)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
+        .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(_live_consignments())
     )
 
@@ -498,9 +503,19 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     """
     from app.dashboard.imports.calculations import DELAY_GRACE_DAYS
 
-    days_late = (Consignment.eta_works - Consignment.required_date)
+    # THE BATCH'S EARLIEST REQUIRED DATE, and the list keeps that basis rather
+    # than dropping to the late LINE.
+    #
+    # The rows here are consignments, and this list has to total the tile it
+    # drills into (helpers.imports_delay, which uses the same expression). A
+    # drill-down reporting a different number from the KPI that opened it, with
+    # nothing saying why, is exactly what app/dashboard/references.py's rules
+    # exist to prevent. If a reader needs to know WHICH line is late, that
+    # belongs in the row's detail string, not in what the row counts.
+    required = EARLIEST_REQUIRED_DATE
+    days_late = (Consignment.eta_works - required)
     conditions = [
-        Consignment.required_date.isnot(None),
+        required.isnot(None),
         Consignment.eta_works.isnot(None),
         days_late > DELAY_GRACE_DAYS,
     ]
@@ -509,7 +524,7 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     if shafts_only:
         conditions.append(Consignment.id.in_(shaft_consignment_ids()))
 
-    clause = sql_search_clause(search, Consignment.instrument_number,
+    clause = sql_search_clause(search, ConsignmentBatchGroup.instrument_number,
                                Supplier.name, Branch.name)
     if clause is not None:
         conditions.append(clause)
@@ -517,20 +532,24 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     total = db.execute(
         select(func.count(Consignment.id))
         .select_from(Consignment)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
+        .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(_live_consignments()).where(*conditions)
     ).scalar()
 
     page, size = clamp(page, page_size)
     rows = db.execute(
         select(
-            Consignment.id, Consignment.instrument_number,
+            Consignment.id, ConsignmentBatchGroup.instrument_number,
             Supplier.name, Branch.name, days_late.label("days"),
         )
         .select_from(Consignment)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
+        .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(_live_consignments()).where(*conditions)
         .order_by(desc("days"), Consignment.id)
         .offset((page - 1) * size).limit(size)
@@ -613,7 +632,7 @@ def _line_query(conditions):
         select(
             ConsignmentItem.id,
             Consignment.id.label("consignment_id"),
-            Consignment.instrument_number,
+            ConsignmentBatchGroup.instrument_number,
             ConsignmentItem.item_name,
             ConsignmentItem.quantity,
             ConsignmentItem.unit_of_measurement,
@@ -621,12 +640,14 @@ def _line_query(conditions):
             Supplier.name,
             Branch.name,
             (ConsignmentItem.quantity * ConsignmentItem.unit_price
-             * Consignment.exchange_rate).label("value"),
+             * ConsignmentBatchGroup.exchange_rate).label("value"),
         )
         .select_from(ConsignmentItem)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
+        .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(ConsignmentItem.is_deleted.is_(False))
         .where(_live_consignments())
         .where(*conditions)
@@ -643,7 +664,7 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
     page, size = clamp(page, page_size)
 
     clause = sql_search_clause(
-        search, Consignment.instrument_number, Supplier.name, Branch.name,
+        search, ConsignmentBatchGroup.instrument_number, Supplier.name, Branch.name,
         ConsignmentItem.item_name, Consignment.current_status,
     )
     search_conditions = list(conditions) + ([clause] if clause is not None else [])
@@ -653,8 +674,10 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
                func.count(func.distinct(ConsignmentItem.consignment_id)))
         .select_from(ConsignmentItem)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
-        .outerjoin(Supplier, Supplier.id == Consignment.supplier_id)
-        .outerjoin(Branch, Branch.id == Consignment.branch_id)
+        .join(ConsignmentBatchGroup,
+              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
+        .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(ConsignmentItem.is_deleted.is_(False))
         .where(_live_consignments())
         .where(*search_conditions)

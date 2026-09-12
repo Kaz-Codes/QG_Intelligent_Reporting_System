@@ -6,7 +6,9 @@ from typing import Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload
 
-from app.imports.models import Consignment, ConsignmentItem
+from app.imports.models import (
+    Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
+)
 from app.logistics.models import LogisticsConsignment, LogisticsItem
 from app.loading.schemas.stores_schemas import (
     PurchasesData, Stock, StoreRequisition,
@@ -155,24 +157,52 @@ def _imports_conditions(f):
     ]
     if f.shaft:
         conds.append(ConsignmentItem.item_name.in_(f.shaft))
+    # Supplier and branch are terms of the ORDER, so both resolve through the
+    # batch group. Branch is `works_branch` — the header-level branch that
+    # succeeded both `Consignment.works` and the old header `branch_id`.
     if f.supplier:
-        conds.append(Consignment.supplier.has(Supplier.name.in_(f.supplier)))
+        conds.append(Consignment.batch_group.has(
+            ConsignmentBatchGroup.supplier.has(Supplier.name.in_(f.supplier))
+        ))
     if f.branch:
-        conds.append(Consignment.branch.has(Branch.name.in_(f.branch)))
+        conds.append(Consignment.batch_group.has(
+            ConsignmentBatchGroup.works_branch.has(Branch.name.in_(f.branch))
+        ))
     if f.category:
         conds.append(ConsignmentItem.item.has(Item.category.in_(f.category)))
+
+    # THE DATE RANGE NOW FILTERS THE LINE'S OWN REQUISITION DATE.
+    #
+    # No aggregate, and none is wanted (design section 3.3). Reports already
+    # query the LINE table for imports and join back to the header, so this is a
+    # hop from the header column to the order line's own — which is where the
+    # requisition date actually belongs, since one order can carry lines
+    # requisitioned months apart.
+    #
+    # ROW COUNTS WILL FALL, AND THAT IS THE CORRECTION. A date range used to
+    # qualify a whole CONSIGNMENT and then hand back every one of its lines,
+    # including lines requisitioned well outside the window asked for.
+    # Afterwards a line qualifies on its own date. This is the same precision
+    # gain CLAUDE.md already records for the shaft and category filters when
+    # reports moved to one row per line: "filters that used to mean 'does ANY
+    # line of this consignment match' now mean 'does THIS line match'".
     if f.date_from:
-        conds.append(Consignment.requisition_date >= f.date_from)
+        conds.append(ConsignmentOrderItem.requisition_date >= f.date_from)
     if f.date_to:
-        conds.append(Consignment.requisition_date <= f.date_to)
+        conds.append(ConsignmentOrderItem.requisition_date <= f.date_to)
+
     if f.search:
         p = _like(f.search)
         conds.append(or_(
-            Consignment.instrument_number.ilike(p),
-            Consignment.origin.ilike(p),
-            Consignment.gd_number.ilike(p),
             ConsignmentItem.item_name.ilike(p),
-            Consignment.supplier.has(Supplier.name.ilike(p)),
+            Consignment.gd_number.ilike(p),
+            # The payment reference, the origin and the supplier are all the
+            # order's, so one `.has` covers the three of them.
+            Consignment.batch_group.has(or_(
+                ConsignmentBatchGroup.instrument_number.ilike(p),
+                ConsignmentBatchGroup.origin.ilike(p),
+                ConsignmentBatchGroup.supplier.has(Supplier.name.ilike(p)),
+            )),
         ))
     return conds
 
@@ -242,7 +272,18 @@ _CONDITIONS = {
 # condition and serialized column that reads a header field (supplier,
 # clearing agent, freight cost, ...) depends on it being in the query already.
 _JOINS = {
-    "imports": lambda stmt: stmt.join(ConsignmentItem.consignment),
+    # Three levels, for imports: the shipment LINE is the row, its consignment
+    # is the batch, and the batch's group is the ORDER that carries supplier,
+    # origin, currency and the booked rate. The ORDER LINE comes in too — it
+    # holds the requisition and required dates the filters and columns read.
+    #
+    # All inner joins, and none of them can lose a row: `batch_group_id` and
+    # `order_item_id` are both NOT NULL since revision A.
+    "imports": lambda stmt: (
+        stmt.join(ConsignmentItem.consignment)
+            .join(Consignment.batch_group)
+            .join(ConsignmentItem.order_item)
+    ),
     "logistics": lambda stmt: stmt.join(LogisticsItem.consignment),
 }
 
@@ -254,8 +295,17 @@ _OPTIONS = {
     "purchases": lambda: (joinedload(PurchasesData.item),),
     "imports": lambda: (
         joinedload(ConsignmentItem.item),
-        joinedload(ConsignmentItem.consignment).joinedload(Consignment.branch),
-        joinedload(ConsignmentItem.consignment).joinedload(Consignment.supplier),
+        # The ORDER and the ORDER LINE, behind each shipment line. Supplier and
+        # branch hang off the order now; the demand dates off the order line.
+        # Without these every serialized row would lazy-load them, which across
+        # a 20 000-row export is the N+1 this options block exists to prevent.
+        joinedload(ConsignmentItem.consignment)
+            .joinedload(Consignment.batch_group)
+            .joinedload(ConsignmentBatchGroup.supplier),
+        joinedload(ConsignmentItem.consignment)
+            .joinedload(Consignment.batch_group)
+            .joinedload(ConsignmentBatchGroup.works_branch),
+        joinedload(ConsignmentItem.order_item),
         joinedload(ConsignmentItem.consignment).joinedload(Consignment.clearing_agent),
         joinedload(ConsignmentItem.consignment).joinedload(Consignment.loading_port),
         joinedload(ConsignmentItem.consignment).joinedload(Consignment.delivery_port),

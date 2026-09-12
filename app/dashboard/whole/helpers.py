@@ -3,7 +3,10 @@ from decimal import Decimal
 
 from sqlalchemy import select, func, and_, or_, case
 
-from app.imports.models import Consignment, ConsignmentItem
+from app.imports.models import (
+    Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
+)
+from app.imports.demand_dates import EARLIEST_REQUIRED_DATE
 from app.imports.helpers import STAGE_GROUPS
 from app.logistics.models import LogisticsConsignment, LogisticsPackage
 from app.trucking.models import TruckingConsignment, TruckingVehicle
@@ -68,7 +71,10 @@ def _live_consignments():
 
 IMPORTS_DATE_FIELDS = {
     "eta_works": Consignment.eta_works,
-    "required_date": Consignment.required_date,
+    # The EARLIEST required date across the batch's lines. Imported, never
+    # restated: this entry decides window MEMBERSHIP, so a second spelling would
+    # change which consignments a period contains. app/imports/demand_dates.py.
+    "required_date": EARLIEST_REQUIRED_DATE,
 }
 IMPORTS_DATE_DEFAULT = "eta_works"
 
@@ -118,9 +124,26 @@ _LINE_VALUE = (
     .scalar_subquery()
 )
 
+# THE ORDER'S BOOKED RATE, reached from the batch.
+#
+# A correlated subquery rather than a join, because CONSIGNMENT_VALUE below is
+# dropped into a dozen queries that do not all have the group joined — and a
+# shared expression that silently requires a join its callers may not have made
+# is how one of those queries quietly returns NULL instead of money.
+#
+# Still never a live rate: it is the rate booked against THIS order, which is
+# what imports rule 4 requires. It only moved up a level, from the batch to the
+# order the batch belongs to, so every batch of one LC converts identically.
+_ORDER_RATE = (
+    select(ConsignmentBatchGroup.exchange_rate)
+    .where(ConsignmentBatchGroup.id == Consignment.batch_group_id)
+    .correlate(Consignment)
+    .scalar_subquery()
+)
+
 CONSIGNMENT_VALUE = func.coalesce(
     Consignment.pkr_total,
-    _LINE_VALUE * Consignment.exchange_rate,
+    _LINE_VALUE * _ORDER_RATE,
     0,
 )
 
@@ -160,13 +183,20 @@ CONSIGNMENT_VALUE = func.coalesce(
 
 
 def _imports_line_column(date_field):
-    """The date a LINE is matched on for window membership — its own
-    eta_works, falling back to its consignment's where the line has none.
-    `required_date` has no line equivalent so it always falls back. Kept in
-    lockstep with `app.dashboard.imports.helpers.line_date_column`.
+    """The date a LINE is matched on for window membership.
+
+    ETA: the line's own, falling back to its consignment's where the line has
+    none. REQUIRED DATE: the line's own, off the ORDER LINE above it — there is
+    a genuine per-line value now, so this no longer falls back to a header
+    column and membership on that field is correspondingly stricter.
+
+    Kept in lockstep with `app.dashboard.imports.helpers.line_date_column`,
+    which is the same decision for the Imports module's own screen. The two
+    must agree or the two screens disagree about which consignments a period
+    contains — which is the bug the membership helper below was written to fix.
     """
     if (date_field or IMPORTS_DATE_DEFAULT) == "required_date":
-        return Consignment.required_date
+        return ConsignmentOrderItem.required_date
     return func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 
 
@@ -182,6 +212,11 @@ def _imports_window_membership(date_field, date_from, date_to):
     return Consignment.id.in_(
         select(ConsignmentItem.consignment_id)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
+        # Joined unconditionally, not only for the required_date branch: a join
+        # that appears and disappears with a parameter is how two branches come
+        # to see different rows. order_item_id is NOT NULL, so it loses nothing.
+        .join(ConsignmentOrderItem,
+              ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
         .where(ConsignmentItem.is_deleted.is_(False))
         .where(_imports_line_column(date_field).between(date_from, date_to))
         .distinct()
@@ -198,6 +233,11 @@ def _imports_dated_ids(date_field):
     return (
         select(ConsignmentItem.consignment_id)
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
+        # Joined unconditionally, not only for the required_date branch: a join
+        # that appears and disappears with a parameter is how two branches come
+        # to see different rows. order_item_id is NOT NULL, so it loses nothing.
+        .join(ConsignmentOrderItem,
+              ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
         .where(ConsignmentItem.is_deleted.is_(False))
         .where(_imports_line_column(date_field).isnot(None))
         .distinct()
@@ -258,10 +298,24 @@ def imports_period_value(db, date_from, date_to, date_field=None, shafts_only=Fa
     scope = [*_imports_scope(shafts_only),
              _imports_window_membership(date_field, date_from, date_to)]
 
-    value, consignments = db.execute(
+    # TWO UNITS, BOTH PUBLISHED — never one silently.
+    #
+    # `consignments` counts BATCHES, and has to: VALUE is summed per batch row,
+    # so an order count beside a row-summed total would give a false average per
+    # unit. But once an LC can arrive in two shipments, "Rs 29bn across 14
+    # consignments" stops saying whether that is 14 orders or 14 arrivals, and
+    # the reader cannot tell which.
+    #
+    # So `orders` goes out alongside it. This is the reference-list rule in
+    # app/dashboard/references.py applied one level up: a figure may report a
+    # second unit, and must never report a different number with nothing saying
+    # why. The tile keeps counting batches; the panel can now say "2 batches
+    # across 1 order".
+    value, consignments, orders = db.execute(
         select(
             func.coalesce(func.sum(CONSIGNMENT_VALUE), 0),
             func.count(Consignment.id),
+            func.count(Consignment.batch_group_id.distinct()),
         )
         .where(*scope)
     ).one()
@@ -274,7 +328,7 @@ def imports_period_value(db, date_from, date_to, date_field=None, shafts_only=Fa
         .where(*scope)
     ).scalar()
 
-    return value, consignments, lines
+    return value, consignments, orders, lines
 
 
 def imports_value_undated(db, date_field=None, shafts_only=False):
@@ -792,14 +846,23 @@ def imports_population(db, date_from=None, date_to=None, date_field=None,
             func.count(Consignment.id),
             func.coalesce(func.sum(CONSIGNMENT_VALUE), 0),
             *bucket(in_process), *bucket(arrived), *bucket(cancelled),
+            # The second unit, as in imports_period_value. Only for the TOTAL:
+            # the three buckets are keyed on status, which is a per-batch fact,
+            # so an order whose two batches sat at different statuses would be
+            # counted under both and the buckets would stop adding up to the
+            # total. There is no honest order count per bucket, so none is
+            # published — a missing figure beats one that does not reconcile.
+            func.count(Consignment.batch_group_id.distinct()),
         ).where(*scope)
     ).one()
 
     keys = ("total", "in_process", "arrived", "cancelled")
-    return {
+    population = {
         key: {"count": row[i * 2], "value": row[i * 2 + 1]}
         for i, key in enumerate(keys)
     }
+    population["total"]["orders"] = row[8]
+    return population
 
 
 #-----------------------------------------------------
@@ -818,9 +881,12 @@ def imports_delay(db, date_from=None, date_to=None, date_field=None,
     scope = _imports_scope(shafts_only)
     if date_from is not None and date_to is not None:
         scope.append(_imports_window_membership(date_field, date_from, date_to))
-    measurable = and_(Consignment.required_date.isnot(None),
-                      Consignment.eta_works.isnot(None))
-    late = Consignment.eta_works > Consignment.required_date + DELAY_GRACE_DAYS
+    # The batch's EARLIEST required date, not a header column — the shared
+    # expression, so this tile and the Imports screen's own delay figure cannot
+    # come to measure lateness against different dates.
+    required = EARLIEST_REQUIRED_DATE
+    measurable = and_(required.isnot(None), Consignment.eta_works.isnot(None))
+    late = Consignment.eta_works > required + DELAY_GRACE_DAYS
 
     comparable, late_count, late_value = db.execute(
         select(
