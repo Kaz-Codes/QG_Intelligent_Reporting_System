@@ -9,6 +9,13 @@ from app.export_utils import xlsx_response
 from typing import Optional
 from datetime import date
 import logging
+from app.imports.demand_dates import earliest_required_date, earliest_requisition_date
+from app.imports.order_view import (
+    line_item_name, line_requisition_type, line_unit_price, order_branch_name,
+    order_currency, order_exchange_rate, order_incoterm,
+    order_instrument_number, order_origin, order_payment_instrument,
+    order_rate_booked_on, order_supplier_name, order_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,33 +38,43 @@ HEADERS = [
 
 def _row(c):
     foreign_total = sum(
-        (item.quantity or 0) * (item.unit_price or 0)
+        (item.quantity or 0) * (line_unit_price(item) or 0)
         for item in c.items if not item.is_deleted
     )
     active_items = [i for i in c.items if not i.is_deleted]
-    item_names = "; ".join(i.item_name for i in active_items if i.item_name)
-    req_types = " + ".join(sorted({i.requisition_type for i in active_items if i.requisition_type}))
+    item_names = "; ".join(line_item_name(i) for i in active_items if line_item_name(i))
+    req_types = " + ".join(sorted(
+        {line_requisition_type(i) for i in active_items if line_requisition_type(i)}
+    ))
 
     return [
         c.id,
-        c.branch.name if c.branch else "",
-        c.supplier.name if c.supplier else "",
-        c.works,
-        c.origin,
-        c.currency,
-        c.consignment_type,
-        c.incoterm,
+        # TWELVE OF THESE COLUMNS NOW COME FROM THE ORDER OR THE ORDER LINE.
+        # A wrong accessor here does not crash - it returns None and the sheet
+        # gets a blank column, which reads as missing data rather than a bug.
+        # Asserted by value, not by status code, in the export check.
+        order_branch_name(c) or "",
+        order_supplier_name(c) or "",
+        # `works` is retired; the order's branch is what it always meant.
+        order_branch_name(c),
+        order_origin(c),
+        order_currency(c),
+        order_type(c),
+        order_incoterm(c),
         c.current_status,
         c.record_state,
-        c.requisition_date,
-        c.required_date,
+        # Requisition date is per LINE with no header aggregate (section 3.3),
+        # so the header row shows the earliest of this batch's lines - the same
+        # rule `required_date` uses, and the only honest single value here.
+        earliest_requisition_date(c),
+        earliest_required_date(c),
         c.etd,
         c.eta,
         c.eta_works,
-        c.payment_instrument,
-        c.instrument_number,
-        c.exchange_rate,
-        c.rate_booked_on,
+        order_payment_instrument(c),
+        order_instrument_number(c),
+        order_exchange_rate(c),
+        order_rate_booked_on(c),
         c.gd_number,
         c.gd_filing_date,
         c.free_days_allowed,

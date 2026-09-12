@@ -633,13 +633,13 @@ def _line_query(conditions):
             ConsignmentItem.id,
             Consignment.id.label("consignment_id"),
             ConsignmentBatchGroup.instrument_number,
-            ConsignmentItem.item_name,
+            ConsignmentOrderItem.item_name,
             ConsignmentItem.quantity,
-            ConsignmentItem.unit_of_measurement,
+            ConsignmentOrderItem.unit_of_measurement,
             func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works).label("line_eta"),
             Supplier.name,
             Branch.name,
-            (ConsignmentItem.quantity * ConsignmentItem.unit_price
+            (ConsignmentItem.quantity * ConsignmentOrderItem.unit_price
              * ConsignmentBatchGroup.exchange_rate).label("value"),
         )
         .select_from(ConsignmentItem)
@@ -665,7 +665,7 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
 
     clause = sql_search_clause(
         search, ConsignmentBatchGroup.instrument_number, Supplier.name, Branch.name,
-        ConsignmentItem.item_name, Consignment.current_status,
+        ConsignmentOrderItem.item_name, Consignment.current_status,
     )
     search_conditions = list(conditions) + ([clause] if clause is not None else [])
 

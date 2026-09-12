@@ -6,7 +6,10 @@ from sqlalchemy.orm import selectinload, joinedload
 from app.logistics.models import LogisticsConsignment
 from app.imports.models import Consignment, ConsignmentBatchGroup
 from app.trucking.models import TruckingConsignment
-from app.imports.order_view import order_instrument_number, order_origin, order_supplier_name
+from app.imports.order_view import (
+    line_item_name, line_specification, order_instrument_number,
+    order_origin, order_supplier_name,
+)
 
 #-----------------------------------------------------
 # CROSS-MODULE LINKAGE
@@ -111,8 +114,8 @@ def _import_snapshot(consignment):
             continue
         snapshot.append({
             "source_package_id": None,
-            "label": item.item_name or f"Item {item.id}",
-            "item_details": item.specification,
+            "label": line_item_name(item) or f"Item {item.id}",
+            "item_details": line_specification(item),
             "quantity": _num(item.quantity),
             "weight": None,
             "net_weight": _num(item.net_weight),

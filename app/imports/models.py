@@ -234,9 +234,13 @@ class ConsignmentBatchGroup(Base, TimestampMixin):
         cascade="all, delete-orphan"
     )
 
-    supplier: Mapped[Optional["Supplier"]] = relationship()
+    supplier: Mapped[Optional["Supplier"]] = relationship(
+        back_populates="consignment_groups"
+    )
 
-    works_branch: Mapped[Optional["Branch"]] = relationship()
+    works_branch: Mapped[Optional["Branch"]] = relationship(
+        back_populates="consignment_groups"
+    )
 
     created_by: Mapped[Optional["User"]] = relationship(
         foreign_keys=[created_by_id]
@@ -440,7 +444,9 @@ class ConsignmentOrderItem(Base, TimestampMixin):
         back_populates="order_items"
     )
 
-    item: Mapped[Optional["Item"]] = relationship()
+    item: Mapped[Optional["Item"]] = relationship(
+        back_populates="consignment_order_items"
+    )
 
     branch: Mapped[Optional["Branch"]] = relationship()
 
@@ -496,66 +502,46 @@ class Consignment(Base, TimestampMixin):
         nullable=False
     )
 
-    branch_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("branches.id", ondelete="SET NULL"),
-        nullable=True
-    )
-
-    supplier_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("suppliers.id", ondelete="SET NULL"),
-        nullable=True
-    )
-
-    # Works is typed in by hand, not picked from a master, so it is free
-    # text rather than a foreign key. The sheet's "Works" column is the
-    # branch and fills branch_id above.
-    works: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True
-    )
+    #-----------------------------------------------------------------
+    # FOURTEEN ATTRIBUTES USED TO BE HERE. THE COLUMNS STILL EXIST.
+    #
+    #   to the ORDER (consignment_batch_groups) - facts about what was agreed,
+    #   identical on every batch of one LC:
+    #       supplier_id  origin  currency  consignment_type  incoterm
+    #       payment_instrument  instrument_number
+    #       exchange_rate  rate_booked_on  rate_source
+    #       branch_id -> works_branch_id   (RENAMED: works and branch were
+    #                    always the same thing to the business, and the group
+    #                    is where the header-level branch now lives)
+    #
+    #   to the ORDER LINE (consignment_order_items) - facts about the demand,
+    #   which can differ item by item within one order:
+    #       requisition_date  required_date
+    #
+    #   RETIRED, with no successor anywhere:
+    #       works  (free text; works_branch_id above replaces it)
+    #
+    # THE COLUMNS ARE DELIBERATELY LEFT IN THE DATABASE. Revision B drops them,
+    # a release later, once batching has actually run. Removing the ATTRIBUTES
+    # while leaving the columns is the control section 4.7 is built on:
+    # SQLAlchemy cannot write a column it does not know about, so no ORM path
+    # can keep the orphaned copy alive.
+    #
+    # THAT CONTROL COVERS LESS THAN IT APPEARS TO, and section 4.7 now lists
+    # five ways round it - two of which were found by running the code, not by
+    # reading it. Anything that writes ONE copy while both exist is suspect.
+    #
+    # `po_date` stays for now (section 4.8): it is duplicated nowhere, so
+    # leaving it mapped creates no divergence risk, and retiring it has a
+    # front-end consequence that does not belong in this change.
+    #-----------------------------------------------------------------
 
     clearing_agent_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("clearing_agents.id", ondelete="SET NULL"),
         nullable=True
     )
 
-    # Both start as copies of the supplier's values and can be changed here
-    origin: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True
-    )
-
-    currency: Mapped[Optional[str]] = mapped_column(
-        String(10),
-        nullable=True
-    )
-
-    consignment_type: Mapped[Optional[str]] = mapped_column(
-        String(50),
-        nullable=True
-    )
-
-    # FOB feeds the trucking module's import-FOB request derivation.
-    incoterm: Mapped[Optional[str]] = mapped_column(
-        String(10),
-        nullable=True
-    )
-
     po_date: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
-    # The day the requisition/indent was raised — before a supplier or PO
-    # exists. The gap to po_date is procurement lead time.
-    requisition_date: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
-    # The day the business actually needs the goods. Delay is measured
-    # against this, not a target the system enforces.
-    required_date: Mapped[Optional[date]] = mapped_column(
         Date,
         nullable=True
     )
@@ -586,33 +572,16 @@ class Consignment(Base, TimestampMixin):
     )
 
     #--- finance ---
-    payment_instrument: Mapped[Optional[str]] = mapped_column(
-        String(20),
-        nullable=True
-    )
-
-    instrument_number: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
+    # payment_instrument, instrument_number, exchange_rate, rate_booked_on and
+    # rate_source are on the ORDER now - see the block above. The rate is booked
+    # against the LC, so every batch of one order converts at the same rate;
+    # held per batch, two shipments of one order could report different PKR
+    # values for the same money.
+    #
+    # `opening_or_retirement_date` stays per batch: it is the date THIS
+    # shipment's instrument was opened or retired, not a term of the order.
     opening_or_retirement_date: Mapped[Optional[date]] = mapped_column(
         Date,
-        nullable=True
-    )
-
-    exchange_rate: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(12, 6),
-        nullable=True
-    )
-
-    rate_booked_on: Mapped[Optional[date]] = mapped_column(
-        Date,
-        nullable=True
-    )
-
-    rate_source: Mapped[Optional[str]] = mapped_column(
-        String(50),
         nullable=True
     )
 
@@ -832,13 +801,15 @@ class Consignment(Base, TimestampMixin):
         cascade="all, delete-orphan"
     )
 
-    branch: Mapped[Optional["Branch"]] = relationship(
-    back_populates="consignments"
-)
-
-    supplier: Mapped[Optional["Supplier"]] = relationship(
-        back_populates="consignments"
-    )
+    # `branch` and `supplier` are GONE from the batch. They had no columns left
+    # to join on once branch_id and supplier_id moved to the order, so they die
+    # with them rather than being repointed: a relationship declared here would
+    # say the batch owns a supplier, and it does not.
+    #
+    # Read them through `consignment.batch_group.supplier` /
+    # `.works_branch`, or — better at a call site — through
+    # app/imports/order_view.py, which hides the navigation and keeps the
+    # OWNERSHIP visible in the name (`order_supplier_name`, not `.supplier`).
 
     # foreign_keys is explicit because consignments and consignment_batch_groups
     # point at each other: this column one way, founding_consignment_id the
@@ -873,56 +844,32 @@ class ConsignmentItem(Base, TimestampMixin):
         index=True
     )
 
-    item_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("items.id", ondelete="SET NULL"),
-        nullable=True
-    )
+    #-----------------------------------------------------------------
+    # THIRTEEN ATTRIBUTES USED TO BE HERE. THE COLUMNS STILL EXIST.
+    #
+    # All thirteen moved to the ORDER LINE (consignment_order_items), because
+    # they describe WHAT WAS BOUGHT rather than what this shipment carried:
+    #
+    #   item_id  item_code  item_name  placeholder_name  specification  hs_code
+    #   unit_price  unit_of_measurement
+    #   requisition_type  reference_number  job_number  mo_number  description
+    #
+    # The rule that decides which table a field belongs to (section 3.7): a fact
+    # about what was ORDERED lives on the order line; a fact about what happened
+    # to a PARTICULAR SHIPMENT stays here. So the identity, the price and the
+    # requisition details went up, while `quantity` (now the ALLOCATED quantity),
+    # the arrival date, the landed cost and the physical weights stayed - landed
+    # cost is incurred per arrival, and two batches of one item legitimately land
+    # at different costs.
+    #
+    # Revision B drops the columns. Reach them through `line.order_item`.
+    #-----------------------------------------------------------------
 
-    #--- snapshots taken from the item master ---
-    item_code: Mapped[str] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    item_name: Mapped[str] = mapped_column(
-        String(255),
-        nullable=True
-    )
-
-    # The operator's own informal label for this line — "blue drum" — so a
-    # line can be recognised at a glance when the formal item_name is long,
-    # unfamiliar, or one of several near-identical spec variants. It is NOT a
-    # substitute for item_name and is never matched on: nothing resolves an
-    # item master, groups, filters or reports by it. Free text on purpose,
-    # since it names the thing the way the person handling it thinks of it.
-    placeholder_name: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True
-    )
-
-    specification: Mapped[Optional[str]] = mapped_column(
-        String(500),
-        nullable=True
-    )
-
-    hs_code: Mapped[Optional[str]] = mapped_column(
-        String(50),
-        nullable=True
-    )
-
-    #--- what was ordered ---
+    #--- what THIS shipment carried ---
+    # The ALLOCATED quantity. What was ordered lives once, on the order line;
+    # this is how much of it came in this batch.
     quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 3),
-        nullable=True
-    )
-
-    unit_price: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(14, 4),
-        nullable=True
-    )
-
-    unit_of_measurement: Mapped[Optional[str]] = mapped_column(
-        String(50),
         nullable=True
     )
 
@@ -942,11 +889,6 @@ class ConsignmentItem(Base, TimestampMixin):
 
     batch_no: Mapped[Optional[str]] = mapped_column(
         String(100),
-        nullable=True
-    )
-
-    requisition_type: Mapped[Optional[str]] = mapped_column(
-        String(50),
         nullable=True
     )
 
@@ -1029,28 +971,11 @@ class ConsignmentItem(Base, TimestampMixin):
         nullable=True
     )
 
-    # These four vary line by line, which is why they sit here and not
-    # on the consignment. One consignment can carry Store and
-    # Engineering items together.
-    reference_number: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    job_number: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    mo_number: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True
-    )
-
-    description: Mapped[Optional[str]] = mapped_column(
-        String(500),
-        nullable=True
-    )
+    # requisition_type, reference_number, job_number, mo_number and
+    # description are on the ORDER LINE now. They vary line by line - one order
+    # can carry Store and Engineering items together - but they describe the
+    # DEMAND the line came from, not the shipment, so they went up with the rest
+    # of the order-level identity rather than staying beside the arrival.
 
     is_deleted: Mapped[bool] = mapped_column(
         Boolean,
@@ -1068,9 +993,9 @@ class ConsignmentItem(Base, TimestampMixin):
         back_populates="items"
     )
 
-    item: Mapped[Optional["Item"]] = relationship(
-        back_populates="consignment_items"
-    )
+    # `item` is GONE from the shipment line - item_id went to the order line,
+    # so there is nothing here to join on. Reach the master through
+    # `line.order_item.item`.
 
     order_item: Mapped["ConsignmentOrderItem"] = relationship(
         back_populates="lines"

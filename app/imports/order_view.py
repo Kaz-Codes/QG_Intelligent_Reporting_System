@@ -122,6 +122,98 @@ def order_rate_source(consignment):
 
 #--- identity ---
 
+#-------------------------------------------------------------------
+# THE SAME IDEA ONE LEVEL DOWN: AN ORDER LINE, READ OFF A SHIPMENT LINE
+#
+# `consignment_items` is what a batch CARRIED; `consignment_order_items` is what
+# was BOUGHT. So the item's identity, its price and the requisition details live
+# on the order line, and a shipment line reaches them through `order_item`.
+#
+# Same two reasons as the header accessors above: `line.order_item.item_name if
+# line.order_item else None` at forty call sites is noise, and when something
+# else moves, it moves here rather than at forty sites.
+#
+# WHAT STAYS ON THE SHIPMENT LINE, and is therefore NOT here: `quantity` (the
+# quantity ALLOCATED to this batch), `eta_works`, `elc`/`alc` and their audit
+# columns, the physical weights and dimensions, `batch_no`. Landed cost is
+# incurred per arrival; two batches of one item legitimately land at different
+# costs.
+#-------------------------------------------------------------------
+
+def order_line(line):
+    """The order line a shipment line is an allocation against."""
+    return getattr(line, "order_item", None)
+
+
+def _line_field(line, name):
+    order_item = order_line(line)
+    return getattr(order_item, name, None) if order_item is not None else None
+
+
+def line_item_name(line):
+    return _line_field(line, "item_name")
+
+
+def line_item_code(line):
+    return _line_field(line, "item_code")
+
+
+def line_item_id(line):
+    return _line_field(line, "item_id")
+
+
+def line_placeholder_name(line):
+    return _line_field(line, "placeholder_name")
+
+
+def line_specification(line):
+    return _line_field(line, "specification")
+
+
+def line_hs_code(line):
+    return _line_field(line, "hs_code")
+
+
+def line_unit_price(line):
+    return _line_field(line, "unit_price")
+
+
+def line_uom(line):
+    return _line_field(line, "unit_of_measurement")
+
+
+def line_requisition_type(line):
+    return _line_field(line, "requisition_type")
+
+
+def line_reference_number(line):
+    return _line_field(line, "reference_number")
+
+
+def line_job_number(line):
+    return _line_field(line, "job_number")
+
+
+def line_mo_number(line):
+    return _line_field(line, "mo_number")
+
+
+def line_description(line):
+    return _line_field(line, "description")
+
+
+def line_item_master(line):
+    """The `items` master row behind this line, or None."""
+    order_item = order_line(line)
+    return getattr(order_item, "item", None) if order_item is not None else None
+
+
+def line_category(line):
+    """The item master's category — what the category charts group by."""
+    master = line_item_master(line)
+    return getattr(master, "category", None) if master is not None else None
+
+
 def order_reference(consignment):
     """How a consignment is NAMED in a message, a report or a list.
 

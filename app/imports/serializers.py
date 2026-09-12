@@ -9,6 +9,7 @@ from app.imports.order_view import (
     order_branch, order_currency, order_exchange_rate, order_incoterm,
     order_instrument_number, order_origin, order_payment_instrument,
     order_rate_booked_on, order_rate_source, order_supplier, order_type,
+    order_branch_name,
 )
 
 
@@ -95,7 +96,14 @@ def serialize_consignment(consignment, db, include_change_history=True):
         "batch_sequence" : consignment.batch_sequence,
         "branch" : serialize_master(order_branch(consignment)),
         "supplier" : serialize_master(order_supplier(consignment)),
-        "works" : consignment.works,
+        # `works` was free text and is RETIRED - the order's `works_branch_id`
+        # replaced it, and that is what `branch` above already reports. The key
+        # is still emitted so the wizard's Works input has something to bind to
+        # until step 8 turns it into a branch dropdown, but it now carries the
+        # branch NAME rather than a separately-typed string that could disagree
+        # with it. The write path accepts and discards it
+        # (RETIRED_PAYLOAD_FIELDS).
+        "works" : order_branch_name(consignment),
         "clearing_agent" : serialize_master(consignment.clearing_agent),
         "loading_port" : serialize_master(consignment.loading_port),
         "delivery_port" : serialize_master(consignment.delivery_port),
@@ -245,13 +253,31 @@ def serialize_many(models_list):
 #----------------------------------
 
 def serialize_items(items):
-    rows = serialize_many(items)
+    """A shipment line and its order line, flattened into one payload row.
 
-    for row, item in zip(rows, items):
-        row["requisition_date"] = line_requisition_date(item)
-        row["required_date"] = line_required_date(item)
+    THIS MERGE IS NOT COSMETIC. WITHOUT IT A NORMAL SAVE DESTROYS DATA.
 
-    return rows
+    `serialize_many` walks the MAPPER, so once the thirteen identity, price and
+    requisition fields moved to `consignment_order_items` it stopped emitting
+    them - no error, just thirteen keys quietly missing from every item. The
+    client then posts the draft back as the wizard always does,
+    `ConsignmentItemSchema` defaults the absent keys to None, `updated_items`
+    sees None against a stored 7650.0000 and calls it a change, and the update
+    writes NULL over the price.
+
+    Measured, not imagined: order items 40, 41 and 42 on the split fixture had
+    their `unit_price` wiped by exactly this route, which is what made the
+    consistency suite report one batch worth 128,172.35 and its sibling 0.
+
+    The client sees ONE item, because that is what an item is to the person
+    editing it. Which row each field lives on is the server's business, and
+    `item_current_values` is the single definition of that flattening - shared
+    with the update diff, so the shape sent out and the shape diffed on the way
+    back in cannot drift.
+    """
+    from app.imports.helpers import item_current_values
+
+    return [item_current_values(item) for item in items]
 
 
 #----------------------------------

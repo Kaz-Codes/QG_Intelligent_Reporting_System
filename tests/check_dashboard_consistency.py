@@ -41,8 +41,29 @@ print("\n== Overview vs Imports dashboard: same window, same numbers ==")
 o = get("/dashboard/overview", **OW)["imports"]
 i = get("/dashboard/imports", **W)["consignments"]
 p = i["population"]
-check("total value matches", float(o["period_value"]["value"]) == float(i["period_value"]["value"]),
-      f'{float(o["period_value"]["value"]):,.0f}')
+# TO THE RUPEE, NOT TO THE BIT - and the difference is a real one, not slack.
+#
+# The two screens value a consignment differently ON PURPOSE (CLAUDE.md, "the
+# Overview's period_value no longer follows this rule"): the Overview prefers
+# the STORED `pkr_total`, the module re-sums the lines. `pkr_total` is
+# Numeric(20,2), so a consignment whose lines come to 4,064,460.0348 is stored
+# as 4,064,460.03 and the two screens are 0.0048 apart by construction.
+#
+# This was an exact `==` and it passed, which is the misleading part: no
+# consignment in the loaded data carries a stored `pkr_total` at all, so BOTH
+# sides took the line path and matched bit for bit. The first record to be
+# saved through the app - a batch fixture, or any real edit, since
+# `recompute_derived` stores the total on every save - is enough to break it.
+# An assertion that only holds while a column is empty everywhere is not
+# asserting what it claims to.
+#
+# Half a paisa per consignment is the most the rounding can account for; a
+# basis error is orders of magnitude larger than that and still fails here.
+value_tolerance = 0.005 * max(int(p["total"]["count"]), 1)
+value_gap = abs(float(o["period_value"]["value"]) - float(i["period_value"]["value"]))
+check("total value matches", value_gap <= value_tolerance,
+      f'{float(o["period_value"]["value"]):,.0f} (differ by {value_gap:.4f}, '
+      f'rounding allows {value_tolerance:.3f})')
 check("total count matches", o["period_value"]["consignments"] == p["total"]["count"], str(p["total"]["count"]))
 check("total lines match", o["period_value"]["lines"] == p["total"]["lines"], str(p["total"]["lines"]))
 # One money basis per screen: the population tiles must sum the same in-window

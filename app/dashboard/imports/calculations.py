@@ -6,8 +6,9 @@ from app.dashboard.period import build_trend
 from app.enums import Status
 from app.imports.demand_dates import earliest_required_date
 from app.imports.order_view import (
-    order_branch_name, order_exchange_rate, order_reference, order_supplier_id,
-    order_supplier_name,
+    line_category, line_item_master, line_item_name,
+    line_unit_price, order_branch_name, order_exchange_rate, order_origin,
+    order_reference, order_supplier_id, order_supplier_name,
     order_type,
 )
 
@@ -53,8 +54,8 @@ def computed_value_pkr(consignment):
     for item in consignment.items:
         if item.is_deleted:
             continue
-        if item.quantity is not None and item.unit_price is not None:
-            foreign_total += item.quantity * item.unit_price
+        if item.quantity is not None and line_unit_price(item) is not None:
+            foreign_total += item.quantity * line_unit_price(item)
             priced = True
 
     if not priced or order_exchange_rate(consignment) is None:
@@ -239,21 +240,24 @@ def value_by(consignments, key_fn, limit=None):
 
 
 def value_by_country(consignments, limit=8):
-    return value_by(consignments, lambda c: c.origin, limit)
+    return value_by(consignments, order_origin, limit)
 
 
 def value_by_supplier(consignments, limit=8):
     return value_by(
         consignments,
-        lambda c: c.supplier.name if c.supplier else None,
+        order_supplier_name,
         limit
     )
 
 
 def value_by_branch(consignments, limit=8):
+    # The ORDER's header branch (works_branch), not a per-item one. Every
+    # branch-grouped figure in the app is one-branch-per-order by design -
+    # see section 3.3.
     return value_by(
         consignments,
-        lambda c: c.branch.name if c.branch else None,
+        order_branch_name,
         limit
     )
 
@@ -345,7 +349,8 @@ def consignment_reference(consignment):
     not tell you what to chase — the same reason the purchases list shows the
     item on each line.
     """
-    items = [i.item_name for i in consignment.items if not i.is_deleted and i.item_name]
+    items = [line_item_name(i) for i in consignment.items
+             if not i.is_deleted and line_item_name(i)]
     detail = ", ".join(items[:2])
     if len(items) > 2:
         detail += f" +{len(items) - 2} more"
@@ -477,7 +482,7 @@ SHAFT_NAMES = [
 
 
 def is_shaft(item):
-    name = (item.item_name or "").strip().lower()
+    name = (line_item_name(item) or "").strip().lower()
     return any(shaft.lower() in name for shaft in SHAFT_NAMES)
 
 
@@ -505,11 +510,11 @@ def shafts_value(consignments, page=None, page_size=None):
         missing = False
 
         for item in shaft_lines:
-            if (item.quantity is None or item.unit_price is None
+            if (item.quantity is None or line_unit_price(item) is None
                     or order_exchange_rate(consignment) is None):
                 missing = True
                 continue
-            total += item.quantity * item.unit_price * order_exchange_rate(consignment)
+            total += item.quantity * line_unit_price(item) * order_exchange_rate(consignment)
 
         if missing:
             incomplete += 1
@@ -766,7 +771,7 @@ def consignment_categories(consignment):
     for item in consignment.items:
         if item.is_deleted:
             continue
-        category = item.item.category if item.item else None
+        category = line_category(item) if line_item_master(item) else None
         categories.add(category or UNCATEGORISED)
 
     return categories or {UNCATEGORISED}

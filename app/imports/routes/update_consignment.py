@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, sync_batch_group
+from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates
 
 from app.imports.helpers import (
     fetch_consignment, consignment_reference, is_closed, CLOSED_STATUS_VALUE,
@@ -203,7 +203,13 @@ def update_consignment(
                 detail="This consignment is closed. An admin must reopen it before it can be edited."
             )
 
-        updation_dict = updated_fields(consignment, consignment_data, db)
+        # THREE DICTS, BECAUSE A CONSIGNMENT IS THREE ROWS NOW. The group's
+        # changes are diffed against the GROUP, not against a stale copy on the
+        # batch; the order-line fields are header-level in the payload and fan
+        # out to every line, so they carry no single old value to diff.
+        updation_dict, group_updates, order_item_header = updated_fields(
+            consignment, consignment_data, db
+        )
         new_items = new_items_to_add(consignment, consignment_data)
         item_updates = updated_items(consignment, consignment_data, db)
         new_payments = new_payments_to_add(consignment_data)
@@ -229,11 +235,13 @@ def update_consignment(
 
         # Adding new items and payments
         created_items = []
+        new_item_payloads = {}
         for item_schema in new_items:
-            item_dict = item_schema.model_dump()
-            item = ConsignmentItem(**item_dict)
+            line_fields, order_item_fields = split_item_payload(item_schema.model_dump())
+            item = ConsignmentItem(**line_fields)
             consignment.items.append(item)
             created_items.append(item)
+            new_item_payloads[item] = order_item_fields
             # Record who entered any landed-cost figure supplied on a new line.
             stamp_landed_cost_audit(item, user, item.elc is not None, item.alc is not None)
 
@@ -241,7 +249,8 @@ def update_consignment(
         # above has no order line above it yet, and the flush below would insert
         # it with a NULL and fail. Runs a second time further down, once the
         # field updates have actually landed on the lines.
-        sync_order_items(consignment, db)
+        sync_order_items(consignment, db, payloads=new_item_payloads,
+                         header_fields=order_item_header)
 
         created_payments = []
         for payment_schema in new_payments:
@@ -253,13 +262,17 @@ def update_consignment(
         db.flush()
 
         # Adding changes in consignment change history and eta revisions and status updates
-        add_in_consignment_change_history(updation_dict, serialize_many(created_items), serialize_many(created_payments), deleted_items, deleted_payments, item_updates, payment_updates, consignment, user, db)
+        add_in_consignment_change_history(updation_dict, serialize_many(created_items), serialize_many(created_payments), deleted_items, deleted_payments, item_updates, payment_updates, consignment, user, db, group_updates=group_updates)
 
         add_in_eta_revision_history(updation_dict, consignment, user, db)
         add_in_status_change_history(updation_dict, consignment, user, db)
 
-        # Applying updates
+        # Applying updates - to the batch, and to the ORDER above it. A group
+        # field posted by the wizard is written here and nowhere else; it used
+        # to be written onto the consignment and mirrored across afterwards.
         apply_updates(updation_dict, consignment)
+        if group_updates and consignment.batch_group is not None:
+            apply_group_updates(group_updates, consignment.batch_group)
 
         # THE CLOSED LOCK IS WRITTEN HERE, AND ONLY HERE.
         #
@@ -291,7 +304,7 @@ def update_consignment(
             item_id = updated_item.get("id")
             old_item = consignment_items_map.get(item_id)
             if old_item:
-                apply_updates(updated_item, old_item)
+                apply_item_updates(updated_item, old_item)
                 # Stamp the landed-cost audit only for the figure that changed.
                 if "elc" in updated_item or "alc" in updated_item:
                     stamp_landed_cost_audit(old_item, user, "elc" in updated_item, "alc" in updated_item)
@@ -313,14 +326,7 @@ def update_consignment(
         # otherwise leave `allocated_quantity` describing quantities the lines
         # no longer carry, which is the drift the over-allocation CHECK cannot
         # see and `post_load`'s "Allocation totals" check exists to catch.
-        sync_order_items(consignment, db)
-
-        # AND THE ORDER ABOVE THE BATCH, for the same reason one level up. The
-        # group holds the copy of supplier / currency / exchange rate that every
-        # dashboard now reads; without this an edit updated the batch and left
-        # the group showing the value it was created with, for ever. Only batch
-        # 1 writes it — see sync_batch_group.
-        sync_batch_group(consignment, db)
+        sync_order_items(consignment, db, header_fields=order_item_header)
 
         # Recompute + store the derived money totals and per-line variance from
         # the now-updated lines and rate.

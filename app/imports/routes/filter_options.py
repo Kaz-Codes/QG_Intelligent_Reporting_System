@@ -6,7 +6,9 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_VIEW_IMPORTS
-from app.imports.models import Consignment, ConsignmentItem
+from app.imports.models import (
+    Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
+)
 from app.masters.models import Branch, Supplier
 from app.enums import Status
 import logging
@@ -70,7 +72,7 @@ def filter_options(request: Request):
             {"id": bid, "name": name}
             for bid, name in db.execute(
                 select(Branch.id, Branch.name)
-                .where(Branch.consignments.any(Consignment.is_deleted == False))  # noqa: E712
+                .where(Branch.consignment_groups.any(ConsignmentBatchGroup.is_deleted == False))  # noqa: E712
                 .order_by(Branch.name)
             ).all()
         ]
@@ -79,14 +81,14 @@ def filter_options(request: Request):
             {"id": sid, "name": name}
             for sid, name in db.execute(
                 select(Supplier.id, Supplier.name)
-                .where(Supplier.consignments.any(Consignment.is_deleted == False))  # noqa: E712
+                .where(Supplier.consignment_groups.any(ConsignmentBatchGroup.is_deleted == False))  # noqa: E712
                 .order_by(Supplier.name)
             ).all()
         ]
 
         requisition_types = sorted(
             r for (r,) in db.execute(
-                select(ConsignmentItem.requisition_type)
+                select(ConsignmentOrderItem.requisition_type)
                 .where(ConsignmentItem.is_deleted == False)  # noqa: E712
                 .distinct()
             ).all() if r

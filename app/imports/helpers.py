@@ -13,6 +13,10 @@ from sqlalchemy import select
 from datetime import datetime, timezone, date
 from sqlalchemy.inspection import inspect
 from decimal import Decimal
+from app.imports.order_view import (
+    line_item_code, line_item_name, line_specification,
+    line_unit_price, order_exchange_rate, order_instrument_number,
+)
 
 #-------------------------------------
 # THE SIX-STAGE PIPELINE
@@ -60,13 +64,72 @@ def coerce_value(model, field, value):
 # THAT CAN BE ENTERED
 # INTO DATABSE TABLE USING SQL ALCHEMY ORM
 #-------------------------------------------------
+def split_consignment_payload(payload):
+    """Sort one flat consignment payload into the three rows it now describes.
+
+    Returns (consignment_fields, group_fields, order_item_fields).
+
+    THE UNROUTABLE CASE RAISES. A payload key that is not a `Consignment`
+    column, not in either destination map and not a known retirement is a real
+    defect - a field the client believes in that the server has never had - and
+    the one thing it must not do is vanish. That is exactly how the group's copy
+    went stale for a week: `updated_fields` filtered against the mapper and
+    `continue`d on a miss, so twelve fields stopped being saved with no error
+    anywhere.
+    """
+    consignment_columns = {c.key for c in Consignment.__mapper__.column_attrs}
+
+    consignment_fields, group_fields, order_item_fields = {}, {}, {}
+    unknown = []
+
+    for key, value in payload.items():
+        # EVERY destination is taken, not the first one that matches. `branch_id`
+        # has two (the group's works_branch_id and every order line's branch_id),
+        # and an elif chain would silently take one - which is a half-write, the
+        # same shape as the half-undo this routing exists to prevent.
+        routed = False
+
+        if key in consignment_columns:
+            consignment_fields[key] = value
+            routed = True
+        if key in PAYLOAD_TO_GROUP:
+            group_fields[PAYLOAD_TO_GROUP[key]] = value
+            routed = True
+        if key in PAYLOAD_TO_ORDER_ITEM:
+            order_item_fields[PAYLOAD_TO_ORDER_ITEM[key]] = value
+            routed = True
+        if key in RETIRED_PAYLOAD_FIELDS:
+            routed = True
+
+        if not routed:
+            unknown.append(key)
+
+    if unknown:
+        raise ValueError(
+            f"Consignment payload carries field(s) that belong to no table: "
+            f"{', '.join(sorted(unknown))}. They were not saved. If a column "
+            f"was retired, add it to RETIRED_PAYLOAD_FIELDS with the reason; if "
+            f"it moved, add it to PAYLOAD_TO_GROUP or PAYLOAD_TO_ORDER_ITEM."
+        )
+
+    return consignment_fields, group_fields, order_item_fields
+
+
 def create_consignment_object(consignment_data, user):
-    consignment_data_dict = consignment_data.model_dump(exclude_none=True, exclude={"items", "payments"}) #--> Convert pydantic schema to python dictionary
+    """The batch row only. Its order and its order lines are built after it.
 
-    consignment_data_dict["created_by_id"] = user.id
+    `Consignment(**payload)` used to work because the payload and the table were
+    the same shape. They are not any more: twelve of these keys now belong to
+    the order and two to the order line, and passing them here is a TypeError.
+    """
+    payload = consignment_data.model_dump(
+        exclude_none=True, exclude={"items", "payments"}
+    )
 
-    consignment = Consignment(**consignment_data_dict)
-    return consignment
+    consignment_fields, _group, _order_item = split_consignment_payload(payload)
+    consignment_fields["created_by_id"] = user.id
+
+    return Consignment(**consignment_fields)
 
 
 #--------------------------------------
@@ -74,22 +137,53 @@ def create_consignment_object(consignment_data, user):
 # CONSIGNMENT ITEM
 #--------------------------------------
 
-def create_consignment_item_object(consignment_data):
-    # Items are coming as a list in data so
-    # create object for each item in the
-    # list and return a list of objects
+def split_item_payload(payload):
+    """Sort one posted item into the shipment line and the order line.
 
-    consignment_items = consignment_data.items
+    Returns (line_fields, order_item_fields).
 
-    objects = []
+    The same routing as `split_consignment_payload`, one level down, and it
+    raises for the same reason: a key belonging to neither table is a field the
+    client believes in and the server has never had, and dropping it silently is
+    how the header copy went stale unnoticed.
+    """
+    line_columns = {c.key for c in ConsignmentItem.__mapper__.column_attrs}
+    order_item_columns = {c.key for c in ConsignmentOrderItem.__mapper__.column_attrs}
 
-    for item in consignment_items:
-        item_dict = item.model_dump() #--> Convert pydantic schema to python dictionary
-        objects.append(
-            ConsignmentItem(**item_dict)
+    line_fields, order_item_fields, unknown = {}, {}, []
+
+    for key, value in payload.items():
+        if key in line_columns:
+            line_fields[key] = value
+        elif key in order_item_columns:
+            order_item_fields[key] = value
+        else:
+            unknown.append(key)
+
+    if unknown:
+        raise ValueError(
+            f"Consignment item payload carries field(s) that belong to no "
+            f"table: {', '.join(sorted(unknown))}. They were not saved."
         )
 
-    return objects
+    return line_fields, order_item_fields
+
+
+def create_consignment_item_object(consignment_data):
+    """One (shipment line, order-line fields) pair per posted item.
+
+    RETURNS PAIRS, NOT OBJECTS. `ConsignmentItem(**item_dict)` used to be enough
+    because the payload and the table matched; thirteen of those keys are the
+    order line's now, so the routed half travels alongside the object until
+    `sync_order_items` writes it.
+    """
+    pairs = []
+
+    for item in consignment_data.items:
+        line_fields, order_item_fields = split_item_payload(item.model_dump())
+        pairs.append((ConsignmentItem(**line_fields), order_item_fields))
+
+    return pairs
 
 
 #--------------------------------------
@@ -218,7 +312,7 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         conditions.append(
             Consignment.id.in_(
                 select(ConsignmentItem.consignment_id).where(
-                    ConsignmentItem.requisition_type.in_(requisition_type)
+                    ConsignmentOrderItem.requisition_type.in_(requisition_type)
                 )
             )
         )
@@ -277,9 +371,9 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
             Consignment.items.any(
                 (ConsignmentItem.is_deleted == False) &  # noqa: E712
                 or_(
-                    ConsignmentItem.item_name.ilike(pattern),
-                    ConsignmentItem.item_code.ilike(pattern),
-                    ConsignmentItem.reference_number.ilike(pattern),
+                    ConsignmentOrderItem.item_name.ilike(pattern),
+                    ConsignmentOrderItem.item_code.ilike(pattern),
+                    ConsignmentOrderItem.reference_number.ilike(pattern),
                 )
             ),
         ]
@@ -393,28 +487,74 @@ def fetch_consignment_history(db, consignment_id, history_id):
 #---------------------------------------
 
 def updated_fields(consignment, update_consignment_data, db):
-    updation_dict = {} #--> will contain which field to update and
-    #its old and new value
+    """What this save changes, split by which row now owns each field.
 
-    fields_to_update = update_consignment_data.model_dump(exclude_none=True, exclude={"items", "payments", "consignment_id"}) #--> exclude fields which are none because it means user did not update them
+    Returns (consignment_changes, group_changes, order_item_changes) — each a
+    {field: {old_value, new_value}} dict against the object that field belongs
+    to, so each is diffed against the value actually stored rather than against
+    a stale copy on the consignment.
 
-    columns = {c.key for c in Consignment.__mapper__.column_attrs}
+    IT USED TO RETURN ONE DICT AND SILENTLY DROP ANYTHING THE MAPPER DID NOT
+    HAVE. That `continue` was correct while the payload and the table were the
+    same shape, and became a data-loss bug the moment twelve fields moved to the
+    order: the wizard kept posting them, the diff kept skipping them, and
+    nothing errored. Unroutable keys now raise, in split_consignment_payload.
 
-    for field, new_value in fields_to_update.items():
-        if field not in columns:          
-            continue
+    THE CHANGE HISTORY KEEPS FLAT KEYS. A group field is recorded as
+    `supplier_id`, not `group.supplier_id` — because section 4.7 item 3 says
+    stored history is never rewritten, so old rows already use the flat form,
+    and giving new rows a second shape would leave revert two formats to parse.
+    Where a key lands is decided at REVERT time by the same maps used here.
+    """
+    payload = update_consignment_data.model_dump(
+        exclude_none=True, exclude={"items", "payments", "consignment_id"}
+    )
 
-        old_value = getattr(consignment, field)
+    consignment_fields, group_fields, order_item_fields = \
+        split_consignment_payload(payload)
 
-        if new_value == old_value:
-            continue
+    group = consignment.batch_group
 
-        updation_dict[field] = {
-            "old_value" : old_value,
-            "new_value" : new_value
-        }
+    def diff(target, fields, key_for=None):
+        """{payload key: {old, new}} for whatever actually changed on `target`.
 
-    return updation_dict
+        `key_for` maps a DESTINATION column back to the PAYLOAD key the history
+        must record it under, and it exists for one field: the payload says
+        `branch_id` and the group's column is `works_branch_id`.
+
+        RECORDING THE DESTINATION NAME IS A BUG, AND IT WAS ONE. The history
+        held `works_branch_id`; revert routes on payload keys, so that key
+        matched nothing, raised, and the entire undo failed - not just the
+        branch. For the other ten group fields the key and the column are the
+        same word, so it stayed invisible until a branch change was
+        round-tripped through write-then-revert.
+
+        The rule both sides share: THE HISTORY RECORDS WHAT THE USER CHANGED,
+        in the words the client used. WHERE it lives is the maps' job, on the
+        way in and on the way back out.
+        """
+        out = {}
+        if target is None:
+            return out
+        for field, new_value in fields.items():
+            old_value = getattr(target, field, None)
+            if new_value == old_value:
+                continue
+            out[(key_for or {}).get(field, field)] = {
+                "old_value": old_value, "new_value": new_value
+            }
+        return out
+
+    # destination column -> payload key, for the history's benefit.
+    group_key_for = {dest: key for key, dest in PAYLOAD_TO_GROUP.items()}
+
+    # The order-line fields are header-level in the payload and per-item in the
+    # model, so there is no single "old value" to diff against — one posted
+    # value fans out to every line. They are returned undiffed and applied by
+    # sync_order_item_from_line, which already does exactly that fan-out.
+    return (diff(consignment, consignment_fields),
+            diff(group, group_fields, key_for=group_key_for),
+            order_item_fields)
 
 #----------------------------------
 # FINDING NEW ITEMS AND PAYMENTS
@@ -474,14 +614,46 @@ def delete_missing(consignment, present_ids, id_column,db, model):
     
 
 
+def item_current_values(item):
+    """One line's stored values, ACROSS BOTH of its rows.
+
+    A shipment line and the order line above it are one thing to the person
+    editing, and the payload is flat, so the diff needs a flat view of what is
+    stored. `serialize_many` alone cannot give one: it walks the MAPPER, so it
+    returns only the columns `ConsignmentItem` still has and silently omits the
+    thirteen that moved. Diffing against that view raised KeyError on the first
+    moved field - loud, and only because the payload happens to carry keys the
+    view lacks. Had the mismatch gone the other way it would have compared
+    nothing and reported no change.
+    """
+    values = dict(serialize_many([item])[0])
+
+    order_item = item.order_item
+    if order_item is not None:
+        for column in inspect(order_item).mapper.column_attrs:
+            # The line's own columns win: `id`, `is_deleted` and the timestamps
+            # exist on both rows and the line's are the ones the payload means.
+            values.setdefault(column.key, getattr(order_item, column.key))
+
+    # NOT the order line's own quantity columns. `ordered_quantity` and
+    # `allocated_quantity` are the ORDER's business (what was bought, and how
+    # much of it is spoken for); the payload's `quantity` is this batch's
+    # allocation and comes off the line. Leaking them here would put three
+    # quantity fields in front of a client that has one input for it.
+    for internal in ("ordered_quantity", "allocated_quantity", "batch_group_id"):
+        values.pop(internal, None)
+
+    return values
+
+
 def updated_items(consignment, update_consignment_data, db):
     updated_items_list = []
     items_in_updated_data = update_consignment_data.items
     items_in_consignment = consignment.items
 
-    serialized_consignment_items = serialize_many(items_in_consignment)
-
-    serialized_dict = {item["id"]: item for item in serialized_consignment_items}
+    serialized_dict = {
+        item.id: item_current_values(item) for item in items_in_consignment
+    }
 
     for item in items_in_updated_data:
         updation_dict = {}
@@ -492,6 +664,12 @@ def updated_items(consignment, update_consignment_data, db):
         if consignment_item is not None:
 
             for field in list(item_dict.keys()):
+                # `.get`, not `[...]`: a payload key that matches no column on
+                # either row is caught by split_item_payload when the change is
+                # APPLIED, which raises and names it. Here it simply cannot be
+                # a change, because there is nothing stored to differ from.
+                if field not in consignment_item:
+                    continue
                 if item_dict[field] != consignment_item[field]:
                 
                     updation_dict[field] = {
@@ -547,6 +725,54 @@ def updated_payments(consignment, update_consignment_data, db):
 # APPLY ALL THE UPDATES
 #------------------------------------
 
+def apply_group_updates(updation_dict, group):
+    """Apply a group diff, whose keys are PAYLOAD keys, to the group's columns.
+
+    The one asymmetry in the whole scheme: `branch_id` in, `works_branch_id`
+    out. Everything else is the same word on both sides, which is exactly why
+    this needs its own function rather than `apply_updates` - a setattr loop
+    would write `branch_id` onto the group, where no such column exists, and
+    SQLAlchemy would let it: it would set a plain Python attribute, change
+    nothing in the database, and report success.
+    """
+    if group is None:
+        return
+
+    for key, change in updation_dict.items():
+        if not (isinstance(change, dict) and "new_value" in change):
+            continue
+        target = PAYLOAD_TO_GROUP.get(key, key)
+        setattr(group, target, change["new_value"])
+
+
+def apply_item_updates(updation_dict, item):
+    """Apply one line's diff to whichever of its two rows owns each field.
+
+    `apply_updates` setattrs everything onto one object, which is right for a
+    consignment and wrong for a line: thirteen of the keys in an item diff
+    belong to the order line above it. Routed through `split_item_payload`, so
+    the write path and this share ONE destination map - two maps that agree
+    today are two maps that can disagree later, and they would disagree
+    silently, because create and update are exercised by different tests.
+    """
+    changes = {
+        field: change["new_value"]
+        for field, change in updation_dict.items()
+        if isinstance(change, dict) and "new_value" in change
+    }
+
+    line_fields, order_item_fields = split_item_payload(changes)
+
+    for field, value in line_fields.items():
+        setattr(item, field, value)
+
+    if order_item_fields:
+        order_item = item.order_item
+        if order_item is not None:
+            for field, value in order_item_fields.items():
+                setattr(order_item, field, value)
+
+
 def apply_updates(updation_dict, consignment):
 
     for field, change_data in updation_dict.items():
@@ -576,15 +802,37 @@ def add_in_consignment_change_history(
         payment_updates,
         consignment,
         user,
-        db
+        db,
+        group_updates=None,
 ):
+    """Record what this save changed, across all three rows.
+
+    `group_updates` IS MERGED INTO "fields" UNDER FLAT KEYS, not nested under a
+    "group" collection. Two reasons, and the first one is the load-bearing one:
+
+    1. Every history row written before part 4 already records `supplier_id` and
+       `exchange_rate` flat, because they were consignment columns then. Nesting
+       new rows differently would leave revert two shapes to parse and a version
+       test to get wrong. Section 4.7 item 3 says stored history is never
+       rewritten; this is the same principle applied forwards.
+
+    2. Where a key LANDS is decided at revert time, by the same destination maps
+       the write path used. The history records WHAT CHANGED; the maps record
+       WHERE IT LIVES. Putting the destination in the stored JSON would freeze
+       today's answer into every row and break the next time something moves.
+
+    Without this merge the group's changes were applied and never recorded - so
+    they could not be reverted, and nothing said so. That is the same silent
+    half-success this whole section exists to close, reached from a third
+    direction.
+    """
 
     serialized_deleted_items = serialize_many(deleted_items)
 
     serialized_deleted_payments = serialize_many(deleted_payments)
 
     updates_history = {
-        "fields" : updation_dict, 
+        "fields" : {**(updation_dict or {}), **(group_updates or {})}, 
         "items" : item_updates, 
         "payments" : payment_updates,
         "new_items": new_items_added,
@@ -680,8 +928,8 @@ def revert(consignment_history, consignment, db):
     deleted_items = history["deleted_items"]
     deleted_payments = history["deleted_payments"]
 
-    # Reverting local fields
-    revert_local_fields(consignment, fields)
+    # Reverting local fields. Returns what it could not restore - see below.
+    skipped = list(revert_local_fields(consignment, fields))
 
     # Deletig new items added in update
     add_or_delete(new_items, ConsignmentItem, consignment.id, ConsignmentItem.id, db, delete=True)
@@ -696,49 +944,124 @@ def revert(consignment_history, consignment, db):
     add_or_delete(deleted_payments, Payment, consignment.id, Payment.id, db, delete=False)
 
     # Reverting already existing items updates
-    revert_old_values(items_updates, ConsignmentItem, consignment.id, ConsignmentItem.id, db)
+    skipped += revert_old_values(items_updates, ConsignmentItem, consignment.id,
+                                 ConsignmentItem.id, db)
 
     # Reverting already existing payments updates
-    revert_old_values(payments_updates, Payment, consignment.id, Payment.id, db)
+    skipped += revert_old_values(payments_updates, Payment, consignment.id,
+                                 Payment.id, db)
+
+    # WHAT COULD NOT BE RESTORED GOES BACK TO THE CALLER, and from there into
+    # the response. A revert that quietly does less than it says is the bug this
+    # whole area exists to close; telling the user "these two fields no longer
+    # exist, everything else is back" is the difference between a partial undo
+    # and a partial undo NOBODY KNOWS ABOUT. A log line would not be that - it
+    # is the same silence with a paper trail nobody reads.
+    return sorted(set(skipped))
+
+
+#---------------------------------------
+# UNDOING A CHANGE, ACROSS THE THREE ROWS IT MAY HAVE TOUCHED
+#
+# A history row records WHAT CHANGED, flat, under the key the field had at the
+# time. It does not record WHERE the field lived, and it must not: the stored
+# JSON is an audit record of what happened, not a derived artefact of the
+# current model (section 4.7 item 3). So where a key lands is decided HERE, at
+# read time, by the SAME destination maps the write path routes on.
+#
+# One set of maps, two consumers. Two maps that agree today are two maps that
+# drift later, and they would drift silently, because create/update and revert
+# are exercised by different tests.
+#
+# THREE OUTCOMES PER KEY, and the third is the one section 4.7 did not have:
+#
+#   routed    - the field moved; write it to its new home (possibly more than
+#               one, see branch_id)
+#   retired   - the column is gone and nothing replaced it. NOT an error, and
+#               not silent either: the revert succeeds, restores everything
+#               else, and REPORTS what it could not restore. A logged warning
+#               would be the original bug wearing a hat.
+#   unknown   - matches nothing anywhere. A real defect. Raises, named.
+#---------------------------------------
+
+# Keys that appear in old history rows for columns that have been retired with
+# no successor. Each entry names what retired it and when, because a set with
+# unexplained members becomes the place keys go when nobody wants to work out
+# where they belong.
+RETIRED_HISTORY_KEYS = {
+    # Free text for the factory. Superseded by the group's `works_branch_id`
+    # (part 4; section 3.3) - Works and Branch were always one thing to the
+    # business. It is NULL on every row that ever had it, so the two history
+    # rows carrying it restore nothing of value; the MECHANISM is what matters,
+    # because po_date and every future retirement arrive down this same path.
+    "works": "retired in part 4 - the order's works_branch_id replaced it",
+}
 
 
 def revert_local_fields(consignment, fields):
-    consignment_columns = inspect(consignment).mapper.column_attrs
-    for column in consignment_columns:
-        change = fields.get(column.key)
-        if isinstance(change, dict) and "old_value" in change:
-            old_value = coerce_value(Consignment, column.key, change["old_value"])
-            setattr(consignment, column.key, old_value)
+    """Restore a consignment's header fields, wherever they now live.
 
-    # A HISTORY KEY THAT MATCHES NO ATTRIBUTE IS A DEFECT, AND MUST NOT BE
-    # SILENT.
-    #
-    # The loop above is driven by the MAPPER, not by the history: it walks the
-    # model's columns and picks up whichever of them the stored history mentions.
-    # A key the model does NOT have is therefore never looked at, and the revert
-    # reports success having restored nothing for it. In a feature whose entire
-    # purpose is undo, half-succeeding quietly is worse than failing.
-    #
-    # This matters now because fields are about to MOVE. Once the shared values
-    # (supplier, currency, exchange rate...) live on the batch group and their
-    # attributes come off Consignment, every history row written before that
-    # change still carries them under these keys — and every one would be
-    # skipped without a word. Routing those keys to the group is a later change;
-    # this is the part that makes the boundary visible instead of assumed, and
-    # it goes in FIRST so the routing can be seen to be needed rather than
-    # taken on trust.
-    known = {column.key for column in consignment_columns}
-    unknown = sorted(
-        key for key, change in fields.items()
-        if isinstance(change, dict) and "old_value" in change and key not in known
-    )
+    Returns the list of keys it deliberately could NOT restore, so the caller
+    can tell the user. An empty list means everything came back.
+    """
+    consignment_columns = {c.key for c in inspect(consignment).mapper.column_attrs}
+    group = getattr(consignment, "batch_group", None)
+
+    skipped = []
+    unknown = []
+
+    for key, change in fields.items():
+        if not (isinstance(change, dict) and "old_value" in change):
+            continue
+
+        old_value = change["old_value"]
+        routed = False
+
+        if key in consignment_columns:
+            setattr(consignment, key,
+                    coerce_value(Consignment, key, old_value))
+            routed = True
+
+        # THE SAME MAPS THE WRITE PATH USES, so a field cannot be written to one
+        # place and restored to another. `coerce_value` takes the DESTINATION
+        # model, not Consignment: the column it looks the type up in has to be
+        # the one being written, or a Numeric restored onto the group would be
+        # coerced against a type the group does not have.
+        if key in PAYLOAD_TO_GROUP and group is not None:
+            target = PAYLOAD_TO_GROUP[key]
+            setattr(group, target,
+                    coerce_value(ConsignmentBatchGroup, target, old_value))
+            routed = True
+
+        if key in PAYLOAD_TO_ORDER_ITEM:
+            target = PAYLOAD_TO_ORDER_ITEM[key]
+            # Fans out to every live line, exactly as the write path does.
+            # See the note on PAYLOAD_TO_ORDER_ITEM: this OVERWRITES per-item
+            # values, which is correct only while nothing can set them
+            # individually.
+            for line in consignment.items:
+                if line.is_deleted or line.order_item is None:
+                    continue
+                setattr(line.order_item, target,
+                        coerce_value(ConsignmentOrderItem, target, old_value))
+            routed = True
+
+        if key in RETIRED_HISTORY_KEYS:
+            skipped.append(key)
+            routed = True
+
+        if not routed:
+            unknown.append(key)
+
     if unknown:
         raise ValueError(
-            "Change history for consignment "
-            f"{getattr(consignment, 'id', '?')} holds field(s) that no longer "
-            f"exist on Consignment: {', '.join(unknown)}. Reverting would have "
-            "restored the rest and silently dropped these."
+            f"Change history for consignment {getattr(consignment, 'id', '?')} "
+            f"holds field(s) that belong to no table: {', '.join(sorted(unknown))}. "
+            f"Nothing was reverted. If a column was retired, add it to "
+            f"RETIRED_HISTORY_KEYS with the reason."
         )
+
+    return sorted(set(skipped))
 
 
 def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
@@ -762,23 +1085,68 @@ def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
 
 
 def revert_old_values(updated_data, model, consignment_id, id_column, db):
+    """Restore child rows, routing each key to whichever table now owns it.
+
+    Returns the keys it deliberately could not restore, like its header twin.
+
+    THIS HAD THE IDENTICAL BUG AND NO LOUD FAILURE AT ALL. It walked the child's
+    mapper and applied whatever matched, so once the thirteen item attributes
+    moved to `consignment_order_items` every one of them would have been skipped
+    in silence - an item revert reporting success having restored the quantity
+    and the landed cost and nothing else. Phase 1 hardened only the header half.
+
+    Routing uses `split_item_payload`, the SAME function the write path uses, so
+    a field cannot be written to one table and restored to another.
+    """
+    skipped = []
+
     for data in updated_data:
         data_id = data.get("id")
-        if data_id:
-            consignment_data = db.execute(
-                    select(model).where(
-                        model.consignment_id == consignment_id
-                    ).where(
-                        id_column == data_id
-                )
-            ).scalar_one_or_none()
-            if consignment_data:
-                consignment_data_columns = inspect(consignment_data).mapper.column_attrs
-                for column in consignment_data_columns:
-                    change = data.get(column.key)
-                    if isinstance(change, dict) and "old_value" in change:   # <-- skips "id" (a bare int)
-                        old_value = coerce_value(model, column.key, change["old_value"])  # <-- see #6
-                        setattr(consignment_data, column.key, old_value)
+        if not data_id:
+            continue
+
+        row = db.execute(
+            select(model)
+            .where(model.consignment_id == consignment_id)
+            .where(id_column == data_id)
+        ).scalar_one_or_none()
+
+        if row is None:
+            continue
+
+        changes = {
+            key: change["old_value"]
+            for key, change in data.items()
+            if isinstance(change, dict) and "old_value" in change  # skips the bare "id"
+        }
+
+        # PAYMENTS AND OTHER CHILDREN ARE NOT SPLIT. Only ConsignmentItem has an
+        # order line above it; a Payment's history keys all still belong to
+        # Payment, so routing it through split_item_payload would be wrong.
+        if model is not ConsignmentItem:
+            for key, old_value in changes.items():
+                if key in {c.key for c in inspect(row).mapper.column_attrs}:
+                    setattr(row, key, coerce_value(model, key, old_value))
+            continue
+
+        retired = {k: v for k, v in changes.items() if k in RETIRED_HISTORY_KEYS}
+        routable = {k: v for k, v in changes.items() if k not in retired}
+        skipped.extend(retired)
+
+        # Raises, naming the keys, on anything belonging to neither table.
+        line_fields, order_item_fields = split_item_payload(routable)
+
+        for key, old_value in line_fields.items():
+            setattr(row, key, coerce_value(ConsignmentItem, key, old_value))
+
+        if order_item_fields:
+            order_item = row.order_item
+            if order_item is not None:
+                for key, old_value in order_item_fields.items():
+                    setattr(order_item, key,
+                            coerce_value(ConsignmentOrderItem, key, old_value))
+
+    return sorted(set(skipped))
 
 
 #---------------------------------------
@@ -883,9 +1251,9 @@ def is_closed(consignment):
 
 def apply_item_master_values(consignment, db):
     codes = {
-        item.item_code.strip().lower()
+        line_item_code(item).strip().lower()
         for item in consignment.items
-        if not item.is_deleted and item.item_code and item.item_code.strip()
+        if not item.is_deleted and line_item_code(item) and line_item_code(item).strip()
     }
 
     if not codes:
@@ -901,18 +1269,32 @@ def apply_item_master_values(consignment, db):
     by_code = {row.item_code.strip().lower(): row for row in rows}
 
     for item in consignment.items:
-        if item.is_deleted or not item.item_code or not item.item_code.strip():
+        if item.is_deleted or not line_item_code(item) or not line_item_code(item).strip():
             continue
 
-        master = by_code.get(item.item_code.strip().lower())
+        master = by_code.get(line_item_code(item).strip().lower())
 
         if master is None:
             continue
 
-        item.item_name = master.name
+        # WRITES TO THE ORDER LINE, because that is where the name and the
+        # specification live now (section 3.7). Reading through an accessor and
+        # writing through one would hide that this function MUTATES; the
+        # assignment is left explicit so the write is visible.
+        #
+        # STILL RUNS PER BATCH, deliberately. Section 3.7 observes it could take
+        # a group and run once per group instead of re-running its query on
+        # every batch save — that is a real behaviour change and belongs with
+        # step 7's allocation work, not inside the write-path inversion. Today a
+        # group holds one batch, so per-batch and per-group are the same thing.
+        order_item = item.order_item
+        if order_item is None:
+            continue
+
+        order_item.item_name = master.name
 
         if master.default_specification:
-            item.specification = master.default_specification
+            order_item.specification = master.default_specification
 
 
 #---------------------------------------
@@ -930,12 +1312,15 @@ def recompute_derived(consignment):
 
     foreign_total = Decimal("0")
     for item in active_items:
-        if item.quantity is not None and item.unit_price is not None:
-            foreign_total += item.quantity * item.unit_price
+        if item.quantity is not None and line_unit_price(item) is not None:
+            foreign_total += item.quantity * line_unit_price(item)
 
     consignment.foreign_total = foreign_total
 
-    rate = consignment.exchange_rate
+    # THE ORDER'S booked rate. Every batch of one LC converts at the same rate,
+    # which is why it lives on the group (section 3.8) - held per batch, two
+    # shipments of one order could report different PKR for the same money.
+    rate = order_exchange_rate(consignment)
     consignment.pkr_total = (foreign_total * rate) if rate is not None else None
 
     for item in active_items:
@@ -977,7 +1362,10 @@ def stamp_landed_cost_audit(item, user, stamp_elc, stamp_alc):
 #---------------------------------------
 
 def consignment_reference(consignment):
-    return consignment.instrument_number or f"IMP-{consignment.id}"
+    # The ORDER's payment reference. Every batch of one LC shares it - which is
+    # exactly why section 3.4's `consignment_number()` is a prerequisite of step
+    # 7: once an order holds two batches these two rows carry one label.
+    return order_instrument_number(consignment) or f"IMP-{consignment.id}"
 
 
 
@@ -1019,6 +1407,21 @@ def consignment_reference(consignment):
 # group. `branch_id` becomes `works_branch_id`. Identical to the list the
 # migration copies, deliberately: the two must not be able to disagree about
 # what is shared.
+# CORRECT FOR ITS OWN JOB, AND WRONG AS A REMOVAL LIST. READ THIS BEFORE
+# REUSING IT.
+#
+# These are the values that live on the ORDER under their OWN NAME, which is
+# what makes them copyable in a loop. FOURTEEN attributes came off
+# `Consignment` in part 4, and this list is ten of them. The other four each
+# need something this loop cannot do:
+#
+#   branch_id  -> the group's `works_branch_id`   (a RENAME, not a copy)
+#   requisition_date, required_date -> the ORDER LINE, not the group
+#   works      -> RETIRED; no successor anywhere
+#
+# So code that treats this as "the fields that left Consignment" will leave four
+# behind. `PAYLOAD_TO_GROUP` below is the list with the rename folded in, and it
+# is what the write path routes on.
 GROUP_SHARED_FIELDS = [
     "supplier_id",
     "origin",
@@ -1033,11 +1436,80 @@ GROUP_SHARED_FIELDS = [
 ]
 
 
-def new_batch_group(consignment, user, db):
+#---------------------------------------
+# WHERE A PAYLOAD FIELD GOES, NOW THAT IT IS NOT ALL ONE ROW
+#
+# The wizard still posts one flat consignment object, and it should: a batch and
+# its order are one thing to the person typing. Splitting that payload across
+# three tables is the server's job, and these maps are the whole of the rule.
+#
+# EXPLICIT DESTINATION MAPS, NOT A FALLBACK CHAIN. The tempting shape is "try
+# the consignment, then the group, then the order item". It is wrong, and
+# specifically dangerous: `branch_id` exists on BOTH the group (as
+# `works_branch_id`) and the order line (as `branch_id`), so a chain would find
+# the order line's, write a header value to a per-item column, and SUCCEED.
+# A wrong destination that raises is a bug; a wrong destination that works is a
+# data corruption nobody sees.
+#---------------------------------------
+
+# payload key -> the group's column name. The rename is here, not special-cased.
+PAYLOAD_TO_GROUP = {field: field for field in GROUP_SHARED_FIELDS}
+PAYLOAD_TO_GROUP["branch_id"] = "works_branch_id"
+
+# payload key -> the ORDER LINE's column. Header-level in the payload, per-item
+# in the model, so one posted value fans out to every line of the consignment.
+# Section 3.3: the read side went per line, the write side keeps the header key.
+#
+# `branch_id` IS IN BOTH MAPS, DELIBERATELY - one payload key, two destinations.
+#
+# It is not a new shape: `requisition_date` and `required_date` already fan from
+# one header key to every order line. Branch just fans to the group AS WELL,
+# because `works_branch_id` is the header-level branch and
+# `consignment_order_items.branch_id` is the per-item one, and until step 8
+# offers a per-item control they are the same value.
+#
+# WHY BOTH RATHER THAN THE GROUP ALONE. Revision A back-filled
+# `consignment_order_items.branch_id` on 448 of 451 rows, and the expanded
+# per-item view displays it (requirement 8). Writing only the group would leave
+# it NULL on everything created from now on - one column with two populations,
+# old rows showing a branch and new rows blank on the same screen. This project
+# has been bitten by that shape more than once.
+#
+# WHAT THIS COSTS LATER, recorded here because it is invisible today: reverting
+# a branch change fans out too, so it OVERWRITES every line's branch with the
+# header value. Harmless while nothing can set them individually. The moment
+# step 8 offers a per-item branch, "restore the header branch" and "restore each
+# line's own branch" become different operations and this map needs splitting.
+# See section 3.3.
+PAYLOAD_TO_ORDER_ITEM = {
+    "requisition_date": "requisition_date",
+    "required_date": "required_date",
+    "branch_id": "branch_id",
+}
+
+# Accepted from the payload and deliberately DROPPED, because the column they
+# named is gone and nothing replaced it.
+#
+# Every entry needs a reason. A set with unexplained members becomes the place
+# keys go when nobody wants to work out where they belong.
+RETIRED_PAYLOAD_FIELDS = {
+    # Free text for the factory, superseded by the group's `works_branch_id`:
+    # Works and Branch were always the same thing to the business (section 3.3).
+    # The wizard still sends it until step 8 makes that field a dropdown.
+    "works",
+}
+
+
+def new_batch_group(consignment, user, db, group_fields=None):
     """Create the order this consignment is the first batch of, and link them.
 
     Flushes twice, in the only order the constraints allow - see the block
     comment above. Returns the group.
+
+    `group_fields` COMES FROM THE PAYLOAD, not from the consignment. It used to
+    read the values back off the consignment it had just built, which worked
+    only while the consignment still had them. It does not, so the caller passes
+    what `split_consignment_payload` routed here.
     """
     group_id = db.execute(
         select(func.nextval("consignment_batch_groups_id_seq"))
@@ -1055,9 +1527,8 @@ def new_batch_group(consignment, user, db):
         id=group_id,
         founding_consignment_id=consignment.id,
         batches_ever=1,
-        works_branch_id=consignment.branch_id,
         created_by_id=user.id if user is not None else None,
-        **{field: getattr(consignment, field) for field in GROUP_SHARED_FIELDS},
+        **(group_fields or {}),
     )
 
     db.add(group)
@@ -1067,63 +1538,25 @@ def new_batch_group(consignment, user, db):
 
 
 #---------------------------------------
-# KEEPING THE GROUP IN STEP WITH ITS BATCH
+# `sync_batch_group` WAS HERE, AND IS DELETED.
 #
-# A BUG, FOUND WHILE MOVING THE READERS ONTO THE GROUP. `new_batch_group` above
-# copies the shared values onto the group ONCE, at creation, and until now
-# nothing copied them again. So editing a consignment's supplier, currency or
-# exchange rate updated the consignment and left the group holding the value
-# from the day it was created.
+# It mirrored the shared values from batch 1 onto its group, because both
+# copies existed and only one of them was read. There is one copy now: the
+# write path sets the group DIRECTLY from the payload
+# (`split_consignment_payload` -> `apply_group_updates`), so there is nothing
+# left to mirror FROM and nothing that could drift.
 #
-# It was harmless only because nothing read the group yet. It stops being
-# harmless in this change, which is the change that makes the group the copy
-# every screen reads: without this, a supplier corrected on Tuesday would show
-# the old supplier on every dashboard for ever. That is precisely the
-# "duplicated state becoming divergence" the expand-and-contract split exists to
-# prevent (section 4.7), arriving through the one path 4.7 did not name — not a
-# raw INSERT, but an ordinary ORM update of the copy that is no longer read.
+# Its own docstring said it was transitional and named this as the moment it
+# goes. Recorded rather than quietly dropped because the BUG it fixed is worth
+# remembering: an ordinary ORM update kept writing the copy nobody read, and
+# nothing noticed until the readers moved. That is section 4.7's fourth bypass
+# path, and deleting the patch does not delete the lesson.
 #
-# THIS IS TRANSITIONAL. It exists only while both copies are present. Once the
-# mapped attributes come off `Consignment` there is nothing left to mirror FROM:
-# the write path sets the group directly and this function goes with the
-# columns. It is here rather than deferred because the readers move first, and
-# they cannot safely move onto a copy nothing maintains.
+# Its batch-1 rule does NOT become the editing rule. Any batch may be deleted,
+# the founding one included, so a batch-1 rule would leave an order whose first
+# shipment was deleted with terms nobody could correct. Step 7 edits the group
+# AS THE GROUP (section 3.8).
 #---------------------------------------
-
-def sync_batch_group(consignment, db):
-    """Mirror the shared values from a batch onto the order above it.
-
-    Only from batch 1. A later batch does not own the order's commercial terms,
-    so letting it write them would make "what did we agree" depend on whichever
-    shipment was saved last - the exact drift the group exists to remove.
-
-    THE BATCH-1 RULE IS A PROPERTY OF THIS MIRROR. IT IS NOT THE ANSWER TO "WHO
-    EDITS THE ORDER", AND IT MUST NOT BECOME ONE.
-
-    It is the right rule for a mirror, because a mirror needs exactly one source
-    and batch 1 is the only non-arbitrary choice of source. It is the WRONG rule
-    for editing: any batch may be deleted, the founding one included, and once
-    batch 1 is gone this function can never fire again - so under this rule as a
-    permanent design, an order whose first shipment was deleted would have terms
-    nobody could correct, silently.
-
-    That costs nothing today only because the mirror is temporary. It disappears
-    with the columns it mirrors from: once the shared attributes come off
-    `Consignment` there is one copy again, and the write path sets the group
-    directly rather than through any batch. Step 7 edits the group AS THE GROUP
-    (design section 3.8) - not through a privileged batch, and not through this.
-    """
-    group = consignment.batch_group
-
-    if group is None or consignment.batch_sequence != 1:
-        return group
-
-    for field in GROUP_SHARED_FIELDS:
-        setattr(group, field, getattr(consignment, field, None))
-
-    group.works_branch_id = consignment.branch_id
-
-    return group
 
 
 #---------------------------------------
@@ -1163,6 +1596,22 @@ ORDER_ITEM_LINE_FIELDS = [
 # Taken from the CONSIGNMENT: header columns today, per-item columns once the
 # requirements land. The header value is the true one for every line under it,
 # which is the same reasoning the migration back-fills them on.
+# The demand fields the wizard posts at HEADER level and that fan out to every
+# order line - see PAYLOAD_TO_ORDER_ITEM, which is what actually routes them.
+#
+# `branch_id` IS LISTED HERE AND IS NOT ROUTED, AND THAT IS AN OPEN QUESTION,
+# NOT AN OVERSIGHT. The header `branch_id` goes to the GROUP
+# (PAYLOAD_TO_GROUP -> works_branch_id) and nowhere else, so a consignment
+# created today leaves `consignment_order_items.branch_id` NULL - while the 448
+# rows revision A back-filled all carry it, copied from the consignment header.
+# New records and migrated records therefore differ.
+#
+# Writing it to both would make revert ambiguous (it restores one destination,
+# see the revert routing), and writing it to neither loses a column the
+# requirements ask for. Which it should be is a design decision that belongs
+# with step 8, when the wizard first offers a per-ITEM branch and there is a
+# real answer to "what did the user mean". Left explicit rather than silently
+# resolved either way.
 ORDER_ITEM_HEADER_FIELDS = {
     "branch_id": "branch_id",
     "requisition_date": "requisition_date",
@@ -1170,11 +1619,23 @@ ORDER_ITEM_HEADER_FIELDS = {
 }
 
 
-def sync_order_item_from_line(item, consignment):
-    """Mirror a shipment line onto the order line above it.
+def sync_order_item_from_line(item, consignment, line_payload=None,
+                              header_fields=None):
+    """Build or update the order line above a shipment line.
 
     Creates the order item if the line has none, which is the case for every
     line on a create and every line added by an update.
+
+    IT NO LONGER COPIES FROM THE LINE, because the line no longer has the
+    thirteen columns to copy. `line_payload` is what the client posted for this
+    item; `header_fields` is the consignment-level demand data
+    (requisition/required date, branch) routed out of the header payload. Both
+    are written straight to the order line.
+
+    That is the write-path inversion in one function: the values used to arrive
+    on the ConsignmentItem and be mirrored UP, and they now arrive from the
+    payload and are written DOWN. A line that is re-saved with no payload (a
+    quantity-only edit) keeps whatever its order line already holds.
     """
     order_item = item.order_item
 
@@ -1183,10 +1644,12 @@ def sync_order_item_from_line(item, consignment):
         item.order_item = order_item
 
     for field in ORDER_ITEM_LINE_FIELDS:
-        setattr(order_item, field, getattr(item, field, None))
+        if line_payload is not None and field in line_payload:
+            setattr(order_item, field, line_payload[field])
 
-    for target, source in ORDER_ITEM_HEADER_FIELDS.items():
-        setattr(order_item, target, getattr(consignment, source, None))
+    for target in ORDER_ITEM_HEADER_FIELDS.values():
+        if header_fields is not None and target in header_fields:
+            setattr(order_item, target, header_fields[target])
 
     # NOT NULL, and a line can legitimately carry no quantity at draft. A line
     # that orders nothing orders zero - the same COALESCE the migration and the
@@ -1204,8 +1667,18 @@ def sync_order_item_from_line(item, consignment):
     return order_item
 
 
-def sync_order_items(consignment, db):
-    """Mirror every line of a consignment onto its order line.
+def sync_order_items(consignment, db, payloads=None, header_fields=None):
+    """Build or update the order line above every line of a consignment.
+
+    `payloads` maps a ConsignmentItem INSTANCE to the order-line fields posted
+    for it; `header_fields` is the consignment-level demand data that fans out
+    to every line. Keyed by instance rather than by index or id because on an
+    update the collection is a mix of rows that existed, rows just added and
+    rows soft-deleted, and position means nothing across those three.
+
+    A line absent from `payloads` keeps whatever its order line already holds -
+    which is what a quantity-only edit, or a re-save that touched no item
+    fields, should do.
 
     RUNS WITH AUTOFLUSH OFF, and that is not a precaution — without it this
     function cannot work at all.
@@ -1231,4 +1704,8 @@ def sync_order_items(consignment, db):
     """
     with db.no_autoflush:
         for item in consignment.items:
-            sync_order_item_from_line(item, consignment)
+            sync_order_item_from_line(
+                item, consignment,
+                line_payload=(payloads or {}).get(item),
+                header_fields=header_fields,
+            )

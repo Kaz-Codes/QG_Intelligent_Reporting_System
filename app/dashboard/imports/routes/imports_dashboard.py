@@ -16,7 +16,10 @@ from app.dashboard.imports.serializers import serialize_imports_dashboard
 from typing import Optional
 from datetime import date
 import logging
-from app.imports.order_view import order_branch_name, order_origin, order_supplier_name
+from app.imports.order_view import (
+    line_category, line_item_master, order_branch_name,
+    order_origin, order_supplier_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +92,8 @@ def imports_dashboard(
             if origin:
                 countries.add(origin)
             for item in consignment.items:
-                if item.item and item.item.category:
-                    item_categories.add(item.item.category)
+                if line_item_master(item) and line_category(item):
+                    item_categories.add(line_category(item))
 
             if consignment.current_status:
                 statuses.add(consignment.current_status)

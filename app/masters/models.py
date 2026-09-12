@@ -96,7 +96,19 @@ class Supplier(Base, TimestampMixin):
         nullable = False
     )
 
-    consignments : Mapped[list["Consignment"]] = relationship(
+    # THE ORDERS THIS SUPPLIER SUPPLIES, not the shipments.
+    #
+    # `supplier_id` moved from `consignments` to `consignment_batch_groups`, so
+    # this points at the group. One row here is one LC however many batches it
+    # arrived in.
+    #
+    # USED ONLY FOR `.any()` EXISTENCE TESTS today (imports filter_options,
+    # reports options) - "does this supplier have any live order". If anyone
+    # ever COUNTS through it, note that the unit changed from shipments to
+    # orders: that is the design's decision (section 3.2 #14, where the Masters
+    # "used in" count moved to orders for the same reason), not an accident of
+    # this repointing.
+    consignment_groups : Mapped[list["ConsignmentBatchGroup"]] = relationship(
         back_populates = "supplier"
     )
 
@@ -145,8 +157,16 @@ class Branch(Base, TimestampMixin):
         nullable = False
     )
 
-    consignments : Mapped[list["Consignment"]] = relationship(
-        back_populates = "branch"
+    # THE ORDERS whose header branch is this one. The successor to both
+    # `Consignment.branch_id` and the free-text `Consignment.works`, which were
+    # always the same thing to the business - see ConsignmentBatchGroup's
+    # `works_branch_id`. Same `.any()`-only caveat as Supplier above.
+    #
+    # NOT the per-ITEM branch. `consignment_order_items.branch_id` exists and is
+    # displayed, but nothing in the app aggregates on it: every branch total is
+    # one-branch-per-order, deliberately (section 3.3).
+    consignment_groups : Mapped[list["ConsignmentBatchGroup"]] = relationship(
+        back_populates = "works_branch"
     )
 
 
@@ -493,7 +513,11 @@ class Item(Base, TimestampMixin):
         cascade = "all, delete-orphan"
     )
 
-    consignment_items : Mapped[list["ConsignmentItem"]] = relationship(
+    # THE ORDER LINES that name this item. `item_id` moved from
+    # `consignment_items` to `consignment_order_items`, because which item was
+    # bought is a fact about the order rather than about the shipment that
+    # carried it.
+    consignment_order_items : Mapped[list["ConsignmentOrderItem"]] = relationship(
         back_populates = "item"
     )
 

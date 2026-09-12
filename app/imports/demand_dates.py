@@ -82,18 +82,41 @@ EARLIEST_REQUIRED_DATE = (
 # per line, which is the failure mode to watch for rather than a wrong number.
 #-------------------------------------------------------------------
 
-def earliest_required_date(consignment):
-    """The earliest required date across a batch's live lines, or None."""
+def _earliest(consignment, field):
     dates = [
-        line.order_item.required_date
+        getattr(line.order_item, field)
         for line in (consignment.items or [])
         if not line.is_deleted
         and line.order_item is not None
         and not line.order_item.is_deleted
-        and line.order_item.required_date is not None
+        and getattr(line.order_item, field) is not None
     ]
 
     return min(dates) if dates else None
+
+
+def earliest_required_date(consignment):
+    """The earliest required date across a batch's live lines, or None."""
+    return _earliest(consignment, "required_date")
+
+
+def earliest_requisition_date(consignment):
+    """The earliest requisition date across a batch's live lines, or None.
+
+    THE ONE PLACE A BATCH-LEVEL REQUISITION DATE IS WANTED, and it is a flat
+    EXPORT rather than a screen.
+
+    Section 3.3 is explicit that requisition date gets no aggregate: it was a
+    filter and a display, and both are better per line, so nothing on any screen
+    computes one. A spreadsheet row is neither. The export has one row per
+    consignment and a column that has to hold something, and leaving it blank on
+    every row would read as missing data rather than as a deliberate absence.
+
+    Earliest, for the same reason `required_date` uses earliest: it is the only
+    choice that does not need a tie-break, and it matches the column beside it
+    so the two cannot be read as using different rules.
+    """
+    return _earliest(consignment, "requisition_date")
 
 
 def line_required_date(line):

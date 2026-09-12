@@ -3,7 +3,9 @@ from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
-from app.imports.models import Consignment, ConsignmentBatchGroup, ConsignmentItem
+from app.imports.models import (
+    Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
+)
 from app.logistics.models import LogisticsConsignment
 from app.masters.models import HsCode, Item
 from app.trucking.models import TruckingConsignment
@@ -248,11 +250,19 @@ def used_counts(master, ids, db):
         return counts
 
     if master == "item":
+        # `item_id` is on the ORDER LINE now, so the join runs line -> order
+        # line rather than reading it off the line directly. Still counted per
+        # CONSIGNMENT (distinct consignment_id), unchanged: this is "how many
+        # shipments carried this item", and the unit did not move with the
+        # column.
         rows = db.execute(
-            select(ConsignmentItem.item_id, ConsignmentItem.consignment_id)
+            select(ConsignmentOrderItem.item_id, ConsignmentItem.consignment_id)
+            .select_from(ConsignmentItem)
+            .join(ConsignmentOrderItem,
+                  ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
             .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
-            .where(Consignment.is_deleted == False)
-            .where(ConsignmentItem.item_id.in_(ids))
+            .where(Consignment.is_deleted == False)  # noqa: E712
+            .where(ConsignmentOrderItem.item_id.in_(ids))
             .distinct()
         ).all()
 

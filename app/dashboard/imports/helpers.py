@@ -5,6 +5,7 @@ from app.imports.models import (
     Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
 )
 from app.imports.demand_dates import EARLIEST_REQUIRED_DATE, earliest_required_date
+from app.imports.order_view import line_category
 from app.masters.models import Supplier, Item, Branch
 from app.enums import Status
 from app.dashboard.period import coverage
@@ -24,12 +25,13 @@ from app.reports.helpers import SHAFT_ITEMS
 
 def fetch_consignments(db):
     # The item MASTER is loaded behind each line as well — the route builds its
-    # item_categories dropdown from item.item.category, which lazy-loaded one
+    # item_categories dropdown from line_category(item), which lazy-loaded one
     # query per line without this.
     query = select(Consignment).where(
         Consignment.is_deleted == False
     ).options(
-        selectinload(Consignment.items).joinedload(ConsignmentItem.item),
+        selectinload(Consignment.items).joinedload(ConsignmentItem.order_item)
+            .joinedload(ConsignmentOrderItem.item),
         joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.supplier),
         joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.works_branch),
     )
@@ -119,8 +121,12 @@ LINE_ETA = func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 # one (imports rule 4). There is no stored per-line total to prefer here: the
 # sheet's per-line PKR is summed into the consignment's `pkr_total` and not kept
 # per row, so this is the only per-line figure available.
+# The PRICE is the order line's (what was agreed to pay per unit); the
+# QUANTITY is the shipment line's (how much of it came in this batch). That
+# split is the whole point of the two tables - see section 3.7.
 LINE_VALUE_PKR = (
-    ConsignmentItem.quantity * ConsignmentItem.unit_price * ConsignmentBatchGroup.exchange_rate
+    ConsignmentItem.quantity * ConsignmentOrderItem.unit_price
+    * ConsignmentBatchGroup.exchange_rate
 )
 
 
@@ -155,10 +161,10 @@ def _line_query(shafts_only=False):
             ConsignmentItem.id,
             Consignment.id.label("consignment_id"),
             ConsignmentBatchGroup.instrument_number,
-            ConsignmentItem.item_name,
+            ConsignmentOrderItem.item_name,
             ConsignmentItem.quantity,
-            ConsignmentItem.unit_of_measurement,
-            ConsignmentItem.unit_price,
+            ConsignmentOrderItem.unit_of_measurement,
+            ConsignmentOrderItem.unit_price,
             ConsignmentBatchGroup.exchange_rate,
             LINE_ETA.label("line_eta"),
             Consignment.current_status,
@@ -196,7 +202,7 @@ def fetch_period_lines(db, date_from=None, date_to=None, date_field=None,
     query = _line_query()
 
     if shafts_only:
-        query = query.where(or_(*[ConsignmentItem.item_name.ilike(f"%{name}%")
+        query = query.where(or_(*[ConsignmentOrderItem.item_name.ilike(f"%{name}%")
                                   for name in SHAFT_ITEMS]))
     if date_from is not None and date_to is not None:
         query = query.where(line_date_column(date_field).between(date_from, date_to))
@@ -224,7 +230,7 @@ def fetch_shaft_lines(db, date_from=None, date_to=None, date_field=None,
     # the demand dates to the order line), so the copy would have had to change
     # identically or this tab would have quietly kept reading the old columns.
     query = _line_query().where(
-        or_(*[ConsignmentItem.item_name.ilike(f"%{name}%") for name in SHAFT_ITEMS])
+        or_(*[ConsignmentOrderItem.item_name.ilike(f"%{name}%") for name in SHAFT_ITEMS])
     )
 
     if date_from is not None and date_to is not None:
@@ -250,7 +256,7 @@ def fetch_filtered_consigments(
     ):
 
     # Same eager loading as fetch_consignments, plus the item MASTER behind each
-    # line (category_delays reads item.item.category). Without these the value,
+    # line (category_delays reads line_category(item)). Without these the value,
     # supplier and category figures lazy-load per row — an N+1 across the whole
     # filtered set, which was roughly half the response time before.
     # distinct() because the item_category / work / supplier filters join, and a
@@ -267,7 +273,8 @@ def fetch_filtered_consigments(
         # the filtered set. Without this joinedload that is one query PER LINE
         # across the whole set — the same N+1 the item-master load below was
         # added to kill, and worse, because there are ~2.5 lines per row.
-        selectinload(Consignment.items).joinedload(ConsignmentItem.item),
+        selectinload(Consignment.items).joinedload(ConsignmentItem.order_item)
+            .joinedload(ConsignmentOrderItem.item),
         selectinload(Consignment.items).joinedload(ConsignmentItem.order_item),
         # Supplier and branch hang off the ORDER now, so the group has to come
         # with them or every `.supplier.name` read is a query of its own.
@@ -297,7 +304,7 @@ def fetch_filtered_consigments(
         query = query.where(Consignment.id.in_(
             select(ConsignmentItem.consignment_id)
             .where(ConsignmentItem.is_deleted.is_(False))
-            .where(or_(*[ConsignmentItem.item_name.ilike(f"%{name}%")
+            .where(or_(*[ConsignmentOrderItem.item_name.ilike(f"%{name}%")
                          for name in SHAFT_ITEMS]))
             .distinct()
             .scalar_subquery()
@@ -317,8 +324,8 @@ def fetch_filtered_consigments(
             Consignment.id.in_(
                 select(ConsignmentItem.consignment_id)
                 .where(ConsignmentItem.is_deleted.is_(False))
-                .where(or_(ConsignmentItem.item_name.ilike(term),
-                           ConsignmentItem.item_code.ilike(term)))
+                .where(or_(ConsignmentOrderItem.item_name.ilike(term),
+                           ConsignmentOrderItem.item_code.ilike(term)))
                 .distinct()
                 .scalar_subquery()
             ),
@@ -344,7 +351,8 @@ def fetch_filtered_consigments(
     if item_category:
         query = (
             query.join(Consignment.items)
-                 .join(ConsignmentItem.item)
+                 .join(ConsignmentItem.order_item)
+                 .join(ConsignmentOrderItem.item)
                  .where(Item.category == item_category)
         )
 

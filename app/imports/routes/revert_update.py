@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived
+from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived, RETIRED_HISTORY_KEYS
 from app.imports.serializers import serialize_consignment
 from datetime import datetime, timezone
 import logging
@@ -64,8 +64,9 @@ def revert_update(
         consignment_history.reverted_by_id = user.id
         consignment_history.reverted_at = datetime.now(timezone.utc)
 
-        # Revert updates
-        revert(consignment_history, consignment, db)
+        # Revert updates. `skipped` names any field the history recorded whose
+        # column has since been retired - see RETIRED_HISTORY_KEYS.
+        skipped = revert(consignment_history, consignment, db)
 
         # Derived totals are not part of the change history (they are never
         # sent by the client), so recompute them from the reverted state.
@@ -74,10 +75,31 @@ def revert_update(
         db.commit()
         db.refresh(consignment)
 
+        # THE USER IS TOLD WHAT DID NOT COME BACK.
+        #
+        # A revert that restores most of a change and says "Consignment
+        # reverted" is the original bug with better manners: the caller cannot
+        # tell a complete undo from a partial one. Where a recorded field names
+        # a column that has since been retired, the revert still succeeds - the
+        # rest genuinely is restored - and the response says which fields it
+        # could not put back and why.
+        detail = "Consignment reverted"
+        if skipped:
+            reasons = "; ".join(
+                f"{key} ({RETIRED_HISTORY_KEYS[key]})" for key in skipped
+            )
+            detail = (
+                f"Consignment reverted, except: {reasons}. "
+                f"Everything else was restored."
+            )
+
         return {
             "status_code":200,
-            "detail":"Consignment reverted",
-            "data":serialize_consignment(consignment, db)
+            "detail":detail,
+            "data":serialize_consignment(consignment, db),
+            # Machine-readable alongside the sentence, so the front end can
+            # surface it without parsing prose.
+            "skipped_fields":skipped,
         }
 
     except HTTPException:

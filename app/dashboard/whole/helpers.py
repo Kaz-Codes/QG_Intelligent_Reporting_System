@@ -116,8 +116,23 @@ def imports_date_column(field):
 # booked. Identical to imports.calculations.consignment_value_pkr, expressed in
 # SQL — the two screens must value the same consignment the same way, or the
 # overview and the module disagree about the same money.
+#
+# THE JOIN IS LOAD-BEARING, and leaving it out does not raise. `unit_price` moved
+# to `consignment_order_items`, so naming that table in the SELECT list without
+# joining it adds it to the FROM as a second, UNCONSTRAINED source: every line
+# pairs with every order item in the database. The sum stops being a consignment
+# total and becomes a cartesian one - Rs 120 TRILLION against the module's
+# Rs 29bn, measured, on data where nothing is wrong except this.
+#
+# It is only visible at all because `Consignment.pkr_total` is NULL on every
+# loaded row, so this branch of the coalesce is the one that actually runs.
+# Where a booked total exists the wrong figure is simply never reached, which is
+# how a bug this large hides in a passing test.
 _LINE_VALUE = (
-    select(func.sum(ConsignmentItem.quantity * ConsignmentItem.unit_price))
+    select(func.sum(ConsignmentItem.quantity * ConsignmentOrderItem.unit_price))
+    .select_from(ConsignmentItem)
+    .join(ConsignmentOrderItem,
+          ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
     .where(ConsignmentItem.consignment_id == Consignment.id)
     .where(ConsignmentItem.is_deleted.is_(False))
     .correlate(Consignment)
@@ -259,10 +274,18 @@ def _imports_dated_ids(date_field):
 #-----------------------------------------------------
 
 def shaft_consignment_ids():
+    # THE JOIN IS NOT OPTIONAL NOW. `item_name` moved to the order line, so
+    # naming ConsignmentOrderItem in the WHERE without joining it left the
+    # subquery with two candidate FROMs and SQLAlchemy auto-correlated both
+    # away: "returned no FROM clauses due to auto-correlation". The error is
+    # obscure; the cause is simply that the predicate and the selected column
+    # are no longer on the same table.
     return (
         select(ConsignmentItem.consignment_id)
+        .join(ConsignmentOrderItem,
+              ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
         .where(ConsignmentItem.is_deleted.is_(False))
-        .where(or_(*[ConsignmentItem.item_name.ilike(f"%{name}%")
+        .where(or_(*[ConsignmentOrderItem.item_name.ilike(f"%{name}%")
                      for name in SHAFT_ITEMS]))
         .distinct()
         .scalar_subquery()
@@ -427,7 +450,7 @@ def imports_shaft_counts(db):
     # keeps its own copy of the name anyway (rule 12), so the line is the only
     # reliable place to match them.
     name_match = or_(*[
-        ConsignmentItem.item_name.ilike(f"%{name}%") for name in SHAFT_ITEMS
+        ConsignmentOrderItem.item_name.ilike(f"%{name}%") for name in SHAFT_ITEMS
     ])
 
     shaft_consignments = (

@@ -8,9 +8,13 @@ from app.dashboard.logistics.calculations import (
 from app.reports.helpers import reorder_levels_for
 from app.imports.demand_dates import line_required_date, line_requisition_date
 from app.imports.order_view import (
-    order_currency, order_exchange_rate, order_incoterm, order_origin,
-    order_payment_instrument, order_reference, order_supplier_name,
-    order_branch_name, order_type,
+    line_category, line_hs_code, line_item_code,
+    line_item_master, line_item_name, line_job_number,
+    line_mo_number, line_reference_number, line_requisition_type,
+    line_unit_price, line_uom, order_branch_name,
+    order_currency, order_exchange_rate, order_incoterm,
+    order_origin, order_payment_instrument, order_reference,
+    order_supplier_name, order_type,
 )
 
 
@@ -83,9 +87,9 @@ def _line_value_pkr(ci, c):
     5-line consignment's full total on each of its 5 rows would 5x it the
     moment someone sums the Value column."""
     rate = order_exchange_rate(c)
-    if ci.quantity is None or ci.unit_price is None or rate is None:
+    if ci.quantity is None or line_unit_price(ci) is None or rate is None:
         return None
-    return ci.quantity * ci.unit_price * rate
+    return ci.quantity * line_unit_price(ci) * rate
 
 
 #-------------------------------------
@@ -128,11 +132,11 @@ def _serialize_import(ci):
         # No dedicated human reference exists on the consignment; the bank
         # instrument number is the natural one, falling back to the id.
         "ref": order_reference(c),
-        "item": ci.item_name,
-        "item_code": ci.item_code,
+        "item": line_item_name(ci),
+        "item_code": line_item_code(ci),
         "supplier": order_supplier_name(c),
         "branch": order_branch_name(c),
-        "category": ci.item.category if ci.item else None,
+        "category": line_category(ci) if line_item_master(ci) else None,
         "status": c.current_status,
         "value": _line_value_pkr(ci, c),
         # BOTH DEMAND DATES, AND BOTH PER LINE. `date` is the shared key the
@@ -149,15 +153,15 @@ def _serialize_import(ci):
         "required_date": line_required_date(ci),
         "country": order_origin(c),
         "mode_of_shipment": c.mode_of_shipment,
-        "hs_code": ci.hs_code,
+        "hs_code": line_hs_code(ci),
         "quantity": ci.quantity,
-        "unit_of_measurement": ci.unit_of_measurement,
-        "unit_price": ci.unit_price,
+        "unit_of_measurement": line_uom(ci),
+        "unit_price": line_unit_price(ci),
         "batch_no": ci.batch_no,
-        "requisition_type": ci.requisition_type,
-        "reference_number": ci.reference_number,
-        "job_number": ci.job_number,
-        "mo_number": ci.mo_number,
+        "requisition_type": line_requisition_type(ci),
+        "reference_number": line_reference_number(ci),
+        "job_number": line_job_number(ci),
+        "mo_number": line_mo_number(ci),
         "elc": ci.elc,
         "alc": ci.alc,
         # The line's own arrival date, falling back to its consignment's
@@ -170,7 +174,8 @@ def _serialize_import(ci):
         "incoterm": order_incoterm(c),
         "currency": order_currency(c),
         "consignment_type": order_type(c),
-        "works": c.works,
+        # `works` is retired; the order's branch is what it always meant.
+        "works": order_branch_name(c),
         "po_date": c.po_date,
         "etd": c.etd,
         "gd_number": c.gd_number,

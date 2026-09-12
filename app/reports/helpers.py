@@ -156,7 +156,7 @@ def _imports_conditions(f):
         Consignment.is_deleted == False,  # noqa: E712
     ]
     if f.shaft:
-        conds.append(ConsignmentItem.item_name.in_(f.shaft))
+        conds.append(ConsignmentOrderItem.item_name.in_(f.shaft))
     # Supplier and branch are terms of the ORDER, so both resolve through the
     # batch group. Branch is `works_branch` — the header-level branch that
     # succeeded both `Consignment.works` and the old header `branch_id`.
@@ -169,7 +169,9 @@ def _imports_conditions(f):
             ConsignmentBatchGroup.works_branch.has(Branch.name.in_(f.branch))
         ))
     if f.category:
-        conds.append(ConsignmentItem.item.has(Item.category.in_(f.category)))
+        conds.append(ConsignmentItem.order_item.has(
+            ConsignmentOrderItem.item.has(Item.category.in_(f.category))
+        ))
 
     # THE DATE RANGE NOW FILTERS THE LINE'S OWN REQUISITION DATE.
     #
@@ -194,7 +196,7 @@ def _imports_conditions(f):
     if f.search:
         p = _like(f.search)
         conds.append(or_(
-            ConsignmentItem.item_name.ilike(p),
+            ConsignmentOrderItem.item_name.ilike(p),
             Consignment.gd_number.ilike(p),
             # The payment reference, the origin and the supplier are all the
             # order's, so one `.has` covers the three of them.
@@ -294,7 +296,7 @@ _JOINS = {
 _OPTIONS = {
     "purchases": lambda: (joinedload(PurchasesData.item),),
     "imports": lambda: (
-        joinedload(ConsignmentItem.item),
+        joinedload(ConsignmentItem.order_item).joinedload(ConsignmentOrderItem.item),
         # The ORDER and the ORDER LINE, behind each shipment line. Supplier and
         # branch hang off the order now; the demand dates off the order line.
         # Without these every serialized row would lazy-load them, which across
@@ -467,10 +469,10 @@ def build_options(db, types):
         branches.update(_distinct(db, Stock.branch))
     if "imports" in types:
         suppliers.update(_distinct(
-            db, Supplier.name, Supplier.consignments.any(Consignment.is_deleted == False)  # noqa: E712
+            db, Supplier.name, Supplier.consignment_groups.any(ConsignmentBatchGroup.is_deleted == False)  # noqa: E712
         ))
         branches.update(_distinct(
-            db, Branch.name, Branch.consignments.any(Consignment.is_deleted == False)  # noqa: E712
+            db, Branch.name, Branch.consignment_groups.any(ConsignmentBatchGroup.is_deleted == False)  # noqa: E712
         ))
 
     # Category always comes from the Item master, shared by every type.

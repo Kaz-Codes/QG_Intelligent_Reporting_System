@@ -7,7 +7,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS
-from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items
+from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload
 
 from app.imports.serializers import serialize_consignment
 import logging
@@ -32,17 +32,29 @@ def create_consignment(
         # action)
         user = authorize(user_payload, CAN_ADD_IMPORTS, db)
 
-        # Create objects to add in daatabase
+        # ONE FLAT PAYLOAD, THREE TABLES. The wizard posts a consignment the way
+        # an operator thinks of one; splitting it is the server's job now that a
+        # batch, its order and its order lines are separate rows.
+        header_payload = consignment_data.model_dump(
+            exclude_none=True, exclude={"items", "payments"}
+        )
+        _header, group_fields, order_item_header = split_consignment_payload(header_payload)
+
         consignment = create_consignment_object(consignment_data, user)
         consignment_payments = create_payment_object(consignment_data)
-        consignment_items = create_consignment_item_object(consignment_data)
+
+        # Pairs, not objects: each line carries the order-line half of its own
+        # payload until sync_order_items writes it.
+        item_pairs = create_consignment_item_object(consignment_data)
+        consignment_items = [line for line, _ in item_pairs]
+        order_item_payloads = {line: fields for line, fields in item_pairs}
 
         # THE ORDER GOES IN BEFORE THE GOODS DO, and the two flushes inside
         # new_batch_group are the only sequence the constraints allow — see the
         # block comment on that helper. The items are attached AFTERWARDS on
         # purpose: each line needs an order line above it, and an order line
         # cannot exist before the group it hangs off has been written.
-        new_batch_group(consignment, user, db)
+        new_batch_group(consignment, user, db, group_fields=group_fields)
 
         # NOTHING MAY REACH THE DATABASE UNTIL EVERY LINE HAS ITS ORDER LINE.
         #
@@ -61,10 +73,13 @@ def create_consignment(
             consignment.items = consignment_items
             consignment.payments = consignment_payments
 
-            # One order line per shipment line. While a group holds one batch
-            # the two mirror each other, which is what the migration
-            # back-filled for every consignment that already existed.
-            sync_order_items(consignment, db)
+            # One order line per shipment line, written from the PAYLOAD -
+            # the line no longer holds the thirteen columns it used to be
+            # mirrored from. `order_item_header` is the consignment-level
+            # demand data (requisition/required date, branch) fanned out to
+            # every line.
+            sync_order_items(consignment, db, payloads=order_item_payloads,
+                             header_fields=order_item_header)
 
             # Record who entered any landed-cost figure supplied at entry.
             for item in consignment_items:
@@ -75,9 +90,9 @@ def create_consignment(
         # locks those inputs too; this is the part that actually guarantees it.
         apply_item_master_values(consignment, db)
 
-        # Again, so the order line carries the name and specification the master
-        # just corrected rather than whatever the payload said.
-        sync_order_items(consignment, db)
+        # apply_item_master_values writes the corrected name and specification
+        # straight to the order line now, so there is nothing left to re-mirror
+        # and the second sync is gone.
 
         # Store the derived money totals + per-line variance.
         recompute_derived(consignment)
