@@ -1,13 +1,134 @@
 # Imports batching — design
 
-**Status: approved; PHASE 1 AND STEP 2b ARE BUILT.** Alembic revision
+**Status: approved; PHASE 1, STEP 2b AND STEP 6 ARE BUILT.** Alembic revision
 `a1c4f27b93de` (revision A — expand), the model changes it needs, the minimum
 create logic, the loaders and the `post_load` checks are written and verified
 against a scratch database. **Step 2b** (submission rules removed, closing
 decoupled from submitting — §3.10) shipped as its own PR ahead of step 6.
-**Step 6's decisions are now DECIDED and recorded below** — §3.2 for the 14
-counts, §3.3 for the four consumer groups — but not yet built. Everything from
-§9 step 6 onward is still a proposal.
+
+**Step 6 is now BUILT** (revision 8 below). The 14 attributes are off
+`Consignment` and the 13 off `ConsignmentItem`; every read path, both revert
+paths and the write path are repointed at the order and the order line. The
+COLUMNS are still in the database — Revision B drops them — so the gap §4.7 is
+about is still open, and everything §4.7 says about it still applies.
+
+**Everything from §9 step 7 onward is still a proposal.** One consequence of
+step 6 needs reading before step 7 starts: with `sync_batch_group` deleted, ANY
+batch of an order can now rewrite that order's commercial terms through an
+ordinary `PUT`, and nothing governs which one may. That is §3.8's intended
+behaviour and §3.9's freeze is what constrains it — see revision 8.
+
+---
+
+## Changelog — revision 8 (step 6 BUILT)
+
+**Step 6 shipped in two commits**: the two part-3 misses (`cross_module.py`'s
+eager load, the imports dashboard's `supplier_id`) plus an unrelated `.env`
+fix, then the attribute removal, the write-path inversion and both revert
+paths. `sync_batch_group` is deleted.
+
+| What moved | Why |
+|---|---|
+| **Status + §9 step 6 — BUILT, not decided** | Both still said "decided, not yet built". |
+| **§4.6 — Revision B needs a step this document never had, and it is in ANOTHER TEAM'S FILE** | `ALTER TABLE consignments DROP COLUMN supplier_id` fails: `view v_import_shafts depends on column supplier_id`. Asking `pg_depend` properly found a second, `v_item_demand_picture`. Between them they read seven moved columns, neither is in `Base.metadata` (so no check this project has can see them), and both are defined in `chatbot_backend/database/semantic_views.sql`. **Worse, this is live now, not at Revision B**: the views read the ORPHANED copies, which step 6 stopped maintaining — three consignments on a scratch database already answer `China` where the group says otherwise. See §4.6. |
+| **§4.7 — a SIXTH instance of the mapper mechanism, and it cost data** | `serialize_items` used `serialize_many`, which walks the mapper, so the thirteen moved item fields stopped being emitted. The client posted the draft back without them, the schema defaulted them to `None`, and the update diff wrote NULL over stored prices. Order items 40, 41 and 42 were measurably wiped. It arrived *after* the rule below was written, which is the strongest argument for the rule. |
+| **A near relative, same shape, different mechanism: a moved column named without a join** | `dashboard/whole/helpers._LINE_VALUE` named `ConsignmentOrderItem` in its SELECT list without joining it. SQLAlchemy adds it to the FROM as a second unconstrained source and every line pairs with every order item: Rs 120 **trillion** against the module's Rs 29bn. It raises nothing. It was only reachable at all because `Consignment.pkr_total` is NULL on every loaded row, so that branch of the `coalesce` is the one that runs — where a booked total exists the wrong figure is never read. |
+| **§3.3 — `branch_id` FANS OUT to both destinations, on write and on revert** | It is the one payload key with two homes: the group's `works_branch_id` and every order line's own `branch_id`. The destination map allows a list and every destination is taken, never the first that matches. A fallback chain was considered and rejected — it would route a header key to the wrong table and *succeed*. |
+| **§3.3 — the fan-out on REVERT overwrites per-item branches, and that is accepted for now** | Undoing a header `branch_id` change writes one value to every live order line, flattening any per-line difference. Harmless today because nothing sets a per-line branch and nothing aggregates on it (§3.3's recorded gap); it becomes wrong at step 8, when per-item branches become enterable. Named here so step 8 does not have to rediscover it. |
+| **§4.3 — CORRECTION: the 3 branch-less order items are NOT the COALESCE rows** | Two are genuinely branch-less consignments (134 and 137, which carry no branch at all) and one is a test record. §4.3's two blank-quantity rows (451 and 460) are present and correct in the dump at `ordered_quantity = 0.000`. The two sets were conflated in an earlier reading; they are unrelated. |
+| **§4.7 — CORRECTION: the reference count of "219" was scanner-limited** | The scanner missed `reports/serializers.py`, which reaches the fields through a `ci.` alias rather than the model name. The figure was never the point — the point is that the number came from a tool whose blind spot nobody checked, and a repoint driven off that list alone would have left a module behind. |
+| **The `apply_item_master_values` catch was LUCK, and should be recorded as luck** | A bulk regex repoint turned a WRITE into `line_item_name(item) = master.name` — an accessor call on the left of an assignment. It was caught because Python cannot parse that, not because anything looked for it. The same regex over a plain attribute would have produced valid code that wrote to the wrong row. There is no method here to be pleased with. |
+| **`check_dashboard_consistency` compared two money figures with an exact `==`** | And passed — because no consignment in the loaded data carries a stored `pkr_total`, so both screens took the line path and matched bit for bit. The Overview prefers the stored total (Numeric 20,2) and the module re-sums the lines, so they differ by half a paisa the moment anything is saved through the app. An assertion that only holds while a column is empty everywhere is not asserting what it claims to. Now compared to the rupee, with the rounding it allows printed. |
+| **The revert probe's "21 real pre-migration history rows" DID NOT EXIST** | `consignment_change_history` is empty in both dumps; nothing on the dev box has ever been edited. The 21 rows were left behind by earlier runs of the probes themselves in a database that was not rebuilt between them, and read back as though found. Two of them were the probe's own "unroutable key must raise" fixture, so a second run failed inside the code under test. The suite now seeds its history through the real routes and says so. |
+
+---
+
+## The two rules step 6 produced
+
+**Seven instances of two mechanisms** turned up while building this — five of
+one and two of the other. They are written as **two rules** rather than seven
+anecdotes, because the anecdotes are the same bug in different clothes and the
+next one will not look like any of them either.
+
+**Five of the seven were found by RUNNING the code, not by reading it.** Of the
+other two, one was predicted in revision 6 and one was found by re-reading the
+same file immediately after — it would not have been noticed on its own.
+
+That is not modesty. Every one of the five was in a file that had already been
+read carefully, more than once, by someone looking specifically for this class
+of problem. The rules below are worth having precisely because reading does not
+reliably produce them.
+
+*(The tally was **five instances, four of them run-found** when this rule was
+first written. `serialize_items` — the one that destroyed data — turned up
+afterwards, which is the strongest argument for the rule there is. The counts
+above are the current ones; see the stale-counts warning that governs every
+other figure in this document.)*
+
+### Rule 1 — a mapper-derived field list silently changes scope when the mapper changes
+
+Code that builds its field list from `inspect(obj).mapper.column_attrs` or
+`{c.key for c in Model.__mapper__.column_attrs}` is asking *"what columns does
+this model have right now"*. Move a column to another table and the answer
+changes, the code keeps running, and it now covers a smaller set. **Nothing
+raises, because nothing was ever named.**
+
+The five:
+
+1. **`revert_local_fields`** — walked the mapper and skipped any history key not
+   in it. After the move, `supplier_id` and `exchange_rate` match nothing and
+   the undo reports success without restoring them. *(Predicted, in revision 6,
+   by reading — the only one of the seven that was predicted at all.)*
+2. **`revert_old_values`** — the same bug one level down, for ITEM history, and
+   with no loud failure at all. *(Found by reading, in revision 7 — but only
+   because instance 1 had already been found and the file was re-read looking
+   for its twin. Counted as read-found; it would not have been noticed alone.)*
+3. **`add_in_consignment_change_history`** — records only mapper-known fields,
+   so group changes were applied and never written to history: an edit that
+   could not be undone, with nothing saying so.
+4. **`updated_items` / `serialize_many` in the update diff** — narrowed the
+   comparison, producing a `KeyError` on a key the payload had and the mapper
+   did not.
+5. **`serialize_items` in the RESPONSE** — the expensive one. Thirteen keys
+   quietly absent from every item payload; the client posts the draft back
+   without them; `None` against a stored `7650.0000` reads as a change; the
+   update writes the NULL. **Real values destroyed on a normal save.**
+
+**What to do about it, concretely:** where a field list crosses a boundary — a
+payload, a history row, a serialized response — name the fields explicitly, or
+derive them from something that spans both tables. `item_current_values` is the
+shape that works: one definition of the flattening, shared by the serializer
+and the diff, so what goes out and what comes back cannot disagree.
+
+**The tell:** if moving a column changes what a function covers without
+changing a single line of it, that function is mapper-derived and is in scope
+for every schema change, for ever.
+
+### Rule 2 — a name that is right on one side of a boundary and wrong on the other fails silently in BOTH directions
+
+Two instances, and they are mirror images:
+
+1. **The history key / column mismatch.** Change history recorded the
+   DESTINATION column name (`works_branch_id`) while revert routes on the
+   PAYLOAD key (`branch_id`). The key matched no destination, revert raised,
+   and **the entire undo failed** — not just that field. Invisible in review
+   because ten of the eleven group fields have identical key and column names;
+   `branch_id` is the only one where the two spellings differ, so the code
+   looks correct everywhere you check it.
+2. **The group `setattr` no-op.** Applying a payload key straight onto a group
+   with `setattr(group, "branch_id", value)` creates a Python attribute on the
+   instance, writes nothing to the database, and reports success. The opposite
+   failure from the same cause: instance 1 was loud about the wrong thing,
+   instance 2 was silent about the right one.
+
+**What to do about it, concretely:** translate at the boundary, in one place,
+and make the translation total. `PAYLOAD_TO_GROUP` and its inverse are the
+translation; `apply_group_updates` is the only thing allowed to write a group
+from a payload key; an unroutable key raises and names itself. The rule is that
+**a key is either routed or refused — never quietly accepted.**
+
+**The tell:** any place two vocabularies meet and *mostly* agree. The nine
+fields that match are what hide the tenth.
 
 ---
 
@@ -2010,6 +2131,76 @@ the change. That is gone.
   been living in the new tables for a release and copying it backwards would be
   reconstructing history rather than reversing a change.
 
+#### TWO semantic views read these columns, and they are NOT this app's to change
+
+**Found by trying the drop, then by asking the database properly.** Against a
+scratch clone:
+
+```
+ALTER TABLE consignments DROP COLUMN supplier_id;
+-- ERROR: cannot drop column supplier_id of table consignments
+--        because other objects depend on it
+-- DETAIL: view v_import_shafts depends on column supplier_id of table consignments
+```
+
+That found one. The `pg_depend` query below found the second, `v_item_demand_picture`,
+which the failing drop never mentioned because it does not touch `supplier_id`:
+
+```sql
+SELECT DISTINCT dependent.relname
+  FROM pg_depend d
+  JOIN pg_rewrite r        ON r.oid = d.objid
+  JOIN pg_class dependent  ON dependent.oid = r.ev_class
+  JOIN pg_class source     ON source.oid = d.refobjid
+ WHERE source.relname IN ('consignments', 'consignment_items');
+```
+
+Between them they read seven moved columns: `c.supplier_id`, `c.origin`,
+`ci.item_code`, `ci.item_name`, `ci.specification`, `ci.unit_price`,
+`ci.unit_of_measurement`.
+
+**Neither view is in `Base.metadata`.** `create_all` does not know them,
+autogenerate proposes nothing about them, and `configure_mappers()` is perfectly
+happy. They are invisible to every check this project has, and they surface
+exactly once — when the `DROP COLUMN` runs.
+
+**Both are defined in `chatbot_backend/database/semantic_views.sql`**, which is
+a different service with its own code and its own `.env`, and is the same reason
+its tables are excluded from Alembic (CLAUDE.md, "Database migrations"). So
+Revision B cannot be written by this project alone.
+
+##### This is not only a Revision B problem — it is live NOW
+
+The views read the ORPHANED copies. After step 6 every edit writes the group and
+the order line, and the consignment's own `supplier_id` and `origin` are never
+written again. Measured on a scratch database immediately after step 6's own
+route sweep:
+
+| consignment | `consignments.origin` (what the views read) | `consignment_batch_groups.origin` (the truth) |
+|---|---|---|
+| 178 | `China` | `SyncProbe` |
+| 21 | `China` | `batch2-wrote-over-China` |
+| 179 | `China` | `batch2-wrote-over-China` |
+
+Three edits, three views now answering with the creation-day value. Nothing
+errored, and nothing will. **§7 item 3 predicted "chatbot answers go wrong with
+nothing to notice"; this is the mechanism, and it starts the day step 6
+deploys** — not the day Revision B runs.
+
+##### What Revision B therefore is
+
+1. `DROP VIEW v_import_shafts`, `DROP VIEW v_item_demand_picture`;
+2. the column drops;
+3. recreate both, reading `consignment_batch_groups` and
+   `consignment_order_items`.
+
+The `downgrade()` must recreate the ORIGINAL definitions, not the new ones, or a
+rollback leaves views over columns that no longer exist. And step 3 is a change
+to another team's file, so **Revision B needs that team in the loop before it is
+written, not after it fails.** Re-run the `pg_depend` query at the time — one
+drop found one view and the query found two; there is no reason to assume two is
+the final number.
+
 **Still take a backup before Revision B**, and say so in the deploy note. Not
 before Revision A — that one can simply be downgraded.
 
@@ -3126,7 +3317,8 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    `batch_group_id` and `order_item_id` are NOT NULL, so without it the first
    save is a 500 rather than a missing feature. Allocation, batch creation,
    numbering and the freeze stay at step 7.
-6. **Remove the mapped attributes** (moved here from step 5, §4.7) together
+6. **DONE** — see revision 8. **Remove the mapped attributes** (moved here from
+   step 5, §4.7) together
    with **the 24 header-field consumers** (§3.3, §7 item 2) — 9 live branch
    sites onto `works_branch_id` (the 10th died with step 2b), 14 date sites onto
    the order item per §3.3's four groups — and **the 14 count decisions**
