@@ -162,3 +162,68 @@ class LLMLogger(BaseCallbackHandler):
 
 # One shared instance attached to the model in config.get_llm().
 llm_logger = LLMLogger()
+
+
+# ---------------------------------------------------------------------------
+#  Subtask planning / loop logging.
+#
+#  Same LOG_LLM toggle and _safe_print/_truncate helpers as the LLM call log
+#  above - this is the same "what is actually happening" observability aid,
+#  just for the planner's decomposition and the subtask loop's own bookkeeping
+#  rather than for a model call. A different marker (green square / arrows)
+#  keeps it visually distinct from the blue LLM-call boxes in the terminal.
+# ---------------------------------------------------------------------------
+def log_plan(rewritten_query: str, route: str, subtasks: list) -> None:
+    """What the planner decided: the route, and every subtask it produced."""
+    if not LOG_LLM:
+        return
+    lines = [
+        f"\n{_LINE}",
+        f"\U0001F7E2 PLAN   route={route}   {len(subtasks)} subtask(s)",
+        f"  question: {_truncate(rewritten_query)}",
+    ]
+    for i, sub in enumerate(subtasks, start=1):
+        items = sub.get("items") or []
+        items_text = ", ".join(items) if items else "(none)"
+        lines.append(
+            f"  [{i}/{len(subtasks)}] {sub.get('description', '')}  (items: {items_text})"
+        )
+    lines.append(_LINE)
+    _safe_print("\n".join(lines))
+
+
+def log_subtask_start(index: int, total: int, subtask: dict) -> None:
+    """Which subtask the loop is about to process."""
+    if not LOG_LLM:
+        return
+    items = subtask.get("items") or []
+    items_text = ", ".join(items) if items else "(none)"
+    _safe_print(
+        f"\n▶▶▶ SUBTASK {index}/{total}: {subtask.get('description', '')}  "
+        f"(items: {items_text})"
+    )
+
+
+def log_subtask_done(index: int, total: int, snapshot: dict) -> None:
+    """One-line summary of what a finished subtask actually produced."""
+    if not LOG_LLM:
+        return
+    bits = [f"{snapshot.get('row_count', 0)} row(s)"]
+    error = snapshot.get("sql_error") or snapshot.get("error") or ""
+    if error:
+        bits.append(f"ERROR: {_truncate(error)}")
+    forecast = snapshot.get("forecast_result") or {}
+    if forecast:
+        bits.append(f"forecast ok={forecast.get('ok')}")
+        if not forecast.get("ok") and forecast.get("reason"):
+            bits.append(_truncate(forecast["reason"]))
+    elif snapshot.get("forecast_skipped_reason"):
+        bits.append(f"forecast skipped: {_truncate(snapshot['forecast_skipped_reason'])}")
+    _safe_print(f"✓✓✓ SUBTASK {index}/{total} done - {' | '.join(bits)}")
+
+
+def log_plan_complete(total: int) -> None:
+    """All subtasks finished - the loop is handing off to the final answer."""
+    if not LOG_LLM:
+        return
+    _safe_print(f"\n\U0001F7E2 PLAN COMPLETE - all {total} subtask(s) done, writing final answer")

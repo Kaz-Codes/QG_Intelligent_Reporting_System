@@ -85,11 +85,19 @@ def _entity_key(entities: Optional[Dict[str, Any]]) -> str:
     if not entities:
         return ""
     keep = ("item_code", "item", "branch", "supplier", "status", "department")
-    parts = [
-        f"{k}={str(entities[k]).strip().lower()}"
-        for k in keep
-        if entities.get(k)
-    ]
+    parts = []
+    for k in keep:
+        value = entities.get(k)
+        if not value:
+            continue
+        # entities["item"] is a LIST (a question can name more than one
+        # material) - sort it before stringifying so two phrasings naming the
+        # same items in a different order ("X and Y" vs "Y and X") still
+        # fingerprint identically, instead of missing the cache on wording
+        # alone.
+        if isinstance(value, list):
+            value = sorted(str(v).strip().lower() for v in value)
+        parts.append(f"{k}={str(value).strip().lower()}")
     return "|".join(sorted(parts))
 
 
@@ -137,6 +145,21 @@ def _schema_hash() -> str:
         parts.append(SQL_SYSTEM_PROMPT)
     except Exception:
         parts.append("sql-prompt-unavailable")
+
+    # The analysis decision (analysis_type/forecast_needed/period_column/...)
+    # is now made in the SAME call as the SQL and cached alongside it - see
+    # sql_agent.GeneratedSQL. ANALYTICS_SYSTEM_PROMPT's rules for that decision
+    # now live inside SQL_SYSTEM_PROMPT itself (hashed above), but this stays
+    # as its own entry for the fallback path analytics_agent still uses when
+    # no prediction is available (e.g. a pre-merge cache entry) - a change to
+    # THAT prompt must not silently keep replaying an old cached decision
+    # either.
+    try:
+        from backend.prompts.analytics_prompt import ANALYTICS_SYSTEM_PROMPT
+
+        parts.append(ANALYTICS_SYSTEM_PROMPT)
+    except Exception:
+        parts.append("analytics-prompt-unavailable")
 
     # The GUARDS, for the same reason as the prompt. Correctness rules are
     # written in two places, and a rule added here is invisible to the schema,
@@ -548,8 +571,19 @@ def remember(
     sql: str,
     tables_used: Optional[List[str]] = None,
     limit_is_user_requested: bool = False,
+    predicted_analysis: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Store the query that answered this question. Overwrites its own entry."""
+    """
+    Store the query that answered this question. Overwrites its own entry.
+
+    predicted_analysis carries the analysis decision made alongside this SQL
+    (analysis_type/forecast_needed/period_column/.../charts - see
+    sql_agent.GeneratedSQL), so a cache HIT can feed analytics_agent's
+    validate/repair path instead of forcing a fresh standalone call every
+    time this question replays. Optional and stored as-is: omitted or empty
+    just means a future hit falls back to that standalone call, same as
+    before this existed.
+    """
     if not ENABLE_QUERY_CACHE or not question or not sql.strip():
         return False
 
@@ -566,6 +600,7 @@ def remember(
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "last_used": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "hits": 0,
+        **(predicted_analysis or {}),
     }
 
     try:

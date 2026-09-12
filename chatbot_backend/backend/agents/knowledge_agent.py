@@ -25,6 +25,7 @@ from typing import List
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from backend.agents.item_resolution_agent import _as_item_list
 from backend.config import EFFORT_ACCURATE, structured_llm
 from backend.metadata.schema import get_schema_text
 from backend.tools.postgres_tools import find_items_by_name
@@ -96,7 +97,14 @@ def knowledge_agent(state: dict) -> dict:
         # "items.name (likely with ILIKE '%hardner%') ... join
         # v_item_consumption_monthly.item_code". The notes still travel in
         # `knowledge_notes` for the SQL agent and for persistence.
-        term = (entities.get("item") or entities.get("metric") or "").strip()
+        # entities["item"] is a LIST - a question can name more than one
+        # material. Check each named item in turn (falling back to the metric
+        # word when no item was named at all) rather than joining them into one
+        # search phrase, which is exactly the bug that made a genuine two-item
+        # ask match nothing in the item master.
+        item_terms = _as_item_list(entities.get("item"))
+        metric_term = (entities.get("metric") or "").strip()
+        terms = item_terms or ([metric_term] if metric_term else [])
 
         # NEVER ASK THE USER TO DEFINE A MATERIAL WE STOCK. The model's
         # confidence is about the SCHEMA MAPPING, not about whether the thing
@@ -105,31 +113,38 @@ def knowledge_agent(state: dict) -> dict:
         # open requisition makes the assistant look like it does not know its
         # own inventory. It happened on 1 run in 3 for the same question, which
         # is worse than always: the user cannot predict it.
-        # One cheap lookup settles it, and the answer is the same every run.
-        if term:
+        # One cheap lookup per named term settles it, and the answer is the
+        # same every run.
+        matched_term, matches = None, []
+        for candidate_term in terms:
             try:
-                matches = (find_items_by_name(term, limit=5) or {}).get("rows") or []
+                found = (find_items_by_name(candidate_term, limit=5) or {}).get("rows") or []
             except Exception:
-                matches = []
-            if matches:
-                codes = [m.get("item_code") for m in matches if m.get("item_code")]
-                return {
-                    "context": [
-                        f"'{term}' IS a real material in the item master "
-                        f"({len(codes)} matching item code(s): "
-                        f"{', '.join(str(c) for c in codes[:5])}). Do not ask "
-                        f"the user what it means. Answer it as an item "
-                        f"question: v_item_demand_picture carries its stock, "
-                        f"3-month issuance, days of cover, open demand and "
-                        f"their statuses, inbound ETA and the shortfall. "
-                        f"Match with item_name ~* '[[:<:]]<word>s?[[:>:]]'.",
-                        *(result.mapping_notes or []),
-                    ],
-                    "knowledge_notes": result.mapping_notes,
-                    "knowledge_inferred": True,
-                    "knowledge_confident": True,
-                }
+                found = []
+            if found:
+                matched_term, matches = candidate_term, found
+                break
 
+        if matched_term:
+            codes = [m.get("item_code") for m in matches if m.get("item_code")]
+            return {
+                "context": [
+                    f"'{matched_term}' IS a real material in the item master "
+                    f"({len(codes)} matching item code(s): "
+                    f"{', '.join(str(c) for c in codes[:5])}). Do not ask "
+                    f"the user what it means. Answer it as an item "
+                    f"question: v_item_demand_picture carries its stock, "
+                    f"3-month issuance, days of cover, open demand and "
+                    f"their statuses, inbound ETA and the shortfall. "
+                    f"Match with item_name ~* '[[:<:]]<word>s?[[:>:]]'.",
+                    *(result.mapping_notes or []),
+                ],
+                "knowledge_notes": result.mapping_notes,
+                "knowledge_inferred": True,
+                "knowledge_confident": True,
+            }
+
+        term = terms[0] if terms else ""
         subject = f'"{term}"' if term else "one of the terms in your question"
         return {
             "route": "clarify",

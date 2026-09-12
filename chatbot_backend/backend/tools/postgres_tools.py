@@ -131,9 +131,39 @@ def find_items_by_name(name: str, limit: int = 0) -> Dict[str, Any]:
     # A token counts if it appears in EITHER form.
     spaced = f"regexp_replace({_combined}, '[^a-z0-9]+', ' ', 'g')"
     tight = f"regexp_replace({_combined}, '[^a-z0-9]+', '', 'g')"
-    conditions = " AND ".join(
+    item_conditions = " AND ".join(
         f"({spaced} LIKE :tok{i} OR {tight} LIKE :tok{i})" for i in range(len(tokens))
     )
+
+    # SUPPLEMENTARY SOURCE: stock.item_name.
+    #
+    # It is read straight from the stock export as one pre-formatted string -
+    # "Cast Iron Scrap | NA | kg | 19969-60" - not derived from the items
+    # master, and it sometimes carries text the master genuinely has no column
+    # for. The master's own default_specification is NULL wherever ITS source
+    # workbook left the spec blank, but the stock export's spec segment for the
+    # same item_code can say "NA" literally - the two exports disagree on how
+    # to represent "no spec" for the same item. A search for "NA" therefore
+    # matches nothing in `items` even though the item is real and the user is
+    # naming it exactly as this app already shows it elsewhere (the item's own
+    # stock-position note reads from this same text).
+    #
+    # Matched with an EXISTS on item_code rather than a JOIN, so a row that is
+    # held at several branches (several `stock` rows) still surfaces as ONE
+    # candidate, and every returned row still comes from `items` - the
+    # canonical catalogue and the FK anchor `purchases_data`/`issuance` join
+    # against - never a code invented from `stock` alone. Tokens must all
+    # appear together within ONE source (all in `items`, or all in this one
+    # `stock` row) - never partly in one and partly in the other, which would
+    # just reintroduce token-stitching across unrelated things.
+    _stock_combined = "lower(coalesce(s.item_name,''))"
+    stock_spaced = f"regexp_replace({_stock_combined}, '[^a-z0-9]+', ' ', 'g')"
+    stock_tight = f"regexp_replace({_stock_combined}, '[^a-z0-9]+', '', 'g')"
+    stock_conditions = " AND ".join(
+        f"({stock_spaced} LIKE :tok{i} OR {stock_tight} LIKE :tok{i})"
+        for i in range(len(tokens))
+    )
+
     params: Dict[str, Any] = {f"tok{i}": f"%{t.lower()}%" for i, t in enumerate(tokens)}
 
     # Aliased back to the names the item-resolution agent matches on, so the
@@ -145,8 +175,12 @@ def find_items_by_name(name: str, limit: int = 0) -> Dict[str, Any]:
                default_unit_of_measurement AS uom,
                category AS item_category,
                is_active
-        FROM items
-        WHERE {conditions}
+        FROM items i
+        WHERE ({item_conditions})
+           OR EXISTS (
+               SELECT 1 FROM stock s
+               WHERE s.item_code = i.item_code AND ({stock_conditions})
+           )
         ORDER BY item_code
     """
     if limit > 0:

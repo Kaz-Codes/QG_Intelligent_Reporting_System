@@ -1,14 +1,29 @@
 """
 Analytics / Forecast agent - two nodes.
 
-    analytics_agent : looks at the rows that came back and decides what kind of
-                      analysis the answer needs, and whether a forecast is
+    analytics_agent : validates the analysis decision against the rows that
+                      actually came back, and decides whether a forecast is
                       justified at all
     forecast_agent  : runs the actual maths in backend/tools/forecast_tools.py
 
 The LLM decides *whether* to forecast and *on which columns*; it never computes
 the numbers. That keeps projections reproducible and stops the model inventing
 a trend that is not in the data.
+
+analytics_agent used to ALWAYS make its own LLM call, after the query ran. That
+decision now happens earlier, in the SAME call that writes the SQL (see
+sql_agent.GeneratedSQL / sql_prompt.py's "ALSO DECIDE THE ANALYSIS" section) -
+the model already knows the shape of the query it just wrote, so asking it
+again afterward was a second round-trip for a decision it could make once. What
+this function does now is VALIDATE that prediction against the rows the query
+actually returned (period_column/value_column really exist, chart columns are
+real and numeric, there is enough history to forecast) and repair it
+deterministically where it can, using the SAME Python helpers
+(_infer_period_column/_infer_value_column) that already backed the reorder
+calculation. Only when no prediction is available at all - a cache hit from
+before this existed, or the predict step failing outright - does it fall back
+to the old standalone LLM call, gated by the same _analytics_is_trivial cost
+check as before.
 """
 
 from decimal import Decimal
@@ -125,76 +140,104 @@ def analytics_agent(state: dict) -> dict:
     question = state.get("rewritten_query") or state.get("user_query", "")
     columns = state.get("columns") or list(rows[0].keys())
 
-    # Small result, no forecast/chart/reorder intent - nothing to decide, so
-    # skip a full model round-trip and report the rows directly.
-    if _analytics_is_trivial(question, rows):
-        return {
-            "analysis_type": "reporting",
-            "forecast_needed": False,
-            "needs_computation": False,
-            "charts": [],
-        }
+    predicted = state.get("predicted_analysis") or {}
+    if predicted:
+        # Made already, in the same call that wrote the SQL (or restored from
+        # a cache hit that carried it) - validate it below rather than asking
+        # the model again. Pydantic coerces the plain dict (and its nested
+        # chart dicts) back into the same shape a fresh call would return.
+        try:
+            result = AnalyticsDecision(**predicted)
+        except Exception:
+            predicted = {}
 
-    try:
-        llm = structured_llm(AnalyticsDecision, effort=EFFORT_FAST)
-        result = llm.invoke(
-            [
-                SystemMessage(content=ANALYTICS_SYSTEM_PROMPT),
-                HumanMessage(
-                    content=build_analytics_prompt(
-                        question, columns, rows, state.get("row_count", len(rows))
-                    )
-                ),
-            ]
-        )
-    except Exception:
-        # Analysis is optional polish; the response agent can work without it.
-        return {"analysis_type": "reporting", "forecast_needed": False}
+    if not predicted:
+        # No usable prediction - either a legacy cache entry written before
+        # this existed, or the predict step didn't produce one. Fall back to
+        # the standalone call this used to always make, same cost gate as
+        # before.
+        if _analytics_is_trivial(question, rows):
+            return {
+                "analysis_type": "reporting",
+                "forecast_needed": False,
+                "needs_computation": False,
+                "charts": [],
+            }
 
-    # Guard the model's own choice. It can ask for a forecast on columns that
-    # do not exist, or on three data points. Count distinct periods rather than
-    # rows, because a per-item-per-month panel has many rows but few periods.
+        try:
+            llm = structured_llm(AnalyticsDecision, effort=EFFORT_FAST)
+            result = llm.invoke(
+                [
+                    SystemMessage(content=ANALYTICS_SYSTEM_PROMPT),
+                    HumanMessage(
+                        content=build_analytics_prompt(
+                            question, columns, rows, state.get("row_count", len(rows))
+                        )
+                    ),
+                ]
+            )
+        except Exception:
+            # Analysis is optional polish; the response agent can work without it.
+            return {"analysis_type": "reporting", "forecast_needed": False}
+
+    # Guard the decision against the rows that actually came back. It can name
+    # a forecast column that does not exist - a naming slip between the SQL
+    # and its own stated period_column/value_column - or ask for a forecast on
+    # too little data. Count distinct periods rather than rows, because a
+    # per-item-per-month panel has many rows but few periods.
     skipped_reason = ""
     needs_forecast = result.forecast_needed
+    period_column = result.period_column
+    value_column = result.value_column
     requested_periods = max(1, result.periods_ahead)
     effective_periods = min(requested_periods, 24)
     periods_note = ""
 
-    if needs_forecast:
-        if result.period_column not in columns or result.value_column not in columns:
+    if needs_forecast and (period_column not in columns or value_column not in columns):
+        # A genuine mismatch, not just a missing value - the model's own SQL
+        # and its own stated columns disagree. Try the same deterministic
+        # inference the reorder calculation already falls back on before
+        # giving up: often the query DOES return a usable series, just under
+        # a different alias than the one named here.
+        inferred_period = _infer_period_column(rows)
+        inferred_value = _infer_value_column(rows, inferred_period)
+        if inferred_period and inferred_value:
+            period_column, value_column = inferred_period, inferred_value
+        else:
             needs_forecast = False
             skipped_reason = "The query did not return a usable time series."
+
+    if needs_forecast:
+        distinct_periods = {
+            row.get(period_column)
+            for row in rows
+            if row.get(period_column) is not None
+        }
+        if len(distinct_periods) < forecast_tools.MIN_POINTS:
+            needs_forecast = False
+            skipped_reason = (
+                f"Only {len(distinct_periods)} period(s) of history are "
+                f"available; at least {forecast_tools.MIN_POINTS} are needed "
+                "to project a trend."
+            )
         else:
-            distinct_periods = {
-                row.get(result.period_column)
-                for row in rows
-                if row.get(result.period_column) is not None
-            }
-            if len(distinct_periods) < forecast_tools.MIN_POINTS:
-                needs_forecast = False
-                skipped_reason = (
-                    f"Only {len(distinct_periods)} period(s) of history are "
-                    f"available; at least {forecast_tools.MIN_POINTS} are needed "
-                    "to project a trend."
+            # The user can ask for any horizon they want, but projecting
+            # much further out than the available history is honestly
+            # supportable - the number would look precise while meaning
+            # little. Generous (up to half the history) rather than a flat
+            # cap, capped at 24 periods (two years of monthly data) so a
+            # request for, say, 10 years ahead on 3 years of history
+            # cannot silently produce a number nobody should trust.
+            period_cap = max(3, min(24, len(distinct_periods) // 2))
+            effective_periods = min(requested_periods, period_cap)
+            if effective_periods < requested_periods:
+                periods_note = (
+                    f"You asked for {requested_periods} periods ahead, but "
+                    f"only {effective_periods} are projected here - only "
+                    f"{len(distinct_periods)} periods of history are "
+                    "available, and forecasting much further than that "
+                    "would not be reliable."
                 )
-            else:
-                # The user can ask for any horizon they want, but projecting
-                # much further out than the available history is honestly
-                # supportable - the number would look precise while meaning
-                # little. Generous (up to half the history) rather than a flat
-                # cap, capped at 24 periods (two years of monthly data) so a
-                # request for, say, 10 years ahead on 3 years of history
-                # cannot silently produce a number nobody should trust.
-                period_cap = max(3, min(24, len(distinct_periods) // 2))
-                effective_periods = min(requested_periods, period_cap)
-                if effective_periods < requested_periods:
-                    periods_note = (
-                        f"You asked for {requested_periods} periods ahead, but "
-                        f"only {effective_periods} are projected here - only "
-                        f"{len(distinct_periods)} periods of history are "
-                        "available, and forecasting much further than that "
-                        "would not be reliable."
-                    )
 
     # Forecast wins over computation when both look true - a projection is the
     # more specific path. Otherwise honour a computation request, unless the
@@ -222,8 +265,8 @@ def analytics_agent(state: dict) -> dict:
         "forecast_needed": needs_forecast,
         "forecast_skipped_reason": skipped_reason,
         "forecast_spec": {
-            "period_column": result.period_column,
-            "value_column": result.value_column,
+            "period_column": period_column,
+            "value_column": value_column,
             "periods_ahead": effective_periods,
             # "when do we reorder / when does it run out" - answered from stock,
             # lead time and purchase cadence, NOT from the projection. So it is

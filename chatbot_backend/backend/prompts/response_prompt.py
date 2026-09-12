@@ -338,21 +338,52 @@ WHEN NOT TO USE THE HEADINGS AT ALL
 Three cases skip the four headings entirely:
   1. A reply with nothing to structure: smalltalk (a greeting, thanks), a bare
      clarification question back to the user, or a failure message.
-  2. ANY answer where a chart was generated (you will be told below when one
-     was). The chart IS the descriptive/diagnostic view - a full four-lens
-     write-up next to it is redundant with what the user is already looking
-     at. Write a short plain-language answer instead: a lead sentence, then
-     bullet points for the notable figures if there is more than one, same
-     STYLE rules as elsewhere. Mention the chart in passing ("see the chart
-     below") rather than narrating it. If there is a genuine, well-grounded
-     recommendation, one short line is fine - do not force a "Prescriptive"
-     heading to hold it.
+  2. ANY answer where a chart was generated for ANY part of the question (you
+     will be told below when one was - see MULTI-PART QUESTIONS if there is
+     more than one part and only some of them have a chart). The chart IS the
+     descriptive/diagnostic view - a full four-lens write-up next to it is
+     redundant with what the user is already looking at. Write a short
+     plain-language answer instead: a lead sentence, then bullet points for
+     the notable figures if there is more than one, same STYLE rules as
+     elsewhere. Mention the chart in passing ("see the chart below") rather
+     than narrating it. If there is a genuine, well-grounded recommendation,
+     one short line is fine - do not force a "Prescriptive" heading to hold it.
 EVERY OTHER REPLY gets all four headings - including a genuine one-liner like
 "how many items are there": Descriptive carries the number and scope, the
 other three are N/A. Consistency is the point: the user sees the same
 four-part shape every time a chart is not doing that job instead, never
 having to guess whether a particular answer happened to earn the full
-structure."""
+structure.
+
+MULTI-PART QUESTIONS
+Some questions arrive already split into independent PARTS - you will see
+"--- PART 1 of N: ... ---" blocks above when this applies, each queried
+SEPARATELY because they could not share one result (typically: a forecast
+asked for more than one item, which has to be fitted per item rather than
+blended). Combine them into ONE answer, never N separate ones:
+
+- Still use the SAME four fixed headings ONCE for the whole answer - do not
+  repeat Descriptive/Diagnostic/Forecasting/Prescriptive once per part. Within
+  each heading's body, address every part, naming which part or item each
+  figure belongs to - a short label is usually enough ("Cast Iron NA: 31 kg
+  issued since 11-Jun-2026..." / "Shell Scrap: ...").
+- READ EVERY PART BEFORE WRITING, then report what EACH one actually found.
+  A part that failed or came back empty does not excuse leaving out a part
+  that succeeded, and a part that succeeded does not excuse glossing over one
+  that did not - state both. If PART 1 forecasted cleanly and PART 2 could
+  not (see its own error / forecast_skipped_reason), the Forecasting section
+  carries PART 1's real projection AND the specific reason PART 2 has none -
+  never a single blended sentence that reads as if nothing was produced, and
+  never a claim that one part "has no data" when a DIFFERENT part is the one
+  that came back empty.
+- If two parts are not genuinely comparable (different units, unrelated
+  materials with nothing to contrast), do not force a comparison between them
+  - report each on its own within the shared heading. Diagnostic can still
+  read N/A for the cross-part comparison itself while stating each part's own
+  diagnosis, if it has one.
+- Every other rule above (STYLE, the four lenses' own content rules, never a
+  markdown table, never a total across things that are not the same kind of
+  thing) applies per part exactly as it would to a single-part question."""
 
 
 def _column_facts(rows: list) -> str:
@@ -470,35 +501,28 @@ def _rows_for_prompt(rows: list) -> tuple:
     )
 
 
-def build_response_prompt(state: dict) -> str:
-    """Assemble whatever the earlier nodes managed to produce."""
-    parts = [f"User question:\n{state.get('rewritten_query') or state.get('user_query', '')}"]
+def _render_result_block(data: dict) -> list:
+    """
+    The per-result prompt sections - DB rows, analysis type, charts, focus
+    points, computation, reorder timing, forecast - for ONE result.
 
-    if state.get("context"):
-        parts.append("Business context:\n" + "\n\n".join(state["context"]))
-
-    # The named material's standing position, attached by item_resolution_agent.
-    # It rides here rather than as twenty extra SELECT columns: the figures are
-    # wanted BESIDE every item answer, but nobody asked for twenty more columns
-    # in the table they have to scan. It also stays out of `context` because
-    # route_after_context tests that list for emptiness to decide whether the
-    # Knowledge Agent is needed.
-    if state.get("item_context"):
-        parts.append("\n\n".join(state["item_context"]))
-
-    if state.get("documents"):
-        parts.append(
-            "Retrieved documents (answer from these, and say so if they do not cover it):\n"
-            + "\n\n".join(state["documents"])
-        )
+    Takes either the top-level state (a single-subtask turn - the ONLY shape
+    this function had to handle before subtasks existed) or one entry of
+    `subtask_results` (a multi-subtask turn): both carry the same field names
+    (sql/retrieved_data/row_count/analysis_type/charts/.../forecast_result),
+    so one function renders either correctly. Extracted from
+    build_response_prompt unchanged in content - only the source dict moved
+    from always-`state` to sometimes-`state`, sometimes-one-subtask-snapshot.
+    """
+    parts = []
 
     # Only mention the database when a query actually ran. On the docs and
     # smalltalk paths retrieved_data is an empty list, which would otherwise
     # read as "nothing matched".
-    if state.get("sql"):
-        rows = state.get("retrieved_data") or []
-        row_count = state.get("row_count", len(rows))
-        if state.get("sql_error"):
+    if data.get("sql"):
+        rows = data.get("retrieved_data") or []
+        row_count = data.get("row_count", len(rows))
+        if data.get("sql_error"):
             # The retry budget ran out, so the query NEVER RAN. row_count is
             # still 0 from the start of the turn, which the empty-result branch
             # below would report as "no rows matched" - turning a technical
@@ -506,7 +530,7 @@ def build_response_prompt(state: dict) -> str:
             # shipments"). The two cases must never be conflated.
             parts.append(
                 "The database query FAILED - every attempt errored, so it never "
-                f"ran and there is NO result. Last error: {state['sql_error']}\n"
+                f"ran and there is NO result. Last error: {data['sql_error']}\n"
                 "Tell the user you could not retrieve this, in plain language. "
                 "This is a failure to run the query, NOT a finding that nothing "
                 "matched: do not state or imply any count, total, absence or "
@@ -526,26 +550,26 @@ def build_response_prompt(state: dict) -> str:
                         f"than estimating from the sample:\n{facts}"
                     )
 
-    if state.get("analysis_type"):
-        parts.append(f"Analysis type: {state['analysis_type']}")
+    if data.get("analysis_type"):
+        parts.append(f"Analysis type: {data['analysis_type']}")
 
-    if state.get("charts"):
-        chart_titles = ", ".join(c.get("title") or c.get("type", "chart") for c in state["charts"])
+    if data.get("charts"):
+        chart_titles = ", ".join(c.get("title") or c.get("type", "chart") for c in data["charts"])
         parts.append(
-            f"{len(state['charts'])} chart(s) were generated and will be rendered "
+            f"{len(data['charts'])} chart(s) were generated and will be rendered "
             f"below your reply ({chart_titles}). Per the FOUR-LENS STRUCTURE rules, "
             "do NOT use the Descriptive/Diagnostic/Forecasting/Prescriptive headings "
             "for this answer - write a short plain-language answer instead."
         )
 
-    if state.get("focus_points"):
-        parts.append("Points worth calling out:\n- " + "\n- ".join(state["focus_points"]))
+    if data.get("focus_points"):
+        parts.append("Points worth calling out:\n- " + "\n- ".join(data["focus_points"]))
 
-    computation_result = state.get("computation_result")
+    computation_result = data.get("computation_result")
     if computation_result is not None:
         # A computation result is authoritative data, like DB rows - you may
         # state its numbers directly.
-        explanation = state.get("computation_explanation", "")
+        explanation = data.get("computation_explanation", "")
         display_result = computation_result
         note = ""
         # A table-shaped result (the code returned a DataFrame) can be large -
@@ -565,13 +589,13 @@ def build_response_prompt(state: dict) -> str:
             f"Computed result{f' ({explanation})' if explanation else ''}{note}:\n"
             f"{display_result}"
         )
-    elif state.get("computation_error"):
+    elif data.get("computation_error"):
         parts.append(
-            f"A calculation was attempted but failed: {state['computation_error']}\n"
+            f"A calculation was attempted but failed: {data['computation_error']}\n"
             "Tell the user this part could not be computed, in plain language."
         )
 
-    if state.get("reorder_result"):
+    if data.get("reorder_result"):
         parts.append(
             "Purchase / reorder timing. This block can carry TWO INDEPENDENT "
             "answers - read both before deciding what you can say:\n"
@@ -591,30 +615,92 @@ def build_response_prompt(state: dict) -> str:
             "be determined when BOTH are unavailable. If `horizon_warning` or "
             "`coverage_warning` is present, lead with that caveat instead of "
             "presenting a raw date as a plan"
-            f":\n{state['reorder_result']}"
+            f":\n{data['reorder_result']}"
         )
 
-    if state.get("forecast_result"):
+    if data.get("forecast_result"):
         parts.append(
             "Forecast output (if `stale_warning` is present the series ends well "
             "before today - the projected periods are NOT upcoming months, so "
             "state when the data actually stops rather than presenting them as a "
-            f"current outlook):\n{state['forecast_result']}"
+            f"current outlook):\n{data['forecast_result']}"
         )
-    elif state.get("forecast_skipped_reason"):
+    elif data.get("forecast_skipped_reason"):
         # Without this the model quietly computes its own projection to fill
         # the gap, which is exactly what the forecast node exists to prevent.
         parts.append(
-            f"No forecast was produced: {state['forecast_skipped_reason']}\n"
+            f"No forecast was produced: {data['forecast_skipped_reason']}\n"
             "Report the historical figures only. Do NOT calculate or estimate a "
             "projection yourself - say a forecast is not available and why."
         )
 
-    if state.get("error"):
+    if data.get("error"):
         parts.append(
-            f"Something failed: {state['error']}\n"
+            f"Something failed: {data['error']}\n"
             "Tell the user what could not be answered, in business language."
         )
+
+    return parts
+
+
+def build_response_prompt(state: dict) -> str:
+    """Assemble whatever the earlier nodes managed to produce."""
+    # turn_query is the WHOLE-TURN question, set once by planning_agent -
+    # rewritten_query gets overwritten per subtask by dispatch_subtask as the
+    # loop runs, so by the time this prompt is built it holds whatever the
+    # LAST subtask's own narrow description was, not the question the user
+    # actually asked. turn_query is what must head the answer.
+    parts = [
+        f"User question:\n{state.get('turn_query') or state.get('rewritten_query') or state.get('user_query', '')}"
+    ]
+
+    if state.get("context"):
+        parts.append("Business context:\n" + "\n\n".join(state["context"]))
+
+    if state.get("documents"):
+        parts.append(
+            "Retrieved documents (answer from these, and say so if they do not cover it):\n"
+            + "\n\n".join(state["documents"])
+        )
+
+    subtask_results = state.get("subtask_results") or []
+
+    if len(subtask_results) <= 1:
+        # The ordinary case - one subtask (or none, on the docs/smalltalk
+        # paths, which never populate subtask_results at all). Rendered
+        # straight off the top-level state fields, unchanged from before
+        # subtasks existed - this path must stay byte-identical.
+        #
+        # The named material's standing position, attached by
+        # item_resolution_agent. It rides here rather than as twenty extra
+        # SELECT columns: the figures are wanted BESIDE every item answer,
+        # but nobody asked for twenty more columns in the table they have to
+        # scan. It also stays out of `context` because route_after_context
+        # tests that list for emptiness to decide whether the Knowledge
+        # Agent is needed.
+        if state.get("item_context"):
+            parts.append("\n\n".join(state["item_context"]))
+        parts.extend(_render_result_block(state))
+    else:
+        # A compound question, decomposed into independent parts that were
+        # queried separately - see MULTI-PART QUESTIONS in the system prompt
+        # for how to combine them into one answer. Each part gets the SAME
+        # rendering a single-subtask turn would, labelled by its own
+        # description so the model can tell which figures belong to which
+        # part instead of only ever seeing whatever the LAST part left behind
+        # (the bug this replaced: response_agent used to read only the
+        # top-level fields, which after the loop hold just the final
+        # subtask's data).
+        parts.append(
+            f"This question had {len(subtask_results)} independent parts, each "
+            "queried separately. Read every part below before writing the "
+            "answer - do not answer only the last one."
+        )
+        for i, sub in enumerate(subtask_results, start=1):
+            parts.append(f"--- PART {i} of {len(subtask_results)}: {sub.get('description', '')} ---")
+            if sub.get("item_context"):
+                parts.append("\n\n".join(sub["item_context"]))
+            parts.extend(_render_result_block(sub))
 
     parts.append("Write the final answer.")
     return "\n\n".join(parts)

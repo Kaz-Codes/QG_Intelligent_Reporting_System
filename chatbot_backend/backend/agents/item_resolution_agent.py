@@ -29,6 +29,18 @@ Resolving the reply is two-tier: an exact item_code mention or an "all/any/every
 word is caught deterministically (cheap, no ambiguity in what it means); anything
 more descriptive ("the 20mm one", "the EN8 grade") falls back to a small LLM call
 against the candidate list.
+
+`entities["item"]` carries a LIST of item names, not one string - a question can
+name more than one material ("only consider cast iron unit scrap, and NA"). Each
+name is resolved independently, in order, against the real item master and the
+resulting item_context notes are concatenated, so the SQL agent gets one
+self-contained filtering instruction PER item rather than a single phrase that has
+to match all of them AT ONCE (which is exactly the bug this used to have - none of
+"unit", "na" and "scrap" appear together on any one row, so the combined phrase
+matched nothing even though each item, taken alone, matched exactly one row).
+If any one of the named items is still ambiguous after its own resolution, THAT
+one gets the clarify question, same as the single-item flow always did; the
+others are simply re-resolved fresh next turn once it's answered.
 """
 
 import re
@@ -48,6 +60,21 @@ CHIP_LIMIT = 8  # above this, list codes only in the table, not as tap-chips
 LLM_CANDIDATE_LIMIT = 50  # cap on how many candidates go into the resolution prompt
 
 _ALL_WORDS_RE = re.compile(r"\b(all|any|every|everything|both|entire)\b", re.IGNORECASE)
+
+
+def _as_item_list(value) -> List[str]:
+    """
+    Normalise `entities["item"]` to a clean list of names.
+
+    Accepts a list (the current shape) or a bare string (a stray single-item
+    value from a fallback path or an older cached turn) so neither producer has
+    to special-case the other. Blank entries are dropped.
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
 
 class ItemSelection(BaseModel):
@@ -428,30 +455,16 @@ def _with_position(notes, item_name, codes=None):
     return [*notes, note] if note else list(notes)
 
 
-def item_resolution_agent(state: dict) -> dict:
-    if state.get("route") != "data":
-        return {}
+def _resolve_item_name(item_name: str, state: dict) -> dict:
+    """
+    Resolve ONE item name to its item_code(s).
 
-    entities = state.get("entities") or {}
-    if entities.get("item_code"):
-        # The user already gave (or picked) an exact code - nothing to resolve.
-        return {}
-
-    item_name = entities.get("item")
-    if not item_name:
-        return {}
-
-    # "How many TYPES of shafts do we have" is a count ACROSS items, so there is
-    # no single item to resolve and pinning one guarantees a wrong answer. Leave
-    # it to the SQL agent and the business-term mapping.
-    if _is_aggregate_question(
-        state.get("rewritten_query", ""),
-        state.get("user_query", ""),
-        str((entities.get("metric") or "")),
-        state.get("intent", ""),
-    ):
-        return {"item_context": _with_position([_category_note(item_name)], item_name)}
-
+    Returns {"notes": [...], "codes": [...]} once this name is settled (codes
+    may be empty - nothing in the item master matched, so there is nothing to
+    pin and the SQL agent is left to try the raw phrase itself), or
+    {"clarify": {...}} - the full node-return dict for the clarify route - when
+    this name alone is still ambiguous and needs the user's input.
+    """
     lookup = find_items_by_name(item_name)
     candidates = lookup["rows"]
     truncated = lookup["truncated"]
@@ -465,16 +478,13 @@ def item_resolution_agent(state: dict) -> dict:
         if candidates:
             code = candidates[0]["item_code"]
             return {
-                "item_context": [
+                "notes": [
                     f"'{item_name}' refers to item_code = '{code}' in the items "
                     "table - filter on this exact item_code, not a name match."
                 ],
-                # Publish the resolved code as an entity too: downstream steps
-                # (reorder / purchase timing) look it up there, and a note meant
-                # for the SQL agent is invisible to them.
-                "entities": {**entities, "item_code": code},
+                "codes": [code],
             }
-        return {}
+        return {"notes": [], "codes": []}
 
     # A word that matches several unrelated item names is a CATEGORY, not one
     # item. 'shafts' hits Shaft, Cast Iron Scrap (spec "Crank Shafts Scrap"),
@@ -482,7 +492,7 @@ def item_resolution_agent(state: dict) -> dict:
     # contain the literal plural, so the tie-break below would auto-pin it and
     # filter the whole question down to Cast Iron Scrap.
     if not truncated and _looks_like_category(item_name, candidates):
-        return {"item_context": _with_position([_category_note(item_name)], item_name)}
+        return {"notes": _with_position([_category_note(item_name)], item_name), "codes": []}
 
     # The user may have ALREADY identified the item by including its spec
     # ("resin a85"). If one candidate matches what they typed more completely
@@ -500,11 +510,12 @@ def item_resolution_agent(state: dict) -> dict:
         # Pinning is only safe on a whole-word or exact match; a loose hit is a
         # coincidence of spelling, not an identification.
         if len(best) == 1 and _matched_on_words(item_name, best[0]):
+            code = best[0]["item_code"]
             return {
                 # _auto_note, not _pin_note: we inferred this, the user never
                 # saw it, and the SQL agent must be able to override it.
-                "item_context": _with_position([_auto_note(item_name, [best[0]["item_code"]])], item_name, [best[0]["item_code"]]),
-                "entities": {**entities, "item_code": best[0]["item_code"]},
+                "notes": _with_position([_auto_note(item_name, [code])], item_name, [code]),
+                "codes": [code],
             }
         # A clear top tier that is smaller than the full set still narrows the
         # question to the plausible items instead of everything sharing a name.
@@ -546,12 +557,16 @@ def item_resolution_agent(state: dict) -> dict:
     if selection is not None:
         all_of_them, codes = selection
         if all_of_them:
-            return {"item_context": _with_position([_all_note(item_name, sorted(valid_codes))], item_name, sorted(valid_codes))}
+            codes_sorted = sorted(valid_codes)
+            return {
+                "notes": _with_position([_all_note(item_name, codes_sorted)], item_name, codes_sorted),
+                "codes": codes_sorted,
+            }
         if codes:
-            resolved = {**entities}
-            if len(codes) == 1:
-                resolved["item_code"] = codes[0]
-            return {"item_context": _with_position([_pin_note(item_name, codes)], item_name, codes), "entities": resolved}
+            return {
+                "notes": _with_position([_pin_note(item_name, codes)], item_name, codes),
+                "codes": codes,
+            }
 
     # POSITION QUESTIONS DO NOT NEED A CHOICE. "how much lime stone do we have",
     # "days of cover for X", "should we buy more X" are answered per item_code
@@ -565,7 +580,7 @@ def item_resolution_agent(state: dict) -> dict:
         state.get("rewritten_query", ""), state.get("user_query", "")
     ):
         return {
-            "item_context": [
+            "notes": [
                 _all_note(item_name, sorted(valid_codes)),
                 (
                     f'"{item_name}" matches {len(candidates)} item codes. This is '
@@ -574,7 +589,12 @@ def item_resolution_agent(state: dict) -> dict:
                     f"several variants matched, and give the figures per variant "
                     f"so the user can see which one they meant."
                 ),
-            ]
+            ],
+            # Deliberately NOT collapsed into a single item_code by the caller -
+            # see the len(all_codes) == 1 check in item_resolution_agent. Several
+            # codes answering a position question must stay several rows, never
+            # one silently-picked reorder target.
+            "codes": sorted(valid_codes),
         }
 
     # Still ambiguous - ask, with the real candidates attached so the normal
@@ -596,11 +616,69 @@ def item_resolution_agent(state: dict) -> dict:
     )
 
     return {
-        "route": "clarify",
-        "clarification_question": question,
-        "clarification_options": options,
-        "columns": columns,
-        "retrieved_data": candidates,
-        "row_count": len(candidates),
-        "truncated": truncated,
+        "clarify": {
+            "route": "clarify",
+            "clarification_question": question,
+            "clarification_options": options,
+            "columns": columns,
+            "retrieved_data": candidates,
+            "row_count": len(candidates),
+            "truncated": truncated,
+        }
     }
+
+
+def item_resolution_agent(state: dict) -> dict:
+    if state.get("route") != "data":
+        return {}
+
+    entities = state.get("entities") or {}
+    if entities.get("item_code"):
+        # The user already gave (or picked) an exact code - nothing to resolve.
+        return {}
+
+    item_names = _as_item_list(entities.get("item"))
+    if not item_names:
+        return {}
+
+    # "How many TYPES of shafts do we have" is a count ACROSS items, so there is
+    # no single item to resolve and pinning one guarantees a wrong answer. Leave
+    # it to the SQL agent and the business-term mapping. Applies uniformly to
+    # every named item - the phrasing that makes it an aggregate question is
+    # about the QUESTION, not about which item happens to be named.
+    if _is_aggregate_question(
+        state.get("rewritten_query", ""),
+        state.get("user_query", ""),
+        str((entities.get("metric") or "")),
+        state.get("intent", ""),
+    ):
+        notes: List[str] = []
+        for item_name in item_names:
+            notes = _with_position([*notes, _category_note(item_name)], item_name)
+        return {"item_context": notes}
+
+    # Resolve each named item independently and concatenate the results, so the
+    # SQL agent gets one self-contained note PER item rather than a single
+    # phrase required to match all of them on one row at once. The first item
+    # that is still ambiguous on its own gets the clarify question - the same
+    # single-question-per-turn behaviour the single-item flow always had; any
+    # items after it are simply re-resolved fresh next turn once it's answered.
+    all_notes: List[str] = []
+    all_codes: List[str] = []
+    for item_name in item_names:
+        outcome = _resolve_item_name(item_name, state)
+        if "clarify" in outcome:
+            return outcome["clarify"]
+        all_notes.extend(outcome["notes"])
+        all_codes.extend(outcome["codes"])
+
+    updates: dict = {"item_context": all_notes}
+    # Publish the resolved code as an entity too, same as the single-item flow
+    # always did: downstream steps (reorder / purchase timing) look it up
+    # there, and a note meant for the SQL agent is invisible to them. Only ever
+    # collapsed to a single item_code when exactly one item was named AND it
+    # resolved to exactly one code - a genuine multi-item or multi-code result
+    # must never be silently narrowed to one reorder target.
+    if len(item_names) == 1 and len(all_codes) == 1:
+        updates["entities"] = {**entities, "item_code": all_codes[0]}
+    return updates

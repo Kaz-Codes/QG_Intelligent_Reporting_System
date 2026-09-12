@@ -2,20 +2,30 @@
 SQL agent - two nodes, not one.
 
     generate_sql : question + business context + schema -> a SELECT statement
+                   AND the analysis decision (analysis_type/forecast_needed/
+                   period_column/value_column/.../charts) that used to be a
+                   separate call made by analytics_agent AFTER the query ran -
+                   see GeneratedSQL and sql_prompt.py's "ALSO DECIDE THE
+                   ANALYSIS" section for why folding them into one call is
+                   safe: the model is naming ITS OWN SELECT's column aliases,
+                   not guessing someone else's, and analytics_agent validates
+                   the prediction against the real returned columns anyway.
     execute_sql  : validate, run it, and on failure hand the database's own
                    error back to generate_sql for another attempt
 
-Splitting them is what makes the retry loop possible. Generated SQL fails often
-on a real schema (wrong column, bad join, type mismatch), and the error message
-is usually enough for the model to fix itself. The graph wires
-execute_sql -> generate_sql for up to SQL_MAX_RETRIES attempts.
+Splitting generate_sql/execute_sql is what makes the retry loop possible.
+Generated SQL fails often on a real schema (wrong column, bad join, type
+mismatch), and the error message is usually enough for the model to fix
+itself. The graph wires execute_sql -> generate_sql for up to SQL_MAX_RETRIES
+attempts.
 """
 
 from typing import List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from backend.agents.analytics_agent import AnalyticsDecision
 from backend.config import (
     EFFORT_ACCURATE, SQL_MAX_RETRIES, SQL_ROW_LIMIT, ZERO_ROW_RETRY, structured_llm,
 )
@@ -27,8 +37,23 @@ from backend.tools.postgres_tools import QueryExecutionError, run_query
 from backend.tools.sql_guards import as_hint as guard_hint, inspect as inspect_sql
 from backend.tools.tools import UnsafeQueryError, prepare_sql
 
+# Field names carried in a GeneratedSQL result that belong to the analysis
+# decision (AnalyticsDecision's own fields), not the SQL itself - used to
+# build state["predicted_analysis"] without hand-listing them twice.
+_ANALYSIS_FIELDS = list(AnalyticsDecision.model_fields.keys())
 
-class GeneratedSQL(BaseModel):
+
+class GeneratedSQL(AnalyticsDecision):
+    """
+    SQL + the analysis decision, in one structured output.
+
+    Inherits analysis_type/forecast_needed/period_column/value_column/
+    periods_ahead/reorder_analysis/needs_computation/computation_task/charts/
+    focus_points from AnalyticsDecision UNCHANGED - same fields, same
+    descriptions, same downstream validation in analytics_agent. Only the
+    SQL-specific fields are new here.
+    """
+
     sql: str = Field(
         description="A single PostgreSQL SELECT statement. Empty if not answerable."
     )
@@ -47,6 +72,18 @@ class GeneratedSQL(BaseModel):
             "habit rather than because the user asked for exactly that many rows."
         ),
     )
+
+
+def _predicted_analysis(result: GeneratedSQL) -> dict:
+    """
+    The analysis-decision fields of a GeneratedSQL, as a plain JSON-safe dict.
+
+    `.model_dump(mode="json")` rather than attribute access so `charts`
+    (List[ChartSpec]) comes out as plain dicts, not pydantic instances - this
+    dict is stored as-is both in state["predicted_analysis"] and, on a cache
+    write, in the query cache's JSON file.
+    """
+    return result.model_dump(mode="json", include=set(_ANALYSIS_FIELDS))
 
 
 def generate_sql(state: dict) -> dict:
@@ -74,6 +111,14 @@ def generate_sql(state: dict) -> dict:
     ):
         cached = query_cache.lookup(raw_question, state.get("entities"))
         if cached:
+            # The analysis decision made alongside the SQL that wrote this
+            # entry, if the cache write happened after that merge - a legacy
+            # entry has none of these keys, and analytics_agent treats an
+            # empty predicted_analysis as "make the call fresh", same as it
+            # always did before this existed.
+            predicted = {
+                name: cached[name] for name in _ANALYSIS_FIELDS if name in cached
+            }
             return {
                 "sql": cached["sql"],
                 "sql_explanation": "Reused the stored query for this question.",
@@ -84,6 +129,7 @@ def generate_sql(state: dict) -> dict:
                 # see the zero-row branch in execute_sql.
                 "sql_cache_fingerprint": cached.get("fingerprint", ""),
                 "sql_error": "",
+                "predicted_analysis": predicted,
             }
 
     # The schema says what the columns ARE; the profile says what is IN them,
@@ -176,6 +222,9 @@ def generate_sql(state: dict) -> dict:
         "zero_row_hint": "",
         # Clear the previous error so a successful retry does not look failed.
         "sql_error": "",
+        # analytics_agent validates this against the rows this query actually
+        # returns once execute_sql runs - see GeneratedSQL's docstring.
+        "predicted_analysis": _predicted_analysis(result),
     }
 
 

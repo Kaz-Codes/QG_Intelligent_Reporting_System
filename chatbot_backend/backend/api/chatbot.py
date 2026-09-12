@@ -56,7 +56,8 @@ router = APIRouter()
 # line while the turn runs, so a 10-second answer is visibly progressing rather
 # than a silent wait. Nodes absent from this map emit no status.
 _NODE_LABELS = {
-    "understand": "Understanding your question…",
+    "plan": "Understanding your question…",
+    "dispatch_subtask": "Planning the next part…",
     "resolve_item": "Checking which item you mean…",
     "context": "Looking up business terms…",
     "knowledge": "Working out what that means…",
@@ -65,6 +66,7 @@ _NODE_LABELS = {
     "analyze": "Analysing the results…",
     "forecast": "Running the forecast…",
     "compute": "Running calculations…",
+    "collect_subtask_result": "Recording that part…",
     "retrieve_docs": "Searching documents…",
     "learn": "Remembering that…",
     "respond": "Writing the answer…",
@@ -239,11 +241,11 @@ async def _event_stream(
     yield _sse({"type": "start", "thread_id": thread_id})
 
     # "updates" only fires once a node has FINISHED, so the first real status
-    # would not arrive until understanding completes - several seconds of
-    # silence, which is exactly what streaming is meant to remove. Announce the
-    # first step up front, then let node completions drive the rest (skipping
-    # `understand` below so it is not shown twice).
-    yield _sse({"type": "status", "node": "understand", "label": _NODE_LABELS["understand"]})
+    # would not arrive until planning completes - several seconds of silence,
+    # which is exactly what streaming is meant to remove. Announce the first
+    # step up front, then let node completions drive the rest (skipping `plan`
+    # below so it is not shown twice).
+    yield _sse({"type": "status", "node": "plan", "label": _NODE_LABELS["plan"]})
     # Hand control back to the event loop so the two events above are actually
     # written to the socket NOW. Without this the generator runs straight into
     # the blocking graph call and both events sit in the buffer until the first
@@ -268,7 +270,7 @@ async def _event_stream(
         ):
             if mode == "updates":
                 for node in chunk or {}:
-                    if node == "understand":
+                    if node == "plan":
                         continue  # already announced before the loop
                     label = _NODE_LABELS.get(node)
                     if label:
@@ -445,9 +447,37 @@ def _maybe_cache_query(result: Dict[str, Any]) -> None:
             result["sql"],
             tables_used=result.get("tables_used", []),
             limit_is_user_requested=result.get("limit_is_user_requested", False),
+            predicted_analysis=_cached_analysis_fields(result),
         )
     except Exception:
         pass
+
+
+def _cached_analysis_fields(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reshape the graph's VALIDATED analysis decision back into the flat shape
+    query_cache.remember() stores (matching sql_agent.GeneratedSQL's fields),
+    so a future cache hit can feed analytics_agent's validate/repair path
+    instead of forcing a fresh standalone call.
+
+    Built from analytics_agent's OUTPUT, not the raw prediction generate_sql
+    made - this has already been checked against the columns the query
+    actually returned, so caching it means a repair made once does not need
+    making again on every replay.
+    """
+    spec = result.get("forecast_spec") or {}
+    return {
+        "analysis_type": result.get("analysis_type", "reporting"),
+        "forecast_needed": bool(result.get("forecast_needed", False)),
+        "period_column": spec.get("period_column"),
+        "value_column": spec.get("value_column"),
+        "periods_ahead": spec.get("periods_ahead", 3),
+        "reorder_analysis": bool(spec.get("reorder_analysis", False)),
+        "needs_computation": bool(result.get("needs_computation", False)),
+        "computation_task": result.get("computation_task", ""),
+        "charts": result.get("charts", []),
+        "focus_points": result.get("focus_points", []),
+    }
 
 
 @router.get("/chat/{thread_id}/history")

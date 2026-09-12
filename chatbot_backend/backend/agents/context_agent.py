@@ -18,9 +18,18 @@ def context_agent(state: dict) -> dict:
     question = state.get("rewritten_query") or state.get("user_query", "")
 
     # Search on the question plus the extracted entities, so an item or status
-    # name pulls in its own terminology entry too.
+    # name pulls in its own terminology entry too. entities["item"] is a LIST
+    # (a question can name more than one material) - flatten it so the search
+    # text carries each item name as its own word, not a stringified Python
+    # list with brackets and quotes in it.
     entities = state.get("entities") or {}
-    search_text = " ".join([question, *(str(v) for v in entities.values())])
+    entity_words = []
+    for value in entities.values():
+        if isinstance(value, list):
+            entity_words.extend(str(v) for v in value)
+        else:
+            entity_words.append(str(value))
+    search_text = " ".join([question, *entity_words])
 
     # Search curated terms AND previously-learned mappings, so a mapping the
     # Knowledge Agent inferred earlier is reused instead of re-derived.
