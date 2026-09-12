@@ -20,6 +20,28 @@ behaviour and §3.9's freeze is what constrains it — see revision 8.
 
 ---
 
+## Changelog — revision 9 (deployment rehearsal)
+
+The whole deploy sequence, run on a developer machine against `supply_chain_erp`
+restored from the 9 September production backup — the same `3142a00a5b31`,
+183-consignment state the server is in today. `docs/DEPLOY.md` is the runbook
+that came out of it. What the rehearsal found:
+
+| What | Detail |
+|---|---|
+| **CORRECTION: the 21 pre-migration history rows are REAL.** Revision 8's entry saying they never existed is withdrawn. | They are in the 9 September backup — 21 rows over 3 consignments, 26–28 August. Revision 8 checked two dumps that were both taken from the dev database AFTER the 9 September reload emptied the table, and concluded from an empty table that it had always been empty. The probe-leftover problem was real and is still worth its entry; the conclusion drawn from it was not. **Two dumps agreeing proves nothing when both come from the same side of the event you are asking about.** |
+| **The 9 September reload destroyed more than consignments.** | 5 consignments (4 already soft-deleted, 1 live draft), **12 of 13 user accounts**, all 21 change-history rows, 2 status-update rows, 5 ETA revisions and 1 payment. `load_all` is destructive by design and nothing warned. Anyone re-running it on a database people have used loses their logins. |
+| **A missed repoint, found only because the restored data reaches the code path** | `cross_module.py:290` still read `items[0].item_name`. The loop only runs for a consignment with `sent_to_logistics_at` set, and the rebuilt dev database had **none** — so `GET /logistics/import-fob-jobs` returned an empty list and passed the route sweep vacuously. The restored backup has one, and the route 500s. Fixed, with the eager load it also needed. |
+| **The dashboard consistency check was comparing a figure the screen does not show** | It asserted the Overview's headline against the module's `period_value` — the tile that was REMOVED from the imports screen precisely because it disagreed with the hero beside it. On a database where `pkr_total` is populated (i.e. production) they differ by Rs 205m. The two figures that are actually on the two screens agree to the rupee. |
+| **…and the imports screen still carries two money bases, visibly** | Hero (header basis) Rs 29.273bn beside the population total (line basis) Rs 29.068bn, on one page. The same pair of numbers CLAUDE.md names as "the bug this whole pass exists to remove". It was invisible on dev only because `pkr_total` was NULL everywhere. **Which basis the screen should use is a business call** — the suite now prints the gap every run rather than failing on it. |
+| **Reverting can strand a pre-enum value and make a record unsaveable** ⚠️ | The enum migration normalises COLUMNS, not the change-history JSON. One history row holds `mode_of_shipment.old_value = 'Sea'`. Reverting it writes `'Sea'` back, and the next save 422s on a field the operator never touched — exactly the bug the migration existed to fix, reached through the undo stack. Proved end to end. `DEPLOY.md` §0.3 is the pre-flight check. |
+| **`CREATE OR REPLACE VIEW` fails as predicted, and `ON_ERROR_STOP=1` makes it halt mid-file** | Exit 3 at line 182; everything after it never runs, so `v_item_demand_picture` keeps its OLD definition too. `DROP VIEW IF EXISTS v_import_shafts CASCADE` first, then the file, exits 0 with zero orphaned dependencies. Still Muhtasham's one-line fix to make. |
+| **The browser check, finally done** | Login, list, detail, the six-step wizard, save-through-the-dialog, reload, change history, five dashboards. The demand dates render real values off the order lines (`requisitionDate 2026-04-28`, `requiredDate 2026-07-28`) and a save persists. |
+| **`skipped_fields` reaches nobody** | The backend reports `"reverted, except: works (retired in part 4)"` in the response `detail`; `revertConsignmentUpdate` returns `res.data` and drops it, and `skipped_fields` appears nowhere in the front end. The decision was that a retired key must be **reported, not logged** — server-side that holds, and the report stops at the API boundary. |
+| **Two pre-existing bugs, unrelated to batching** | `logistics.export_orders` and `logistics.local_orders` are requested by the Overview and are not in the reference `BUILDERS` registry — both 400, and they never were registered. And a save with no changes still writes an empty change-history row, which renders as "0 fields changed". |
+
+---
+
 ## Changelog — revision 8 (step 6 BUILT)
 
 **Step 6 shipped in two commits**: the two part-3 misses (`cross_module.py`'s
@@ -39,7 +61,7 @@ paths. `sync_batch_group` is deleted.
 | **§4.7 — CORRECTION: the reference count of "219" was scanner-limited** | The scanner missed `reports/serializers.py`, which reaches the fields through a `ci.` alias rather than the model name. The figure was never the point — the point is that the number came from a tool whose blind spot nobody checked, and a repoint driven off that list alone would have left a module behind. |
 | **The `apply_item_master_values` catch was LUCK, and should be recorded as luck** | A bulk regex repoint turned a WRITE into `line_item_name(item) = master.name` — an accessor call on the left of an assignment. It was caught because Python cannot parse that, not because anything looked for it. The same regex over a plain attribute would have produced valid code that wrote to the wrong row. There is no method here to be pleased with. |
 | **`check_dashboard_consistency` compared two money figures with an exact `==`** | And passed — because no consignment in the loaded data carries a stored `pkr_total`, so both screens took the line path and matched bit for bit. The Overview prefers the stored total (Numeric 20,2) and the module re-sums the lines, so they differ by half a paisa the moment anything is saved through the app. An assertion that only holds while a column is empty everywhere is not asserting what it claims to. Now compared to the rupee, with the rounding it allows printed. |
-| **The revert probe's "21 real pre-migration history rows" DID NOT EXIST** | `consignment_change_history` is empty in both dumps; nothing on the dev box has ever been edited. The 21 rows were left behind by earlier runs of the probes themselves in a database that was not rebuilt between them, and read back as though found. Two of them were the probe's own "unroutable key must raise" fixture, so a second run failed inside the code under test. The suite now seeds its history through the real routes and says so. |
+| **CORRECTED IN REVISION 9: the 21 history rows DO exist.** | Revision 8 said they never had, because both dumps checked were taken from the dev database AFTER the 9 September reload wiped it. The 9 September BACKUP holds exactly 21, over 3 consignments, 26–28 August. The original figure was right and the correction was the error. See revision 9. |
 
 ---
 

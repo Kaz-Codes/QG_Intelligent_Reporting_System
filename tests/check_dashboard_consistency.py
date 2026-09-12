@@ -59,11 +59,44 @@ p = i["population"]
 #
 # Half a paisa per consignment is the most the rounding can account for; a
 # basis error is orders of magnitude larger than that and still fails here.
-value_tolerance = 0.005 * max(int(p["total"]["count"]), 1)
-value_gap = abs(float(o["period_value"]["value"]) - float(i["period_value"]["value"]))
-check("total value matches", value_gap <= value_tolerance,
-      f'{float(o["period_value"]["value"]):,.0f} (differ by {value_gap:.4f}, '
-      f'rounding allows {value_tolerance:.3f})')
+# CORRECTED AGAIN, AND THE PREVIOUS VERSION COMPARED THE WRONG PAIR.
+#
+# It compared the Overview's headline against the module's `period_value` -
+# which the Imports SCREEN DOES NOT SHOW. That tile was removed from the screen
+# precisely because it disagreed with the hero beside it (CLAUDE.md, "it was
+# removed from the Imports screen entirely instead"). Comparing it asserts
+# agreement between a number a user sees and a number nobody sees.
+#
+# The two figures that are actually on the two screens are the Overview's
+# `imports.period_value` and the module's `kpis.total_value_pkr`, and both are
+# on the HEADER basis by design. They agree to the rupee on a database where
+# `pkr_total` is populated, which is what production looks like.
+#
+# Why this was not caught until the deployment rehearsal: the dev database had
+# `pkr_total` NULL on every row (the 9 September reload wiped it), so every
+# basis collapsed onto the line path and all three numbers were identical. The
+# tolerance added last round was the right shape for the wrong premise.
+hero_gap = abs(float(o["period_value"]["value"]) - float(i["kpis"]["total_value_pkr"]))
+check("total value matches (both screens' HEROES, header basis)",
+      hero_gap <= 0.005 * max(int(p["total"]["count"]), 1),
+      f'{float(o["period_value"]["value"]):,.0f} (differ by {hero_gap:.4f})')
+
+# NOT AN ASSERTION - A STANDING REPORT.
+#
+# The Imports screen shows a header-basis hero and a line-basis population
+# total. On a database with `pkr_total` populated those differ, visibly, on one
+# page: Rs 29.273bn beside Rs 29.068bn. That is the same pair of numbers
+# CLAUDE.md names as "the bug this whole pass exists to remove", and it is back
+# - not from a code change, but because the basis split was only ever invisible
+# while the column was empty.
+#
+# It is printed rather than failed because WHICH basis the screen should use is
+# a business call, not something a test should decide by going red. See the
+# deployment rehearsal report.
+basis_gap = abs(float(i["kpis"]["total_value_pkr"]) - float(p["total"]["value"]))
+print(f'  [NOTE] imports screen carries TWO money bases: hero (header) '
+      f'{float(i["kpis"]["total_value_pkr"]):,.0f} vs population (line) '
+      f'{float(p["total"]["value"]):,.0f} - apart by {basis_gap:,.0f}')
 check("total count matches", o["period_value"]["consignments"] == p["total"]["count"], str(p["total"]["count"]))
 check("total lines match", o["period_value"]["lines"] == p["total"]["lines"], str(p["total"]["lines"]))
 # One money basis per screen: the population tiles must sum the same in-window

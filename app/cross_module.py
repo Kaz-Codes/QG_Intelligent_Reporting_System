@@ -4,7 +4,7 @@ from sqlalchemy import select, cast, String, func
 from sqlalchemy.orm import selectinload, joinedload
 
 from app.logistics.models import LogisticsConsignment
-from app.imports.models import Consignment, ConsignmentBatchGroup
+from app.imports.models import Consignment, ConsignmentBatchGroup, ConsignmentItem
 from app.trucking.models import TruckingConsignment
 from app.imports.order_view import (
     line_item_name, line_specification, order_instrument_number,
@@ -272,7 +272,9 @@ def derive_import_fob_jobs(db):
         .where(Consignment.is_deleted == False)
         .where(Consignment.sent_to_logistics_at.is_not(None))
         .options(
-            selectinload(Consignment.items),
+            # `.order_item` too: `line_item_name` reads through it, so without
+            # this the summary above is one query per line.
+            selectinload(Consignment.items).joinedload(ConsignmentItem.order_item),
             # Same correction as the trucking queue above: the supplier and the
             # origin this list shows belong to the ORDER. The clearing agent
             # stays on the batch (a different agent per shipment is normal), so
@@ -287,7 +289,13 @@ def derive_import_fob_jobs(db):
     jobs = []
     for consignment in consignments:
         items = [item for item in consignment.items if not item.is_deleted]
-        first = items[0].item_name if items else None
+        # `line_item_name`, not `item.item_name` - the field moved to the order
+        # line in step 6 and this call site was missed, because NOTHING ON THE
+        # TEST DATA REACHED IT. The loop body only runs for a consignment with
+        # `sent_to_logistics_at` set, and the rebuilt dev database had none, so
+        # the route returned an empty list and passed the sweep vacuously. The
+        # restored production-shaped backup has one, and it 500s.
+        first = line_item_name(items[0]) if items else None
         more = len(items) - 1
 
         jobs.append({
