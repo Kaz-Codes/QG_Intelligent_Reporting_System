@@ -9,6 +9,42 @@ schema** and it **changes what the chatbot's views read**. A normal
 leaves the server in a state the migration can no longer repair without manual
 work. The order below is not a suggestion.
 
+---
+
+## NO LOADER SCRIPT RUNS ON THE SERVER. NOT AT ANY POINT IN THIS DEPLOY.
+
+Not before, not after, not "just to refresh the data", not if a number looks
+wrong afterwards. Specifically **none** of:
+
+```
+app/loading/scripts/load_all.py
+app/loading/scripts/load_imports.py
+app/loading/scripts/load_logistics.py
+app/loading/scripts/reload_changed.py
+```
+
+**Why.** Production already holds its data, and `alembic upgrade head` (step 5)
+carries it forward — it COPIES the existing values onto the new tables. There is
+nothing for a loader to add. The loaders exist to build a database from the
+Excel workbooks, which is a different job from deploying a schema change.
+
+**What it costs when this is ignored.** On 9 September the dev database was
+rebuilt from the workbooks. It came back with **1 user account instead of 13** —
+every named login gone, leaving only a freshly seeded `admin` — plus all 21
+change-history rows, 5 consignments, 2 status-update rows, 5 ETA revisions and
+1 payment. None of that is in any workbook, so nothing put it back. The only
+reason it is recoverable at all is that someone had taken a backup that morning.
+
+The loaders on `main` today are better behaved than that: `load_all` drops only
+the four stores tables and counts the app-owned tables before and after. **That
+is not a reason to run one.** It narrows the blast radius; it does not make a
+reload part of a deploy.
+
+If the data genuinely looks wrong after deploying, the answer is the rollback in
+step 10, not a reload.
+
+---
+
 **Legend**
 
 - 🔐 needs **Administrator** (an elevated PowerShell).
@@ -263,10 +299,11 @@ A failing `tsc -b` here is a real failure. Do not work around it with
 
 ---
 
-## 7. The semantic views ⚠️ — expect this to fail, and know why
+## 7. The semantic views
 
-The chatbot reads two views (`v_import_shafts`, `v_item_demand_picture`) that
-were built over columns this release moved. Muhtasham's branch repoints both.
+The chatbot reads its import answers through two views (`v_import_shafts`,
+`v_item_demand_picture`) built over columns this release moved. Both are
+repointed on `main`.
 
 ```powershell
 & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost `
@@ -274,34 +311,34 @@ were built over columns this release moved. Muhtasham's branch repoints both.
     -f .\chatbot_backend\database\semantic_views.sql
 ```
 
-**`-v ON_ERROR_STOP=1` is not optional.** Without it psql prints the error and
-carries on, the run looks successful, and the view silently keeps its old
-definition.
+**Expect exit code 0, and no output containing `ERROR`.** Re-running it is
+safe: every view in the file is now `DROP VIEW IF EXISTS ... CASCADE` followed
+by `CREATE VIEW`, so a second run behaves exactly like the first.
 
-### What will happen, until Muhtasham's one-line fix lands
+**`-v ON_ERROR_STOP=1` is still not optional**, even though the file is now
+expected to succeed. Without it, psql prints an error and carries on: a run
+that half-applied would look identical to one that worked, and the failure mode
+is a view silently left pointing at columns nothing writes any more.
+
+### If it errors
+
+Something is wrong — do not work around it. **Stop, leave the old views in
+place, and report the message.** A chatbot giving slightly stale import answers
+is a far smaller problem than a half-applied view file. In particular, if you
+see
 
 ```
-psql:chatbot_backend/database/semantic_views.sql:182: ERROR:
-  cannot change data type of view column "unit_price" from numeric(14,4) to numeric(18,4)
+ERROR: cannot change data type of view column "unit_price"
+       from numeric(14,4) to numeric(18,4)
 ```
 
-Exit code **3**, and **everything after line 182 never runs.** `CREATE OR
-REPLACE VIEW` cannot change a column's type, and `unit_price` widens when it
-moves from `consignment_items` to `consignment_order_items`.
+then the code being deployed is OLDER than the fix: that error comes from
+`CREATE OR REPLACE VIEW`, which this file no longer uses. Check step 3 actually
+pulled.
 
-### The workaround — proven in the rehearsal
+### Verify — ask the database, not the file
 
-Drop that one view first, then run the file again:
-
-```powershell
-& "...\psql.exe" -U postgres -h localhost -d supply_chain_erp `
-    -c "DROP VIEW IF EXISTS v_import_shafts CASCADE;"
-& "...\psql.exe" -U postgres -h localhost -d supply_chain_erp `
-    -v ON_ERROR_STOP=1 -f .\chatbot_backend\database\semantic_views.sql
-```
-
-That exits **0**. Verify no view still reads the moved columns — ask the
-database, do not read the file:
+Reading the SQL would not have caught the original defect. This would:
 
 ```sql
 SELECT v.relname AS view, t.relname AS reads, a.attname AS column
@@ -319,11 +356,17 @@ SELECT v.relname AS view, t.relname AS reads, a.attname AS column
 app no longer maintains, and the chatbot will answer with values frozen at
 whatever they were before this release — silently, with nothing to notice.
 
-If the drop-first workaround is also refused, **stop and leave the old views in
-place.** The chatbot returning slightly stale import answers is a much smaller
-problem than a half-applied view file.
-
----
+> **Verified on 12 September 2026**, on a scratch database restored from
+> `erp_backup_live_20260909_0952.sql` and migrated to `d5e81b6a2c07` — i.e. one
+> that already held the OLD view definitions, which is the condition the
+> original defect needed. The file was applied **twice in a row** with
+> `-v ON_ERROR_STOP=1`; both runs exited 0 with no `ERROR` line, the `pg_depend`
+> query returned zero rows, and `v_import_shafts` agreed with
+> `/dashboard/imports?shafts_only=true` exactly (21 consignments, 97 lines).
+>
+> The earlier drop-`v_import_shafts`-first workaround is **no longer needed**
+> and has been removed from this file. If you are following an older printout
+> that mentions it, use this version instead.
 
 ## 8. Start both services 🔐
 
@@ -439,6 +482,11 @@ passed against the migrated database: dashboard consistency 79/0, the export
 asserted column by column, the route sweep, 448 revert assertions over the
 21 genuine pre-migration history rows, 91 pytest, `configure_mappers()`, and
 `tsc -b`.
+
+**Step 7 was re-verified on the same day against the merged view fix**, on a
+scratch database that already held the OLD view definitions — the condition the
+original defect needed. Applied twice with `-v ON_ERROR_STOP=1`, both runs exit
+0, `pg_depend` clean, and `v_import_shafts` matching the app exactly.
 
 **What the rehearsal could not cover, and is therefore ⚠️ above:** the NSSM
 services, the IIS/static serving of `dist/`, `pull-latest.bat` against the
