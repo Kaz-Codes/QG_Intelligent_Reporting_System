@@ -2187,12 +2187,52 @@ errored, and nothing will. **§7 item 3 predicted "chatbot answers go wrong with
 nothing to notice"; this is the mechanism, and it starts the day step 6
 deploys** — not the day Revision B runs.
 
+##### Verified against his branch — the views are repointed, with one defect
+
+`origin/chatbot-and-loaders` repoints both views, and it covers **all seven**
+moved columns: `c.supplier_id`→`g.supplier_id`, `c.origin`→`g.origin`, and
+`ci.{item_code, item_name, specification, unit_price, unit_of_measurement}`→`oi.*`
+— including the `item_name` regexes in `v_import_shafts`'s `CASE` and `WHERE`,
+which are easy to miss because they are predicates rather than output columns.
+Applied to a scratch database the views hold **zero** dependencies on the
+orphaned columns, and `v_import_shafts` agrees with the app exactly: 22
+consignments over 100 lines, the same as `/dashboard/imports?shafts_only=true`.
+
+**But the script cannot be applied to a database that already has the views.**
+`CREATE OR REPLACE VIEW` cannot change a column's type, and this change does:
+
+```
+ERROR: cannot change data type of view column "unit_price"
+       from numeric(14,4) to numeric(18,4)
+```
+
+`consignment_items.unit_price` is `Numeric(14,4)`; `consignment_order_items.unit_price`
+is `Numeric(18,4)`. On a fresh database the script is fine. On the dev or
+production database it fails **on that one statement and psql carries on**, so
+the run looks successful, `v_import_shafts` silently stays on the orphaned
+columns, and Revision B then fails on it exactly as before. The file needs a
+`DROP VIEW IF EXISTS v_import_shafts;` ahead of the create, or the deploy needs
+`psql -v ON_ERROR_STOP=1` so the failure is loud. **That file is not this
+project's to change** — reported, not fixed.
+
+##### The loaders write BOTH copies, and that is correct until Revision B
+
+`load_05_consignments.CONSIGNMENT_COLUMNS` still lists the nine orphaned header
+columns alongside `BATCH_GROUP_COLUMNS`, which is precisely what §4.7's rule
+requires during the gap. **It also means Revision B has a fourth part**: those
+nine names, and the thirteen item ones, must come out of the loader's column
+lists in the same release as the drop, or the next `load_all` fails on a column
+that no longer exists.
+
 ##### What Revision B therefore is
 
 1. `DROP VIEW v_import_shafts`, `DROP VIEW v_item_demand_picture`;
 2. the column drops;
 3. recreate both, reading `consignment_batch_groups` and
-   `consignment_order_items`.
+   `consignment_order_items` — **already written**, on
+   `origin/chatbot-and-loaders`, subject to the `CREATE OR REPLACE` defect above;
+4. take the nine orphaned header columns and the thirteen item ones out of the
+   loaders' column lists, in the same release.
 
 The `downgrade()` must recreate the ORIGINAL definitions, not the new ones, or a
 rollback leaves views over columns that no longer exist. And step 3 is a change
