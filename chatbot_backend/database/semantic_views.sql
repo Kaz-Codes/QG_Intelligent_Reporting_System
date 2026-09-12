@@ -19,8 +19,35 @@
 --  depends on it changes with it - there is no second copy in a prompt to
 --  drift out of step.
 --
---  Apply with:  psql -d supply_chain_db -f database/semantic_views.sql
---  Re-runnable: every view is CREATE OR REPLACE.
+--  Apply with:  psql -d supply_chain_db -f database/semantic_views.sql -v ON_ERROR_STOP=1
+--
+--  EVERY VIEW IS DROP-THEN-CREATE, not CREATE OR REPLACE, and that is a rule
+--  now rather than a per-view judgement call. CREATE OR REPLACE looks
+--  re-runnable and silently is not: it refuses to change a column's type or
+--  to insert/reorder a column, which are exactly the changes a view over a
+--  live, evolving schema eventually needs. v_import_shafts hit this for
+--  real when unit_price moved from consignment_items (numeric(14,4)) to
+--  consignment_order_items (numeric(18,4)) - CREATE OR REPLACE VIEW failed
+--  with "cannot change data type of view column" against a database that
+--  already had the old view.
+--
+--  THIS IS NOT ONLY ABOUT THAT ONE ERROR MESSAGE. `psql` run WITHOUT
+--  `-v ON_ERROR_STOP=1` does not stop at a failed statement by default - so
+--  on a real deploy the broken statement fails, everything AFTER it in the
+--  file still applies, and the run looks successful with nothing on screen
+--  to say v_import_shafts stayed pointed at columns nothing writes any more.
+--  And the OTHER caller of this file, `load_all.create_semantic_views()`,
+--  sends the whole file as one `cursor.execute()` call with no
+--  ON_ERROR_STOP equivalent - there every statement is one implicit
+--  transaction, so ONE failing CREATE OR REPLACE aborts and rolls back
+--  EVERY view in the file, including the ones with no problem at all.
+--  Measured: v_import_shafts failing mid-file left v_item_stock_position -
+--  a stores-only view nothing about this migration touches - uncreated too.
+--
+--  So: always `DROP VIEW IF EXISTS name CASCADE;` immediately before a
+--  view's `CREATE VIEW`, even one that looks safe today. CASCADE costs
+--  nothing when nothing depends on the view, and re-running the whole file
+--  twice in a row must always succeed with no error either way.
 -- ---------------------------------------------------------------------------
 
 
@@ -69,8 +96,8 @@
 --     -- add the display name only when you need it:
 --     JOIN v_branches b ON b.branch_code = a.branch_code
 -- ---------------------------------------------------------------------------
-DROP VIEW IF EXISTS v_branch_aliases;
-DROP VIEW IF EXISTS v_branches;
+DROP VIEW IF EXISTS v_branch_aliases CASCADE;
+DROP VIEW IF EXISTS v_branches CASCADE;
 
 CREATE VIEW v_branches AS
 SELECT * FROM (
@@ -147,8 +174,16 @@ SELECT * FROM (
 -- quantity, current_status, eta and etd all STAY where they were: quantity is
 -- what THIS shipment carries (a per-batch fact), the rest are per-batch
 -- shipping/status facts that were never shared across batches.
+--
+-- DROP-THEN-CREATE, not CREATE OR REPLACE: unit_price changed type across
+-- this exact move (consignment_items.unit_price is numeric(14,4);
+-- consignment_order_items.unit_price is numeric(18,4)), and CREATE OR
+-- REPLACE VIEW cannot change a column's type. It failed with "cannot change
+-- data type of view column" against a database that already had the old
+-- view - see the file header.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_import_shafts AS
+DROP VIEW IF EXISTS v_import_shafts CASCADE;
+CREATE VIEW v_import_shafts AS
 SELECT ci.id,
        ci.consignment_id,
        oi.item_code,
@@ -202,7 +237,8 @@ WHERE ci.is_deleted = false
 -- ("Forged Round Bar" here, "Forged Steel Round Bar" there). Neither is wrong -
 -- pick by whether the question is about the item master or about imports.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_import_shaft_material AS
+DROP VIEW IF EXISTS v_import_shaft_material CASCADE;
+CREATE VIEW v_import_shaft_material AS
 SELECT i.id,
        i.item_code,
        i.name,
@@ -232,12 +268,12 @@ WHERE lower(trim(i.name)) IN (
 -- ---------------------------------------------------------------------------
 -- Dropped rather than replaced: CREATE OR REPLACE cannot add a column to
 -- an existing view, and the dependent views are rebuilt below anyway.
-DROP VIEW IF EXISTS v_item_demand_picture;
-DROP VIEW IF EXISTS v_dead_stock;
-DROP VIEW IF EXISTS v_branch_depleted_items;
-DROP VIEW IF EXISTS v_out_of_stock_by_branch;
-DROP VIEW IF EXISTS v_out_of_stock_items;
-DROP VIEW IF EXISTS v_item_stock_position;
+DROP VIEW IF EXISTS v_item_demand_picture CASCADE;
+DROP VIEW IF EXISTS v_dead_stock CASCADE;
+DROP VIEW IF EXISTS v_branch_depleted_items CASCADE;
+DROP VIEW IF EXISTS v_out_of_stock_by_branch CASCADE;
+DROP VIEW IF EXISTS v_out_of_stock_items CASCADE;
+DROP VIEW IF EXISTS v_item_stock_position CASCADE;
 CREATE VIEW v_item_stock_position AS
 SELECT s.item_code,
        MAX(s.item_name)                            AS item_name,
@@ -444,7 +480,8 @@ WHERE pos.available_qty > 0
 -- name + spec variant, so Round Bar alone is over a thousand codes but one
 -- type. Counting codes overstates a type question more than twentyfold.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_item_types AS
+DROP VIEW IF EXISTS v_item_types CASCADE;
+CREATE VIEW v_item_types AS
 SELECT lower(trim(i.name))        AS item_type,
        MIN(i.name)                AS display_name,
        COUNT(*)                   AS item_codes,
@@ -461,7 +498,8 @@ GROUP BY lower(trim(i.name));
 -- reservations that have not been consumed, and including them overstates the
 -- burn rate. There is no status called 'Issued'.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_item_consumption_monthly AS
+DROP VIEW IF EXISTS v_item_consumption_monthly CASCADE;
+CREATE VIEW v_item_consumption_monthly AS
 SELECT iss.item_code,
        date_trunc('month', iss.from_date)::date AS period,
        SUM(COALESCE(iss.quantity, 0))           AS quantity,
