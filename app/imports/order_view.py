@@ -57,6 +57,15 @@ def order_supplier_name(consignment):
     return _related_name(consignment, "supplier")
 
 
+def order_supplier_id(consignment):
+    """The supplier's id, without loading the Supplier row.
+
+    For counting distinct suppliers, where the name is not wanted and loading
+    one master per consignment to read an id would be a query per row.
+    """
+    return _field(consignment, "supplier_id")
+
+
 def order_branch(consignment):
     """The order's header-level branch — `works_branch`, which succeeded BOTH
     the free-text `works` column and the old header `branch_id`. Works and

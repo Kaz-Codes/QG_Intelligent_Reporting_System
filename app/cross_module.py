@@ -4,7 +4,7 @@ from sqlalchemy import select, cast, String, func
 from sqlalchemy.orm import selectinload, joinedload
 
 from app.logistics.models import LogisticsConsignment
-from app.imports.models import Consignment
+from app.imports.models import Consignment, ConsignmentBatchGroup
 from app.trucking.models import TruckingConsignment
 from app.imports.order_view import order_instrument_number, order_origin, order_supplier_name
 
@@ -169,7 +169,17 @@ def derive_open_requests(db):
         .where(_not_taken("from-import-fob", Consignment.id))
         .options(
             selectinload(Consignment.items),
-            joinedload(Consignment.supplier),
+            # THE ORDER'S SUPPLIER, because that is what the rows below read.
+            #
+            # This eager-loaded `Consignment.supplier` — the HEADER relationship
+            # — while the snapshot at :183-185 reads through
+            # order_supplier_name() / order_origin(), which walk
+            # `batch_group.supplier`. So the eager load warmed a relationship
+            # nothing looked at and the one that WAS looked at lazy-loaded once
+            # per row: a live N+1 on this endpoint, introduced by part 3
+            # repointing the reads without repointing the load beside them.
+            joinedload(Consignment.batch_group)
+                .joinedload(ConsignmentBatchGroup.supplier),
         )
         .order_by(Consignment.sent_to_trucking_at.desc())
     ).scalars().all()
@@ -260,7 +270,12 @@ def derive_import_fob_jobs(db):
         .where(Consignment.sent_to_logistics_at.is_not(None))
         .options(
             selectinload(Consignment.items),
-            joinedload(Consignment.supplier),
+            # Same correction as the trucking queue above: the supplier and the
+            # origin this list shows belong to the ORDER. The clearing agent
+            # stays on the batch (a different agent per shipment is normal), so
+            # that one is loaded from the consignment as before.
+            joinedload(Consignment.batch_group)
+                .joinedload(ConsignmentBatchGroup.supplier),
             joinedload(Consignment.clearing_agent),
         )
         .order_by(Consignment.sent_to_logistics_at.desc())

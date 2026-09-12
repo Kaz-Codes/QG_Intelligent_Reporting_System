@@ -6,7 +6,8 @@ from app.dashboard.period import build_trend
 from app.enums import Status
 from app.imports.demand_dates import earliest_required_date
 from app.imports.order_view import (
-    order_branch_name, order_exchange_rate, order_reference, order_supplier_name,
+    order_branch_name, order_exchange_rate, order_reference, order_supplier_id,
+    order_supplier_name,
     order_type,
 )
 
@@ -147,8 +148,13 @@ def kpis(consignments):
         if consignment.current_status == UNDER_CLEARANCE_STATUS:
             under_clearance = under_clearance + 1
 
-        if consignment.supplier_id is not None:
-            suppliers.add(consignment.supplier_id)
+        # The ORDER's supplier, not the batch's. Missed by part 3, which
+        # repointed every other supplier read on this screen — this one is a
+        # bare id rather than a `.supplier.name`, so it did not match the scan
+        # that found the rest.
+        supplier_id = order_supplier_id(consignment)
+        if supplier_id is not None:
+            suppliers.add(supplier_id)
 
     return {
         "total_value_pkr": total_value,
