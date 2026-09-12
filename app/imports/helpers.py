@@ -827,7 +827,22 @@ def add_in_consignment_change_history(
     direction.
     """
 
-    serialized_deleted_items = serialize_many(deleted_items)
+    # `item_current_values`, NOT `serialize_many` - the same mapper trap as
+    # `serialize_items`, at a different boundary. A ConsignmentItem's mapper no
+    # longer carries the thirteen identity/price fields, so serialize_many would
+    # store a deleted line as a quantity and a landed cost with no item on it.
+    #
+    # Nothing READS those keys back on revert (`add_or_delete` touches `id` and
+    # `is_deleted` and nothing else), so this is not data loss. It is the stored
+    # RECORD going hollow: the change-history screen renders these rows through
+    # `itemSummary`, which reads `item_name`, `item_code` and
+    # `unit_of_measurement` - so every add/remove card would read "3" where it
+    # used to read "Forged Steel Round Bar (IMP-A51A714E) - 3 Pcs".
+    #
+    # PAYMENTS STAY ON serialize_many, deliberately. Nothing moved out of
+    # `payments`; there is no order row above it, so its mapper is still the
+    # whole truth about a payment.
+    serialized_deleted_items = [item_current_values(item) for item in deleted_items]
 
     serialized_deleted_payments = serialize_many(deleted_payments)
 

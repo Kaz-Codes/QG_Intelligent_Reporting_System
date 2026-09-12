@@ -9,6 +9,7 @@ from app.imports.helpers import updated_fields, updated_payments, updated_items,
 
 from app.imports.helpers import (
     fetch_consignment, consignment_reference, is_closed, CLOSED_STATUS_VALUE,
+    item_current_values,
 )
 from app.imports.models import ConsignmentItem, Payment
 from app.imports.serializers import serialize_consignment, serialize_many
@@ -262,7 +263,10 @@ def update_consignment(
         db.flush()
 
         # Adding changes in consignment change history and eta revisions and status updates
-        add_in_consignment_change_history(updation_dict, serialize_many(created_items), serialize_many(created_payments), deleted_items, deleted_payments, item_updates, payment_updates, consignment, user, db, group_updates=group_updates)
+        # created_items goes through item_current_values for the same reason
+        # deleted_items does (app/imports/helpers.py) - serialize_many walks the
+        # mapper and the item fields have left it. Payments keep serialize_many.
+        add_in_consignment_change_history(updation_dict, [item_current_values(i) for i in created_items], serialize_many(created_payments), deleted_items, deleted_payments, item_updates, payment_updates, consignment, user, db, group_updates=group_updates)
 
         add_in_eta_revision_history(updation_dict, consignment, user, db)
         add_in_status_change_history(updation_dict, consignment, user, db)
