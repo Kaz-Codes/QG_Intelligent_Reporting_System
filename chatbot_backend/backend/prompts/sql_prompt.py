@@ -86,7 +86,8 @@ HARD RULES
    parent:
        FROM consignments c
        WHERE EXISTS (SELECT 1 FROM consignment_items ci
-                     WHERE ci.consignment_id = c.id AND ci.item_name ~* 'resin')
+                     JOIN consignment_order_items oi ON oi.id = ci.order_item_id
+                     WHERE ci.consignment_id = c.id AND oi.item_name ~* 'resin')
    That rolls every matching line up into its header. Measured on resin: 15
    matching import lines came back as 13 consignments, and one consignment
    hiding THREE resin lines (Liquid Phenolic Resin + two Curing Agent for
@@ -94,12 +95,14 @@ HARD RULES
    so the user could not even see which resin each row was about.
    A SECOND way to write the exact same bug, seen just as often: GROUP BY the
    header id and STRING_AGG the matched column back onto one line -
-       SELECT c.instrument_number, c.current_status,
-              STRING_AGG(DISTINCT ci.item_name, ', ') AS matched_items
+       SELECT g.instrument_number, c.current_status,
+              STRING_AGG(DISTINCT oi.item_name, ', ') AS matched_items
        FROM consignments c
+       JOIN consignment_batch_groups g ON g.id = c.batch_group_id
        JOIN consignment_items ci ON ci.consignment_id = c.id AND ci.is_deleted = false
-       WHERE c.is_deleted = false AND ci.item_name ~* '[[:<:]]resins?[[:>:]]'
-       GROUP BY c.id, c.instrument_number, c.current_status
+       JOIN consignment_order_items oi ON oi.id = ci.order_item_id
+       WHERE c.is_deleted = false AND oi.item_name ~* '[[:<:]]resins?[[:>:]]'
+       GROUP BY c.id, g.instrument_number, c.current_status
    This LOOKS like it fixes the EXISTS trap above - the item name IS in the
    output now - but GROUP BY c.id still collapses every matching line on a
    consignment into one output row, same as EXISTS did. Measured on the same
@@ -109,16 +112,39 @@ HARD RULES
    a plain JOIN with no aggregation is a line-level answer by construction, and
    there is no need to compress it back down.
    Write it as a JOIN and project the matched column instead, with NO GROUP BY:
-       SELECT ci.item_name, c.instrument_number, c.current_status, ...
+       SELECT oi.item_name, g.instrument_number, c.current_status, ...
        FROM consignments c
+       JOIN consignment_batch_groups g ON g.id = c.batch_group_id
        JOIN consignment_items ci ON ci.consignment_id = c.id
         AND ci.is_deleted = false
-       WHERE c.is_deleted = false AND ci.item_name ~* '[[:<:]]resins?[[:>:]]'
+       JOIN consignment_order_items oi ON oi.id = ci.order_item_id
+       WHERE c.is_deleted = false AND oi.item_name ~* '[[:<:]]resins?[[:>:]]'
+   (instrument_number and item_name moved off consignments/consignment_items
+   onto consignment_batch_groups/consignment_order_items - the imports module
+   is mid-migration onto batch groups, see the schema notes. Both joins are
+   on a NOT NULL foreign key, so both stay INNER.)
    THIS DOES NOT CONFLICT WITH COUNTING. "How many shipments" still counts
    DISTINCT consignments - one consignment carrying eight shaft lines is one
    shipment. But LISTING what is on those shipments is a line-level question:
    count headers, list lines. If the user asks for both, give the shipment count
    AND the line detail, and say which is which.
+   "SHIPMENT" AND "ORDER/LC" ARE NOT THE SAME COUNT, and the imports batching
+   migration is what makes the two diverge. A consignments row is one BATCH -
+   one physical shipment; consignment_batch_groups is the ORDER (the LC) that
+   one or more batches are shipped against. As of this writing every group
+   holds exactly one batch, so COUNT(DISTINCT c.id) and
+   COUNT(DISTINCT c.batch_group_id) give the same number and the distinction
+   costs nothing to observe. It stops being free the day one LC ships in two
+   parts:
+     - ARRIVAL-shaped questions ("how many shipments arrived", "consignments
+       in transit", "shafts imported") count consignments (batch rows) - two
+       batches of one LC are two arrivals, and each can be at a different
+       stage of the pipeline.
+     - COMMERCIAL-shaped questions ("how many LCs/orders", "how many imports
+       from supplier X") count DISTINCT c.batch_group_id - two batches of one
+       LC are ONE order, one supplier relationship, one thing that was agreed.
+   When the question does not clearly say which it means, say which one you
+   picked and why, the same way any other ambiguous term mapping is stated.
 12. NEVER `FULL OUTER JOIN`, `RIGHT JOIN` OR `CROSS JOIN`. Every table here
    hangs child-to-parent, so an answer is built by NARROWING from one side.
    FULL OUTER does the opposite - it keeps the unmatched rows of BOTH sides, so
@@ -266,7 +292,9 @@ QUERY STYLE
   column ALIASED to `uom` - a quantity without its real unit is incomplete.
   There is NO column literally called `uom`; always alias the real one:
       items.default_unit_of_measurement AS uom   (joined on item_code)
-      consignment_items.unit_of_measurement AS uom   (for import/consignment lines)
+      consignment_order_items.unit_of_measurement AS uom   (for import lines -
+        joined via consignment_items.order_item_id, NOT NULL; moved off
+        consignment_items as part of the imports batching migration)
   This does NOT apply to a trend/forecast series aggregated across items - see
   above.
 - TIES IN RANKINGS: for a "top / bottom / highest / lowest N" question, add a

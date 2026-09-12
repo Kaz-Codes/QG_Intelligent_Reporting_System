@@ -22,9 +22,10 @@ is measured from). The revision timestamp is not in the sheet, so created_at
 falls to load time.
 """
 
+import re
 from pathlib import Path
 
-from app.enums import Status
+from app.enums import ModeOfShipment, PaymentInstrument, Status, UnitOfMeasurement
 from app.loading.scripts.etl_common import (
     read_and_concat, list_excel_files, clean_text, clean_status, clean_int,
     clean_number, clean_date, clean_date_any, bulk_insert,
@@ -202,6 +203,152 @@ def map_consignment_type(value):
     return None
 
 
+#--------------------------------------
+# mode_of_shipment / payment_instrument / unit_of_measurement
+#
+# Alembic revision d5e81b6a2c07 normalised these three columns onto their
+# enums once already — see CLAUDE.md, "A STRING COLUMN DOES NOT ENFORCE THE
+# ENUM, AND THE LOADERS GO ROUND IT." This loader never mapped them, only
+# `currency` and `consignment_type` above got that treatment, so a reload
+# would undo the fix and put 96.6% of consignments back where the request
+# schema 422s on a field the operator never touched.
+#
+# Matched case- and whitespace-insensitively: the sheet has "By  Air" with
+# two spaces. UNRECOGNISED VALUES ARE LEFT ALONE AND REPORTED, never
+# blanked to None — that is different from map_status/map_incoterm above,
+# which blank on purpose. An enum-backed column can hold anything (the
+# column is a plain String), so leaving the raw value in place costs
+# nothing today and keeps the evidence that the sheet changed shape,
+# rather than discarding it the way a silent None would.
+#--------------------------------------
+
+MODE_OF_SHIPMENT_VALUES = [m.value for m in ModeOfShipment]
+PAYMENT_INSTRUMENT_VALUES = [p.value for p in PaymentInstrument]
+UNIT_OF_MEASUREMENT_VALUES = [u.value for u in UnitOfMeasurement]
+
+_unmapped_mode_of_shipment = set()
+_unmapped_payment_instrument = set()
+_unmapped_unit_of_measurement = set()
+
+MODE_OF_SHIPMENT_MAP = {
+    "sea": ModeOfShipment.SEA_FREIGHT_FCL.value,
+    "by sea": ModeOfShipment.SEA_FREIGHT_FCL.value,
+    "lcl": ModeOfShipment.SEA_FREIGHT_LCL.value,
+    "air": ModeOfShipment.AIR_FREIGHT.value,
+    "by air": ModeOfShipment.AIR_FREIGHT.value,
+}
+
+# A leading count/size token — "1 x 20' OT", "2 x 20' + 2 x 40' OT" —
+# describes a container booking, not a shipment mode. Every such row in the
+# sheet is sea freight, so it maps the same way a plain "Sea" does.
+_CONTAINER_SPEC = re.compile(r"^\d+\s*x\s*\d+")
+
+
+def map_mode_of_shipment(value):
+    s = clean_text(value)
+    if not s:
+        return None
+
+    key = " ".join(s.split()).lower()
+
+    if key in MODE_OF_SHIPMENT_MAP:
+        return MODE_OF_SHIPMENT_MAP[key]
+
+    if _CONTAINER_SPEC.match(key):
+        return ModeOfShipment.SEA_FREIGHT_FCL.value
+
+    for canonical in MODE_OF_SHIPMENT_VALUES:
+        if key == canonical.lower():
+            return canonical
+
+    _unmapped_mode_of_shipment.add(s)
+    return s
+
+
+PAYMENT_INSTRUMENT_MAP = {
+    "advance": PaymentInstrument.ADV.value,
+    "tt": PaymentInstrument.ADV.value,
+    "100%lc": PaymentInstrument.LC.value,
+}
+
+# Real, named payment types the sheet uses that the enum has no slot for —
+# widening it is a business call (design doc, "widen the enums"), not made
+# here. Blanked rather than left raw, the same as an out-of-enum value the
+# migration already treated this way.
+PAYMENT_INSTRUMENT_BLANK = {"foc", "exp", "contract"}
+
+
+def map_payment_instrument(value):
+    s = clean_text(value)
+    if not s:
+        return None
+
+    key = " ".join(s.split()).lower()
+
+    if key in PAYMENT_INSTRUMENT_BLANK:
+        return None
+
+    if key in PAYMENT_INSTRUMENT_MAP:
+        return PAYMENT_INSTRUMENT_MAP[key]
+
+    for canonical in PAYMENT_INSTRUMENT_VALUES:
+        if key == canonical.lower():
+            return canonical
+
+    _unmapped_payment_instrument.add(s)
+    return s
+
+
+UNIT_OF_MEASUREMENT_MAP = {
+    "kgs": UnitOfMeasurement.KG.value,
+    "tons": UnitOfMeasurement.TON.value,
+    # Metric tonne — an UNCONFIRMED reading. The enum has no separate MT
+    # value, only Ton, and this is the closest match rather than a
+    # confirmed business decision. Flagged rather than assumed silently.
+    "mt": UnitOfMeasurement.TON.value,
+    "pc": UnitOfMeasurement.PCS.value,
+    "pc.": UnitOfMeasurement.PCS.value,
+    "pcs.": UnitOfMeasurement.PCS.value,
+}
+
+
+def map_unit_of_measurement(value):
+    s = clean_text(value)
+    if not s:
+        return None
+
+    key = " ".join(s.split()).lower()
+
+    if key in UNIT_OF_MEASUREMENT_MAP:
+        return UNIT_OF_MEASUREMENT_MAP[key]
+
+    for canonical in UNIT_OF_MEASUREMENT_VALUES:
+        if key == canonical.lower():
+            return canonical
+
+    _unmapped_unit_of_measurement.add(s)
+    return s
+
+
+def _report_unmapped():
+    """Print anything that matched no known spelling, for all three columns.
+
+    Called once at the end of a load. Nothing here BLOCKS the load — the
+    values are already sitting in the row tuples, left as-is — this is only
+    so an unrecognised spelling is seen rather than discovered later as a
+    422 nobody can explain.
+    """
+    reports = [
+        ("mode_of_shipment", _unmapped_mode_of_shipment),
+        ("payment_instrument", _unmapped_payment_instrument),
+        ("unit_of_measurement", _unmapped_unit_of_measurement),
+    ]
+    for label, values in reports:
+        if values:
+            print(f"  ! {label}: {len(values)} unrecognised value(s), left as-is: "
+                  f"{sorted(values)}")
+
+
 def _first(rows, col, cleaner):
     """First non-null cleaned value of a column across a group of rows."""
     for r in rows:
@@ -294,6 +441,18 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             branch_id = None
             dropped_branches += 1
 
+        # Computed ONCE and written to both consignments AND the group below,
+        # rather than mapped twice from two separate _first() calls. Mapping
+        # it twice cannot actually disagree — both calls read the same rows —
+        # but a single shared value is what makes that true by construction
+        # rather than by coincidence, which is the whole lesson of the
+        # migration that only fixed the consignments copy and left the
+        # group's holding 'Advance' (CLAUDE.md, "A STRING COLUMN DOES NOT
+        # ENFORCE THE ENUM").
+        payment_instrument = map_payment_instrument(
+            _first(rows, "Payment Mode", lambda v: v)
+        )
+
         consignment_rows.append((
             consignment_id,
             branch_id,
@@ -304,12 +463,12 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             _first(rows, "Country", clean_text),           # origin
             map_currency(_first(rows, "Currency", lambda v: v)),
             map_consignment_type(_first(rows, "EFS", lambda v: v)),
-            _first(rows, "Mode of Shipment", clean_text),
+            map_mode_of_shipment(_first(rows, "Mode of Shipment", lambda v: v)),
             _first(rows, "Rediness Dt.", clean_date),
             _first(rows, "ETD", clean_date),
             eta,
             _first(rows, "ETA Works", clean_date_any),
-            _first(rows, "Payment Mode", clean_text),      # payment_instrument
+            payment_instrument,
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Ret Dt.", clean_date),
             _first(rows, "Req. Dt.", clean_date),
@@ -341,7 +500,7 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             map_currency(_first(rows, "Currency", lambda v: v)),
             map_consignment_type(_first(rows, "EFS", lambda v: v)),
             None,                                          # incoterm: not in the sheet
-            _first(rows, "Payment Mode", clean_text),      # payment_instrument
+            payment_instrument,
             _first(rows, "Payment Ref No", clean_text),    # instrument_number
             _first(rows, "Exchange Rate", clean_number),
             None,                                          # rate_booked_on: not in the sheet
@@ -364,7 +523,7 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             hs_code = clean_text(r.get("H.S. Code"))
             quantity = clean_number(r.get("Qty."))
             unit_price = clean_number(r.get("Unit Price"))
-            uom = clean_text(r.get("UOM"))
+            uom = map_unit_of_measurement(r.get("UOM"))
             job_number = clean_text(r.get("Job No"))
             mo_number = clean_text(r.get("MO No"))
 
@@ -564,4 +723,5 @@ def load_consignments(conn):
           f"({linked} linked to an item, {len(item_rows) - linked} without a master match)")
     print(f"Batch groups : inserted {len(group_rows)} rows (every consignment a group of one)")
     print(f"Order items : inserted {len(order_item_rows)} rows")
+    _report_unmapped()
     print(f"ETA revisions : inserted {len(eta_rows)} rows")

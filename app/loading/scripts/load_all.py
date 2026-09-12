@@ -220,20 +220,37 @@ def run_post_load_steps():
         id and dies on the primary key, surfacing as a bare "Internal server
         error" with nothing to point at.
 
-    It ENDS WITH A CHECK. The loaders' dangerous failure is not a crash but a
-    column that quietly arrives empty when a workbook is re-shaped — that is how
-    `ppc_store` went NULL on all 65,520 rows and left the cycle time blank with
-    nobody any the wiser. `verify_load` reports on every column that has done
-    that before, and repairs the ones it can.
+    IT ALSO ENDS WITH TWO PLAUSIBILITY CHECKS, newly wired in here.
+    `post_load.verify_dates` and `post_load.verify_enums` both existed
+    already as importable functions but neither was actually CALLED from
+    anywhere — `verify_dates` had no caller at all, so a re-shaped packing
+    sheet writing Excel day-serials again would print nothing. Read-only
+    reports, so wiring them in here costs nothing when there is nothing
+    wrong and catches something real when there is — the same reasoning
+    `post_load`'s own docstring gives for `verify_load`.
+
+    NOTE: `verify_load`'s own EMPTY/FULL coverage checks (and its automatic
+    repairs) are deliberately NOT called here. Only `reload_logistics.py`
+    actually calls it. This docstring and `reload_changed.py`'s BOTH claimed
+    it ran automatically as part of post-load steps — found false while
+    wiring in the two checks above; `reload_changed.py`'s `main()` never
+    imports or calls it either. Left unfixed here: it is a pre-existing gap
+    on the PURCHASES/ISSUANCE side, unrelated to this change, and calling it
+    from here would also mean this stores-only reload silently invoking a
+    repair script that touches imports data — exactly what this file's own
+    module docstring forbids it from doing.
     """
     print("\n" + "=" * 60)
     print("POST-LOAD STEPS")
     print("=" * 60)
 
+    from app.loading.scripts.post_load import verify_dates, verify_enums
     from app.loading.scripts.resync_sequences import main as resync
 
     for label, step in [
         ("Sequence resync", resync),
+        ("Date plausibility", verify_dates),
+        ("Enum plausibility", verify_enums),
     ]:
         print(f"\n--- {label} ---")
         try:

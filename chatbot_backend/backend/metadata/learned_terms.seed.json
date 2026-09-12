@@ -13,7 +13,7 @@
   {
     "term": "hardner",
     "meaning": "Hardner and Hardener are alternative spellings for the same business term. (also: hardener)",
-    "maps_to": "No dedicated hardner/hardener column or semantic view exists. Match the relevant item text using items.name ILIKE '%hardner%' OR items.name ILIKE '%hardener%' (and the corresponding snapshot fields such as stock.item_name, issuance.item_name, purchases_data.item_name, or consignment_items.item_name when applicable).",
+    "maps_to": "No dedicated hardner/hardener column or semantic view exists. Match the relevant item text using items.name ILIKE '%hardner%' OR items.name ILIKE '%hardener%' (and the corresponding snapshot fields such as stock.item_name, issuance.item_name, purchases_data.item_name, or consignment_order_items.item_name (reached from a shipment line via consignment_items.order_item_id - moved off consignment_items as part of the imports batching migration) when applicable).",
     "notes": "Defined by the user.",
     "source": "taught",
     "confident": true,

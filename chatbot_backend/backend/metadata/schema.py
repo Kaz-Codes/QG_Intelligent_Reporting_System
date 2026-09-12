@@ -29,9 +29,12 @@ Two ID styles live side by side, and mixing them is the most common mistake:
     on items.item_code, a TEXT business code like '7230-60'. Join them with
       JOIN items i ON i.item_code = <table>.item_code
   * The ERP modules (imports, logistics, trucking) key on integer surrogate
-    ids. consignment_items carries BOTH: item_id (integer -> items.id) and a
-    copied item_code/item_name text snapshot taken when the line was entered.
-    Join those on item_id.
+    ids. Imports carries item_id (integer -> items.id) and a copied
+    item_code/item_name text snapshot taken when the line was entered — but
+    NOT on consignment_items any more. The imports module is mid-migration
+    onto batch groups and order items (design doc "Imports batching"), and
+    item_id/item_code/item_name moved to consignment_order_items, joined via
+    consignment_items.order_item_id (NOT NULL). Join those on item_id there.
 
 SOFT DELETES. Every ERP table carries is_deleted; rows are never physically
 removed. ALWAYS add "AND <alias>.is_deleted = false" when querying
@@ -57,13 +60,18 @@ suppliers(id PK, name, country, city, contact_name, phone, email,
           default_currency, default_payment_terms, is_active, is_verified)
 
 branches(id PK, name, code, city, address, is_active, is_verified)
-    THE IMPORTS BRANCH TABLE. `consignments.branch_id` -> `branches.id` is the
-    only way imports carry a branch.
+    THE IMPORTS BRANCH TABLE. `consignment_batch_groups.works_branch_id` ->
+    `branches.id` is the way imports carries a branch NOW. The imports module
+    is mid-migration onto batch groups (design doc "Imports batching"):
+    `consignments.branch_id` still exists and, for now, is kept in step with
+    the group's copy, but only the group's copy survives the migration -
+    always reach the branch through the group, not the consignment directly.
     `name` HOLDS THE SHORT CODE, not a legal name. The five real values are
     'QE', 'QEN', 'QCL', 'QBL-II', 'QH'.
     `code` IS NULL ON EVERY ROW - never filter or join on it, it matches nothing.
     RESOLVE IT THROUGH v_branch_aliases, never v_branches directly:
-        JOIN branches br ON br.id = c.branch_id
+        JOIN consignment_batch_groups g ON g.id = c.batch_group_id
+        JOIN branches br ON br.id = g.works_branch_id
         JOIN v_branch_aliases a ON a.alias = br.name
     The alias map carries every spelling including 'QBL-II' and 'QH', so EVERY
     consignment resolves - a row that fails to join is a bug, not an unknown
@@ -71,7 +79,7 @@ branches(id PK, name, code, city, address, is_active, is_verified)
     which matched ZERO rows and is how "how many import consignments are of QE"
     once answered 0 when the true answer was 34.)
     Use LEFT JOIN when adding the branch for display - a consignment with a NULL
-    branch_id exists and an INNER JOIN drops it.
+    works_branch_id exists and an INNER JOIN drops it.
 
 works(id PK, name, code, ntn_strn, note, is_active, is_verified)
 ports(id PK, name, country, port_type, un_locode, used_as, is_active)
@@ -132,8 +140,10 @@ purchases_data(id PK, item_code -> items.item_code, item_name, specification,
     any more; po_number and po_date live here.
 
     A SUPPLIER LIVES IN TWO PLACES. Local buying is purchases_data.supplier
-    (free text); importing is consignments.supplier_id -> suppliers.name, with
-    the value in consignments.pkr_total. They share no table and no key, so a
+    (free text); importing is consignment_batch_groups.supplier_id ->
+    suppliers.name (via consignments.batch_group_id - moved off
+    consignments.supplier_id, see the IMPORTS section below), with the value
+    in consignments.pkr_total. They share no table and no key, so a
     "top supplier" ranking must say which scope it used. To combine them, UNION
     ALL the two sides into (supplier_name, value) and aggregate on the trimmed,
     lower-cased name - the same company is spelled differently across the two.
@@ -150,45 +160,117 @@ purchases_data(id PK, item_code -> items.item_code, item_name, specification,
 
 === IMPORTS ===
 
-consignments(id PK, branch_id -> branches, supplier_id -> suppliers,
+IMPORTS IS MID-MIGRATION ("Imports batching", see the design doc of that
+name). A `consignments` row used to be one whole LC; it is becoming one
+BATCH (one shipment) of an LC, and the commercial/order-level facts have
+moved UP onto two new tables:
+
+  * consignment_batch_groups - the ORDER (the LC). Everything shared by
+    every batch shipped against it: who the supplier is, what currency and
+    incoterm apply, the payment instrument, the exchange rate it was booked
+    at, and the header-level branch. Joined via consignments.batch_group_id
+    (NOT NULL - every consignment has exactly one group, even one that has
+    never split into more than one batch).
+  * consignment_order_items - the ORDER LINE (what was ordered). Item
+    identity, unit price and the requisition details. Joined via
+    consignment_items.order_item_id (NOT NULL - every line is an allocation
+    against exactly one order line).
+
+THE OLD COLUMNS STILL EXIST on consignments and consignment_items and, as of
+this writing, are still kept in step with their new home - but that stops
+the moment the migration's next phase lands, at which point they freeze at
+whatever value they last held and silently go stale on every edit after.
+ALWAYS join through the group/order-item tables below for anything in
+either list, never read the old column on consignments/consignment_items
+directly, so a query written today keeps being right after that phase ships.
+
+consignments(id PK, batch_group_id -> consignment_batch_groups,
+             batch_sequence, branch_id -> branches [STALE COPY, see above -
+             use the group's works_branch_id],
              clearing_agent_id -> clearing_agents,
              loading_port_id -> ports, delivery_port_id -> ports,
-             requisition_date, works, origin, currency, consignment_type,
-             incoterm, po_date, required_date, mode_of_shipment,
-             cargo_readiness_date, etd, eta, eta_works, payment_instrument,
-             instrument_number, opening_or_retirement_date, exchange_rate,
-             rate_booked_on, rate_source, foreign_total, pkr_total,
+             po_date, mode_of_shipment,
+             cargo_readiness_date, etd, eta, eta_works,
+             opening_or_retirement_date, foreign_total, pkr_total,
              current_status, effective_date, remarks, gd_number,
              gd_filing_date, free_days_allowed, gate_out_date,
              demurrage_or_detention_paid, container_detention,
              record_state, is_locked, is_deleted, created_by_id)
-    One import consignment (header). current_status is the transit status, in
+    One BATCH of an import order (see the migration note above - this used
+    to be the whole consignment). current_status is the transit status, in
     this order: 'TT/LC in Process', 'Under Production', 'Ready Awaiting
     Sailing', 'In Transit', 'Arrived at Port', 'Under Custom Clearance',
     'Under Examination', 'Under Assessment', 'Arrived at QFL', 'On Road',
     'Arrived at Works'. "On water" / "sailing" = 'In Transit'.
+    STILL HOLDS, but STALE the moment the migration's next phase lands - use
+    the group instead: supplier_id, origin, currency, consignment_type,
+    incoterm, payment_instrument, instrument_number, exchange_rate,
+    rate_booked_on, rate_source, works, requisition_date, required_date.
     NOTE: the old import_details.file_no commodity category ('Shafts',
     'Foundry Material', ...) does NOT exist in this schema. To find imports of
-    a commodity, match consignment_items.item_name / description / item_code.
+    a commodity, match the order item's item_name / description / item_code
+    (consignment_order_items, via consignment_items.order_item_id).
 
-consignment_items(id PK, consignment_id -> consignments, item_id -> items.id,
-                  item_code, item_name, specification, hs_code, quantity,
-                  unit_price, unit_of_measurement, batch_no, requisition_type,
-                  elc, alc, variance_absolute, variance_percentage,
-                  reference_number, job_number, mo_number, description,
-                  is_deleted)
-    The item lines of an import. item_code/item_name are a text SNAPSHOT taken
-    when the line was entered; item_id is the live link to the master. elc and
-    alc are the estimated and actual landed cost, entered by hand per line.
-    MOST IMPORT LINES ARE NOT IN THE ITEM MASTER. 294 of 451 lines (65%) have an
-    item_code with no matching items row - 291 of those are `TMPNL...`
-    placeholder codes created at entry time. So:
-      * NEVER INNER JOIN consignment_items to items. It silently discards
-        two thirds of every import answer. Use LEFT JOIN, always.
-      * To find an item on the import side, match the line's OWN text -
-        ci.item_name ILIKE '%hardner%' - NOT items.name through a join.
+consignment_batch_groups(id PK, founding_consignment_id -> consignments,
+                         batches_ever, supplier_id -> suppliers, origin,
+                         currency, consignment_type, incoterm,
+                         payment_instrument, instrument_number,
+                         exchange_rate, rate_booked_on, rate_source,
+                         works_branch_id -> branches, insurance_amount,
+                         is_deleted, created_by_id)
+    The ORDER a consignment is a batch of. `founding_consignment_id` is the
+    batch whose id IS the order's displayed number - NOT the same as "the
+    first batch", which can be deleted while the number must survive.
+    `batches_ever` counts every batch this order has EVER held (not just
+    live ones) - it is what decides whether the order's number gets a
+    "-2"/"-3" suffix on display. As of this writing every group holds
+    exactly ONE batch (batches_ever = 1 everywhere), so a question about
+    "how many consignments" and "how many orders" have the same answer
+    today - see 'counting: rows versus things' below for what changes once
+    that stops being true.
+
+consignment_order_items(id PK, batch_group_id -> consignment_batch_groups,
+                        item_id -> items.id, item_code, item_name,
+                        placeholder_name, specification, hs_code,
+                        ordered_quantity, allocated_quantity,
+                        unit_of_measurement, price_basis, unit_price,
+                        weight_unit_price, unit_weight,
+                        branch_id -> branches, requisition_date,
+                        required_date, requisition_type, reference_number,
+                        job_number, mo_number, description, is_deleted)
+    The ORDER LINE - what was ordered - above one or more shipment lines
+    (consignment_items) that record what actually arrived. As of this
+    writing every order item mirrors exactly one shipment line
+    (ordered_quantity = allocated_quantity = that line's quantity), so a
+    per-line question on either table gives the same answer today. branch_id
+    and required_date are PER ITEM here (one order can carry lines demanded
+    by different branches on different dates) - nothing in this database
+    currently aggregates branch by item; branch-grouped totals all go
+    through the group's works_branch_id instead, so one order is still
+    attributed to one branch company-wide.
+
+consignment_items(id PK, consignment_id -> consignments,
+                  order_item_id -> consignment_order_items, quantity,
+                  eta_works, batch_no, elc, alc, variance_absolute,
+                  variance_percentage, net_weight, gross_weight, length,
+                  width, height, is_deleted)
+    The SHIPMENT lines of one batch - what this particular shipment actually
+    carried, as an allocation against its order_item_id. elc and alc are the
+    estimated and actual landed cost, entered by hand per line.
+    STILL HOLDS, but STALE the moment the migration's next phase lands - use
+    the order item instead: item_id, item_code, item_name, placeholder_name,
+    specification, hs_code, unit_price, unit_of_measurement,
+    requisition_type, reference_number, job_number, mo_number, description.
+    MOST IMPORT LINES ARE NOT IN THE ITEM MASTER. 294 of 451 order items
+    (65%, measured before the migration but the population has not changed)
+    have an item_code with no matching items row - 291 of those are
+    `TMPNL...` placeholder codes created at entry time. So:
+      * NEVER INNER JOIN consignment_order_items to items. It silently
+        discards two thirds of every import answer. Use LEFT JOIN, always.
+      * To find an item on the import side, match the order item's OWN text -
+        oi.item_name ILIKE '%hardner%' - NOT items.name through a join.
         Asked whether any hardner is imported, a join through items found ONE
-        code; matching ci.item_name found FOUR (26382-60, 26838-60, TMPNL0069,
+        code; matching oi.item_name found FOUR (26382-60, 26838-60, TMPNL0069,
         TMPNL0125) across 8 lines. Three of those four are absent from the
         master entirely.
       * The snapshot and the master can also DISAGREE on spelling for the same
@@ -451,10 +533,11 @@ GOODS IN TRANSIT - inbound and outbound live in different tables with different
 vocabulary, so a question about what is moving needs BOTH sides UNIONed, with a
 literal label saying which side each row came from:
 
-    SELECT 'Import' AS direction, c.id, c.instrument_number AS reference,
+    SELECT 'Import' AS direction, c.id, g.instrument_number AS reference,
            s.name AS counterparty, c.current_status, c.etd, c.eta
     FROM consignments c
-    LEFT JOIN suppliers s ON s.id = c.supplier_id
+    JOIN consignment_batch_groups g ON g.id = c.batch_group_id
+    LEFT JOIN suppliers s ON s.id = g.supplier_id
     WHERE c.is_deleted = false AND c.current_status ILIKE '%in transit%'
     UNION ALL
     SELECT 'Export', lc.id, lc.mo_no, lc.customer_name, lc.current_status,

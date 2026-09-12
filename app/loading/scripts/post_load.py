@@ -32,6 +32,7 @@ WHY THE REPAIRS ARE CONDITIONAL
     Cheap when there is nothing wrong, automatic when there is.
 """
 
+from app.enums import ModeOfShipment, PaymentInstrument, UnitOfMeasurement
 from app.loading.database_connection import connection, cursor
 
 
@@ -247,6 +248,90 @@ def verify_dates():
     print("!" * 60)
     print("   Use clean_date_any (not clean_date) on those columns: it decodes")
     print("   a bare serial, where pd.to_datetime reads it as nanoseconds.")
+    return bad
+
+
+#-----------------------------------------------------
+# A COLUMN CAN BE FULL AND STILL HOLD SOMETHING NO ENUM RECOGNISES
+#
+# The coverage checks catch EMPTY; the date checks catch IMPLAUSIBLE. Neither
+# catches a value that is present, plausible-looking, and simply not one of
+# the values the enum defines — which is exactly the failure CLAUDE.md
+# documents at length ("A STRING COLUMN DOES NOT ENFORCE THE ENUM, AND THE
+# LOADERS GO ROUND IT"). Imports was in exactly that state on 96.6% of its
+# rows before Alembic revision d5e81b6a2c07 normalised them; the raw sheet
+# text this check watches for is precisely what that migration corrected and
+# what an un-mapped loader would put back on the next reload.
+#
+# THE THIRD ROW IS NAMED DELIBERATELY, not folded into a shared helper.
+# `consignment_batch_groups.payment_instrument` is a second, independent copy
+# of the same fact as `consignments.payment_instrument` — the imports
+# batching migration mirrors it there. The first version of d5e81b6a2c07
+# corrected only the `consignments` copy and left the group's holding
+# 'Advance', 'FOC' and 'Contract' — the copy every screen actually reads —
+# while every test passed. A check that looks at one copy and not the other
+# is worth nothing, so both are listed here by name rather than derived.
+#-----------------------------------------------------
+
+ENUM_SANITY = [
+    ("consignments", "mode_of_shipment", [v.value for v in ModeOfShipment]),
+    ("consignments", "payment_instrument", [v.value for v in PaymentInstrument]),
+    ("consignment_batch_groups", "payment_instrument", [v.value for v in PaymentInstrument]),
+    ("consignment_items", "unit_of_measurement", [v.value for v in UnitOfMeasurement]),
+    ("consignment_order_items", "unit_of_measurement", [v.value for v in UnitOfMeasurement]),
+]
+
+
+def verify_enums():
+    """Report any row whose enum-backed column holds a non-canonical value.
+
+    Mirrors verify_dates() above: a separate pass for a separate KIND of
+    wrongness, not folded into verify_load()'s empty/full coverage check.
+    """
+    print()
+    print("=" * 60)
+    print("ENUM PLAUSIBILITY — does every enum-backed column hold a canonical value?")
+    print("=" * 60)
+
+    bad = []
+    for table, column, canonical in ENUM_SANITY:
+        placeholders = ", ".join(f"'{value}'" for value in canonical)
+        try:
+            cursor.execute(
+                f"SELECT {column}, count(*) FROM {table} "
+                f"WHERE {column} IS NOT NULL AND {column} NOT IN ({placeholders}) "
+                f"GROUP BY {column} ORDER BY count(*) DESC"
+            )
+            offenders = cursor.fetchall()
+        except Exception:
+            connection.rollback()
+            continue
+
+        if not offenders:
+            print(f"   {table}.{column:<32} ok")
+            continue
+
+        total = sum(count for _, count in offenders)
+        bad.append((table, column, offenders))
+        print(f"   {table}.{column:<32} {total:>6,} row(s) out of enum:")
+        for value, count in offenders[:10]:
+            print(f"        {value!r:<30} {count:>6,}")
+
+    if not bad:
+        print("\n   every enum-backed column holds only canonical values.")
+        return []
+
+    print("\n" + "!" * 60)
+    print("SOME COLUMNS HOLD VALUES THEIR ENUM DOES NOT RECOGNISE")
+    print("!" * 60)
+    print("   A PUT on any such row 422s on a field the operator never touched")
+    print("   (CLAUDE.md, \"A STRING COLUMN DOES NOT ENFORCE THE ENUM\"). If this")
+    print("   just loaded from a workbook, check load_05_consignments.py's")
+    print("   map_mode_of_shipment / map_payment_instrument /")
+    print("   map_unit_of_measurement for a spelling they do not cover yet —")
+    print("   they already report anything unrecognised themselves, but this")
+    print("   check is what catches a repair script, a hand edit, or an older")
+    print("   loader that bypassed that mapping entirely.")
     return bad
 
 

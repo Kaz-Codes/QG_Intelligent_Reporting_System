@@ -135,23 +135,35 @@ SELECT * FROM (
 -- There is deliberately no v_shaft_items: outside imports "shaft" means what
 -- the name says, and if the user disagrees with the set, ask them rather than
 -- freezing a different guess into a view.
+--
+-- REPOINTED: the imports module is mid-migration onto batch groups and order
+-- items (QG_Intelligent_Reporting_System, "Imports batching"). item_code,
+-- item_name, specification, unit_of_measurement and unit_price moved off
+-- consignment_items onto consignment_order_items (one per consignment_items
+-- row via the NOT NULL order_item_id); origin and supplier_id moved off
+-- consignments onto consignment_batch_groups (one per consignment via the
+-- NOT NULL batch_group_id). Both FKs are NOT NULL, so both joins are INNER -
+-- there is no line without an order item and no consignment without a group.
+-- quantity, current_status, eta and etd all STAY where they were: quantity is
+-- what THIS shipment carries (a per-batch fact), the rest are per-batch
+-- shipping/status facts that were never shared across batches.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_import_shafts AS
 SELECT ci.id,
        ci.consignment_id,
-       ci.item_code,
-       ci.item_name,
+       oi.item_code,
+       oi.item_name,
        CASE
-           WHEN ci.item_name ~* 'alloy'  THEN 'Forged Alloy Steel Round Bar'
-           WHEN ci.item_name ~* 'hollow' THEN 'Forged Steel Hollow Drill Bar'
+           WHEN oi.item_name ~* 'alloy'  THEN 'Forged Alloy Steel Round Bar'
+           WHEN oi.item_name ~* 'hollow' THEN 'Forged Steel Hollow Drill Bar'
            ELSE 'Forged Steel Round Bar'
        END                              AS shaft_type,
-       ci.specification,
+       oi.specification,
        ci.quantity,
-       ci.unit_of_measurement            AS uom,
-       ci.unit_price,
+       oi.unit_of_measurement            AS uom,
+       oi.unit_price,
        c.current_status,
-       c.origin,
+       g.origin,
        c.eta,
        c.etd,
        s.name                            AS supplier
@@ -159,11 +171,15 @@ FROM consignment_items AS ci
 JOIN consignments AS c
   ON c.id = ci.consignment_id
  AND c.is_deleted = false
+JOIN consignment_order_items AS oi
+  ON oi.id = ci.order_item_id
+JOIN consignment_batch_groups AS g
+  ON g.id = c.batch_group_id
 LEFT JOIN suppliers AS s
-  ON s.id = c.supplier_id
+  ON s.id = g.supplier_id
 WHERE ci.is_deleted = false
-  AND ci.item_name ~* '[[:<:]]forged[[:>:]]'
-  AND ci.item_name ~* '[[:<:]]bars?[[:>:]]';
+  AND oi.item_name ~* '[[:<:]]forged[[:>:]]'
+  AND oi.item_name ~* '[[:<:]]bars?[[:>:]]';
 
 
 -- ---------------------------------------------------------------------------
@@ -554,8 +570,12 @@ demand AS (
     ) sr
     GROUP BY sr.item_code
 ),
+-- item_code moved off consignment_items onto consignment_order_items (see
+-- the note on v_import_shafts above) - joined via the NOT NULL
+-- order_item_id, so this stays an INNER JOIN. quantity, eta and
+-- current_status are per-batch facts and stay where they were.
 incoming AS (
-    SELECT ci.item_code,
+    SELECT oi.item_code,
            SUM(COALESCE(ci.quantity, 0))           AS incoming_qty,
            COUNT(DISTINCT c.id)                    AS incoming_consignments,
            MIN(c.eta)                              AS earliest_eta,
@@ -567,9 +587,11 @@ incoming AS (
       ON c.id = ci.consignment_id
      AND c.is_deleted = false
      AND c.current_status NOT IN ('Arrived at Works', 'Order Cancelled')
+    JOIN consignment_order_items oi
+      ON oi.id = ci.order_item_id
     WHERE ci.is_deleted = false
-      AND ci.item_code IS NOT NULL
-    GROUP BY ci.item_code
+      AND oi.item_code IS NOT NULL
+    GROUP BY oi.item_code
 )
 SELECT p.item_code,
        p.item_name,
