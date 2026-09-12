@@ -188,7 +188,7 @@ Confirm you have the right code before going on:
 
 ```powershell
 git log --oneline -1          # expect the merge that brings in step 6 + the chatbot views
-git status --short            # expect clean, or only untracked survey output
+git status --short            # expect clean (the survey's output is gitignored)
 ```
 
 ---
@@ -281,7 +281,17 @@ Both orphan counts **must** be zero.
 
 ## 6. Build the frontend
 
-The server does not run Vite's dev server; it serves the built `dist/`.
+**Read the survey's verdict first.** `server-survey.ps1` (step 0.1) ends its
+frontend section with a block headed `VERDICT: how is the frontend served?`. It
+states the answer where the evidence supports one, and prints **AMBIGUOUS**
+with the reasoning where it does not. Do that step before this one — the
+assumption that the server serves a built `dist/` is the thing being checked,
+not a given.
+
+It also compares `dist/index.html`'s timestamp against the last commit. If it
+says **"dist/ is OLDER than the last commit"**, the frontend currently running
+was not built from the deployed code, and step 6 is overdue rather than
+routine.
 
 ```powershell
 cd React_Frontend-main\frontend
@@ -289,10 +299,15 @@ npm ci                 # or npm install if ci complains about the lockfile
 npm run build          # this is `tsc -b && vite build` — a type error fails it
 ```
 
-**Confirm how the built files are actually served before you overwrite them** —
-`server-survey.ps1` shows whether that is IIS, a static route in the ERP
-service, or something else. If `dist/` is served directly from the repo folder,
-the build above is all that is needed. If it is copied elsewhere, copy it.
+Then act on the verdict:
+
+| Verdict | What step 6 means |
+|---|---|
+| IIS serves `dist/` from inside the repo | the build above is all there is to do |
+| IIS is running but points elsewhere | build, then **copy** `dist/` to the path the survey listed |
+| the ERP service mounts `StaticFiles` | build, and the restart in step 8 picks it up |
+| something is LISTENING on 5173 | a Vite **dev server** is serving the app — that is not a deployment; flag it before going further |
+| AMBIGUOUS | **stop and find out.** Do not overwrite files whose consumer you cannot name. |
 
 A failing `tsc -b` here is a real failure. Do not work around it with
 `vite build` alone — that skips type checking and ships the error.
