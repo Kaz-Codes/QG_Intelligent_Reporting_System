@@ -59,7 +59,22 @@ export function ImportsStatusList() {
   const [branchFilter, setBranchFilter] = useState<string[]>([])
   const [supplierFilter, setSupplierFilter] = useState<string[]>([])
   const [requisitionFilter, setRequisitionFilter] = useState<string[]>([])
-  const [includeClosed, setIncludeClosed] = useState(false)
+  // DEFAULTS TO TICKED, and the reason is the data rather than a preference.
+  //
+  // Measured: of 181 live consignments, 149 are non-draft and 33 are
+  // non-closed - but only ONE is both. Practically everything submitted has
+  // reached "Arrived at Works" and practically everything still open is a
+  // draft, so the two sets barely intersect.
+  //
+  // Defaulting to false therefore showed 43 of 181 rows, and - because the
+  // export correctly excludes drafts and correctly matches this filter -
+  // produced a ONE-ROW file. Hiding completed records by default is right for
+  // a working queue and wrong for a module where 82% of the records are
+  // closed; it made the list and the export useless out of the box.
+  //
+  // Fixing it HERE rather than in the export is what keeps "what you see is
+  // what you export" true. See design doc section 9 step 8.
+  const [includeClosed, setIncludeClosed] = useState(true)
   const [draftsOnly, setDraftsOnly] = useState(false)
   const [etdFrom, setEtdFrom] = useState('')
   const [etdTo, setEtdTo] = useState('')
@@ -239,7 +254,11 @@ export function ImportsStatusList() {
       render: (r) => (
         <div>
           <div className="font-semibold tabular-nums">{r.systemId}</div>
-          <div className="text-[11px] text-muted">{r.instrumentNo || r.items[0]?.referenceNo || '—'}</div>
+          {/* The payment REFERENCE (lc68756), not the bare number. Built
+              server-side, so this row and a notification about the same
+              consignment cannot disagree. Falls back to the first item's
+              reference, then a dash. */}
+          <div className="text-[11px] text-muted">{r.paymentReference || r.items[0]?.referenceNo || '—'}</div>
         </div>
       ),
     },

@@ -9,6 +9,7 @@ from app.imports.order_view import (
     order_branch, order_currency, order_exchange_rate, order_incoterm,
     order_instrument_number, order_origin, order_payment_instrument,
     order_rate_booked_on, order_rate_source, order_supplier, order_type,
+    payment_reference,
     order_branch_name,
 )
 
@@ -150,6 +151,27 @@ def serialize_consignment(consignment, db, include_change_history=True):
         "cargo_readiness_date" : consignment.cargo_readiness_date,
         "payment_instrument" : order_payment_instrument(consignment),
         "instrument_number" : order_instrument_number(consignment),
+
+        # THE ORDER'S PAYMENT REFERENCE, mode + number concatenated: `lc68756`.
+        #
+        # Published because step 1 unified TEN backend call sites onto one rule
+        # and then no screen used it - the list and the detail header both took
+        # `instrument_number` raw and rendered `68756`. So the rule existed and
+        # nothing a person looks at obeyed it.
+        #
+        # CONCATENATED HERE RATHER THAN IN THE BROWSER, deliberately. The
+        # alternative is the front end joining `payment_instrument` and
+        # `instrument_number` itself, which is an eleventh spelling of the rule
+        # in a language where nothing can check it against the other ten - no
+        # test can compare a TypeScript expression to a Python function. It
+        # would also have to re-implement the `cadCAD` guard (see
+        # `payment_reference_from`), and a duplicated guard is the half that
+        # gets dropped when someone simplifies the expression.
+        #
+        # NULL rather than "" when the order has no instrument number, so the
+        # front end's `?? fallback` works and a missing reference cannot render
+        # as a bare mode or a stray separator.
+        "payment_reference" : payment_reference(consignment) or None,
         "opening_or_retirement_date" : consignment.opening_or_retirement_date,
         "exchange_rate" : order_exchange_rate(consignment),
         "rate_booked_on" : order_rate_booked_on(consignment),

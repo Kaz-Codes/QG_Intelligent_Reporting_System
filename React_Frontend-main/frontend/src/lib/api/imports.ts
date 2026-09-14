@@ -107,6 +107,13 @@ export interface ApiConsignment {
   eta_works: string | null
   payment_instrument: string | null
   instrument_number: string | null
+  /** The ORDER's payment reference, mode + number: `lc68756`. Built by the
+   *  server (order_view.payment_reference), so this is the SAME string the
+   *  notifications, dashboards and export use. Do NOT rebuild it here from
+   *  payment_instrument + instrument_number: that is an eleventh copy of a
+   *  rule nothing on this side can check against the other ten, and it
+   *  would have to duplicate the cadCAD guard too. */
+  payment_reference: string | null
   opening_or_retirement_date: string | null
   exchange_rate: string | number | null
   rate_booked_on: string | null

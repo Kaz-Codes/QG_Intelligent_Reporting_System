@@ -98,6 +98,7 @@ export interface ImportsListRow {
   pkrValue: number | null
 
   paymentInstrument: string | null
+  paymentReference: string | null
   instrumentNo: string | null
   paymentLabel: string
   paymentState: PaymentState
@@ -173,7 +174,16 @@ function computeForeignTotal(items: ImportsListItem[]): number | null {
  * assertion the data doesn't support.
  */
 function derivePayment(c: ApiConsignment, foreignValue: number | null) {
-  const instrument = c.payment_instrument
+  // THE REFERENCE LEADS; the bare instrument type is the fallback.
+  //
+  // The tile used to read "CAD - not recorded": the payment TYPE and the
+  // state, with the number nowhere on the header. It now reads
+  // "cad46048 - not recorded" - the same information plus the one thing an
+  // operator needs in order to look the payment up.
+  //
+  // Falls back to the type and then to "Payment", so an order with no
+  // instrument number still reads "CAD pending" rather than a bare separator.
+  const instrument = c.payment_reference || c.payment_instrument
   const payments = (c.payments ?? []).filter((p) => !p.is_deleted)
 
   if (payments.length === 0) {
@@ -287,6 +297,7 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
     pkrValue,
 
     paymentInstrument: c.payment_instrument,
+    paymentReference: c.payment_reference ?? null,
     instrumentNo: c.instrument_number,
     paymentLabel: payment.label,
     paymentState: payment.state,

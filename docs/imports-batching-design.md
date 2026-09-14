@@ -20,6 +20,23 @@ behaviour and §3.9's freeze is what constrains it — see revision 8.
 
 ---
 
+## Changelog — revision 11 (step 1 reaches the screen)
+
+Steps 1 and 2 shipped and were used. Three things found by using them.
+
+| What | Detail |
+|---|---|
+| **Step 1's rule existed and no screen obeyed it** | Ten BACKEND sites were unified; the imports list and the detail header were not among them. Both took `instrument_number` raw, so a consignment showed `68756` where the notifications, dashboards and export all said `lc68756`. `serialize_consignment` now publishes `payment_reference` and both screens render it. |
+| **Concatenated on the SERVER, deliberately** | The alternative — the front end joining `payment_instrument` and `instrument_number` — is an eleventh spelling of the rule in a language where nothing can check it against the other ten: no test can compare a TypeScript expression to a Python function. It would also have to re-implement the `cadCAD` guard, and a duplicated guard is the half that gets dropped when someone simplifies the expression. |
+| **The detail header's Payment tile leads with the reference** | Was `CAD · not recorded` — the payment TYPE and the state, with the number nowhere on the header. Now `cad46048 · not recorded`. Falls back to the bare type and then to "Payment", so an order with no instrument number reads `Not recorded` rather than a stray separator. Verified on screen for both cases. |
+| **CORRECTION to revision 10: the default export returned NO rows, not one** | Of **179** live consignments, 148 are non-draft and 31 are non-closed, and **zero** are both — the two sets do not intersect at all. The single row seen in revision 10 was a record the probes had created on a scratch database. The default export was a header row and nothing else. |
+| **Fixed on the LIST, not the export: "Include completed" now defaults to ticked** | List **31 → 179**, export **0 → 341 rows**, and "what you see is what you export" stays true. Hiding completed records by default is right for a working queue and wrong for a module where 83% of records are closed. |
+| **The client-side PDF needed no work** | "Export PDF" is `window.print()` over the detail page, so fixing the Payment tile fixed the PDF with it. |
+| **Two other modules render an instrument number raw — reported, not fixed** | `ServiceJobsTab.tsx:173` prints `job.instrument_number \|\| IMP-${job.consignment_id}` — a FRONT-END copy of the whole rule including its fallback — and `TruckingStatusList.tsx:330` prints `r.instrument_number`. Both are other modules' screens fed by `cross_module.py`, which publishes the raw number. The fix is the same shape: publish `payment_reference` on those two payloads and render it. |
+| **A stale server invalidated a whole browser run, again** | `pkill -f uvicorn` does not kill it on Windows; the old process kept port 8000 and served a DIFFERENT database on the PREVIOUS code, so the first run showed no `payment_reference` anywhere and proved nothing. Same trap as the deployment rehearsal. Kill by PID from `netstat -ano | grep LISTENING`, and check the payload contains the new field before believing any screenshot. |
+
+---
+
 ## Changelog — revision 10 (steps 1 and 2 BUILT)
 
 Step 6 is deployed and staff are using it. §9 steps 1 and 2 are now built.
@@ -3459,34 +3476,59 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    read paths, which the helpers cannot prove.
 7. **Backend:** group and order-item models, allocation with the row lock
    (§6 B3), batch creation, numbering (§3.5), the group freeze (§3.9).
-8. **Frontend:** the Step 3 allocation screen, list rows and blue highlight,
-   expanded per-item view, the `SearchableSelect`-backed country (ISO 3166) and
-   works dropdowns, the per-item price-basis checkbox and the second price
-   field. Plus `consignment_number()` on screen beside the payment reference,
-   after which `reference_label()`'s `IMP-{id}` fallback can go (revision 10).
+8. **Frontend.** Two of the four things listed here are now DONE (revision 11);
+   what remains is the batching UI itself.
 
-   > **THE LIST'S DEFAULT FILTER IS WRONG FOR THIS DATA - found in revision 10,
-   > and it belongs here rather than to the export.**
+   **Still to do:**
+   - the Step 3 allocation screen, list rows and blue highlight, and the
+     expanded per-item view — the batching UI, which needs step 7 first;
+   - the `SearchableSelect`-backed country (ISO 3166) and works dropdowns;
+   - the per-item price-basis checkbox and the second price field;
+   - **`consignment_number()` on screen**, beside the payment reference. The
+     list's top line is still `String(c.id)`, so batch 2 of order 21 displays
+     `184` — a number belonging to no consignment anyone can look up (§0.4).
+     The server-side function exists and is verified; only the rendering is
+     left.
+   - **and then, only then, delete `reference_label()`'s `IMP-{id}` fallback.**
+     It exists solely because the consignment number is not on screen: with
+     nothing else to identify a row by, an order with no instrument number
+     needed *something*. Once the number is displayed, the payment reference
+     column can simply be blank.
+
+   > **DONE — the payment reference reaches the screen (revision 11).**
+   > Step 1 unified ten BACKEND sites and no screen used any of them: the list
+   > and the detail header both took `instrument_number` raw and rendered
+   > `68756`. `serialize_consignment` now publishes `payment_reference`, and
+   > the list's ID/Reference column and the detail header's Payment tile
+   > render it — `lc23011`, `cad46048 · not recorded`. Concatenated on the
+   > SERVER, not in the browser: a front-end copy would be an eleventh
+   > spelling of the rule in a language where nothing can check it against the
+   > other ten, and it would have to duplicate the `cadCAD` guard.
+
+   > **DONE — the list defaults to "Include completed" ticked (revision 11).**
    >
-   > Measured on the 9 September restore: of **181** live consignments, **149**
-   > are non-draft and **33** are non-closed - but only **ONE** is both.
-   > Practically everything submitted has reached "Arrived at Works", and
-   > practically everything still open is a draft. The two sets barely
-   > intersect.
+   > The measurement, on the untouched 9 September restore: of **179** live
+   > consignments, **148** are non-draft and **31** are non-closed — and
+   > **ZERO** are both. Not one, as revision 10 recorded: the single row seen
+   > then was a record the probes had created. Practically everything
+   > submitted has reached "Arrived at Works" and practically everything still
+   > open is a draft, and the two sets do not intersect at all.
    >
-   > So an operator with "Include completed" unticked sees 33 rows and exports
-   > **one**, because the export also excludes drafts (requirements line 173).
-   > That looks broken, and it looks broken whichever default the EXPORT picks:
-   > the export was briefly defaulted to `include_closed=True` to hide it, and
-   > that was reverted, because "what you see is what you export" is a property
-   > people rely on without knowing they do. **A one-row file is obviously
-   > wrong and prompts a question; an export quietly containing rows the screen
-   > was hiding is trusted.**
+   > So the default list showed 31 of 179, and the export — which correctly
+   > excludes drafts and correctly matches the on-screen filter — produced a
+   > **header row and no data at all**.
    >
-   > The fix is on the LIST: `include_closed` defaulting to false is right for
-   > a working queue and wrong for a module where 82% of records are closed.
-   > Decide it with the list rework - a different default, a visible row count
-   > beside the filter, or both.
+   > It was briefly "fixed" by defaulting the EXPORT to `include_closed=True`.
+   > That was reverted: **an empty file is obviously wrong and prompts a
+   > question; an export quietly containing rows the screen was hiding is
+   > trusted.** "What you see is what you export" is relied on without being
+   > noticed, and the fault was never the export's.
+   >
+   > Fixed where it belonged, on the list: `include_closed` defaulting to
+   > false is right for a working queue and wrong for a module where 83% of
+   > records are closed. List **31 → 179**, export **0 → 341 rows**, and the
+   > export still matches the filter exactly.
+
 9. **Payments:** the group move (§4.4), insurance, the addenda table.
 10. **Chatbot metadata**, verified by importing `backend.*` from inside
     `chatbot_backend/`.
