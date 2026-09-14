@@ -274,25 +274,21 @@ def export_consignments(
     supplier_id : Optional[list[int]] = Query(None),
     requisition_type : Optional[list[str]] = Query(None),
     drafts_only : bool = False,
-    # DEFAULTS TO TRUE HERE, AND ONLY HERE. The list defaults to False.
+    # MATCHES THE LIST'S DEFAULT, deliberately, and it was briefly changed.
     #
-    # MEASURED, and the reason this is not a matching default: on the real
-    # data 181 live consignments are 149 non-draft and 33 non-closed - but
-    # only ONE is both. Almost everything submitted has reached "Arrived at
-    # Works", and almost everything still open is a draft. Keeping the list's
-    # default here would make the button produce a ONE-ROW file out of 342,
-    # which reads as a broken export rather than as a filter.
+    # "What you see is what you export" is a property people rely on without
+    # knowing they do, and quietly breaking it is worse than a small file: a
+    # one-row export is obviously wrong and prompts a question, whereas an
+    # export silently containing rows the screen was hiding is trusted.
     #
-    # The requirement names exactly two exclusions - deleted and drafts
-    # (line 173). A closed consignment is not either of those: it is completed
-    # work, which is precisely what a record of imports should contain.
-    #
-    # THE COST, STATED: the export no longer matches the on-screen filter when
-    # "Include completed" is unticked, and "what you see is what you export"
-    # was the property this endpoint was built around. That is a deliberate
-    # trade and it is ONE LINE to reverse. An explicit `include_closed=false`
-    # is still honoured.
-    include_closed : bool = True,
+    # THE MEASUREMENT THAT PROMPTED THE CHANGE STANDS, and it is a real
+    # problem - just not this endpoint's. Of 181 live consignments, 149 are
+    # non-draft and 33 are non-closed, but only ONE is both. So an operator
+    # with "Include completed" unticked exports one row, which looks broken
+    # whichever default is picked here. That is the LIST SCREEN's filter
+    # default being wrong for this data, and it belongs to step 8 where the
+    # list is reworked - see design doc section 9 step 8.
+    include_closed : bool = False,
     include_deleted : bool = False,
     etd_from : Optional[date] = None,
     etd_to : Optional[date] = None,

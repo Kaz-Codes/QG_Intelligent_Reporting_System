@@ -37,7 +37,8 @@ Step 6 is deployed and staff are using it. §9 steps 1 and 2 are now built.
 | **A consignment with no live lines gets ONE row, item columns blank** | A LEFT JOIN in Python. A row that vanishes is worse than a row that looks odd: the sheet's count would disagree with the list with nothing to say why. Zero such rows today. |
 | **Payments are summarised, not folded in** | Two columns — count and total paid, live payments only. Joining the detail would multiply every item row by every payment and break one-item-one-row. |
 | **Rows are sorted by line id** | Relationship iteration order is not guaranteed, and an export people re-run weekly must not reshuffle for no reason — a diff between two runs should show what changed. |
-| **DELIBERATE DEFAULT CHANGE, needs confirmation: the export now defaults to `include_closed=True`** | Measured: 181 live consignments are 149 non-draft and 33 non-closed, but only **ONE** is both. Keeping the list's default produced a **1-row file out of 342**. The requirement names two exclusions, deleted and drafts; closed is neither, and a closed consignment is completed work — exactly what a record of imports should hold. **The cost, stated:** the export no longer matches the on-screen filter when "Include completed" is unticked, and "what you see is what you export" was this endpoint's founding property. One line to reverse. |
+| **The export keeps the list's `include_closed=False` default — changed, then REVERTED** | It was briefly defaulted to True because the measurement below makes the default export one row out of 342. Reverted on instruction, and the reasoning is worth keeping: **a one-row file is obviously wrong and prompts a question; an export quietly containing rows the screen was hiding is trusted.** "What you see is what you export" is relied on without being noticed. |
+| **The measurement stands, and it is a LIST problem — recorded at §9 step 8** | Of 181 live consignments, 149 are non-draft and 33 are non-closed, but only **ONE** is both. An operator with "Include completed" unticked sees 33 rows and exports one. That looks broken whichever default the export picks, because the fault is the list defaulting to hide closed records in a module where 82% of them are closed. |
 | **`export_utils` now converts tz-aware datetimes** | Every timestamp is `DateTime(timezone=True)` and openpyxl *raises* on one, so the first export to carry `created_at` and the landed-cost audit times 500'd on the whole download. Converted to local time once, in the shared helper, rather than per route — and converted, not stripped: dropping the tzinfo off a UTC value shifts every timestamp silently. |
 | **Two relationships added to `ConsignmentItem`** | `elc_updated_by` / `alc_updated_by`. The FK columns have existed since rule 11; nothing could print the name. `foreign_keys=` is required — two FKs to `users` on one table — and its absence is a mapper error `configure_mappers()` catches and a bare import does not. No DDL. |
 
@@ -1140,7 +1141,24 @@ consumer — it is a filter and a display, both of which work better per line.
 Per §0.4 the requirements need **two** values shown together, where the code has
 **three** competing implementations of one.
 
-**Target state — one function each, both in `helpers.py`:**
+> **CORRECTION, revision 10: they are in `imports/order_view.py`, not
+> `helpers.py`.** Written down rather than left as a silent disagreement
+> between this document and the code.
+>
+> `order_view` imports **nothing**, so the dashboards, the notification scanner
+> and `cross_module` can all reach it. `imports/helpers.py` cannot serve that
+> role: `serializers.py` already has to import it *inside functions* to dodge a
+> circular import, and seven of the ten call sites this unifies live outside
+> the imports module. **A shared definition that half its callers cannot import
+> is not shared** - it is a fourth copy waiting to be written.
+>
+> There are also THREE functions, not two. `payment_reference()` returns empty
+> when an order has no instrument number, so `reference_label()` carries the
+> `IMP-{id}` fallback that all ten call sites spelled out individually. That
+> fallback is scheduled to go at step 8, once the consignment number is on
+> screen to stand in its place.
+
+**Target state — one function each (built in `order_view.py`, see above):**
 
 ```
 consignment_number(consignment)   ->  "177"  or  "177-1"
@@ -3444,7 +3462,31 @@ Not a commitment — the sequence I would follow, so you can see the shape.
 8. **Frontend:** the Step 3 allocation screen, list rows and blue highlight,
    expanded per-item view, the `SearchableSelect`-backed country (ISO 3166) and
    works dropdowns, the per-item price-basis checkbox and the second price
-   field.
+   field. Plus `consignment_number()` on screen beside the payment reference,
+   after which `reference_label()`'s `IMP-{id}` fallback can go (revision 10).
+
+   > **THE LIST'S DEFAULT FILTER IS WRONG FOR THIS DATA - found in revision 10,
+   > and it belongs here rather than to the export.**
+   >
+   > Measured on the 9 September restore: of **181** live consignments, **149**
+   > are non-draft and **33** are non-closed - but only **ONE** is both.
+   > Practically everything submitted has reached "Arrived at Works", and
+   > practically everything still open is a draft. The two sets barely
+   > intersect.
+   >
+   > So an operator with "Include completed" unticked sees 33 rows and exports
+   > **one**, because the export also excludes drafts (requirements line 173).
+   > That looks broken, and it looks broken whichever default the EXPORT picks:
+   > the export was briefly defaulted to `include_closed=True` to hide it, and
+   > that was reverted, because "what you see is what you export" is a property
+   > people rely on without knowing they do. **A one-row file is obviously
+   > wrong and prompts a question; an export quietly containing rows the screen
+   > was hiding is trusted.**
+   >
+   > The fix is on the LIST: `include_closed` defaulting to false is right for
+   > a working queue and wrong for a module where 82% of records are closed.
+   > Decide it with the list rework - a different default, a visible row count
+   > beside the filter, or both.
 9. **Payments:** the group move (§4.4), insurance, the addenda table.
 10. **Chatbot metadata**, verified by importing `backend.*` from inside
     `chatbot_backend/`.
