@@ -1673,6 +1673,134 @@ Two further sites the survey named outside that table, both fixed:
 `fetch_consignment` / `fetch_consignments_page` / `derive_open_requests`
 missing the `ConsignmentItem.order_item` eager load (shipped with the list-filter PR).
 
+### 3.7b What step 8 gets from the API, and the THREE THINGS IT DOES NOT
+
+Written at the end of step 7, by asking the running API the questions the
+front end will ask it. Each answer below was driven, not reasoned about.
+
+**What is already there.** `GET /consignments/{id}` publishes
+`consignment_number`, `payment_reference`, `batch_group_id`, `batch_sequence`
+and an **`allocation`** block — per item: `ordered_quantity`,
+`allocated_quantity`, `outstanding_quantity`, plus `item`, `item_code`,
+`unit_of_measurement` and `order_item_id`. That is the Step 3 allocation view's
+whole data source. `POST /{id}/batches` returns the created batch plus a
+`numbering` block:
+
+```
+"numbering": {
+  "order_number": "177", "batches_ever": 2, "siblings_renumbered": true,
+  "batches": [
+    {"consignment_id": 177, "batch_sequence": 1,
+     "consignment_number": "177-1", "previous_consignment_number": "177"},
+    {"consignment_id": 184, "batch_sequence": 2,
+     "consignment_number": "177-2", "previous_consignment_number": null}
+  ]
+}
+```
+
+`siblings_renumbered` is true exactly on the split, and
+`previous_consignment_number` is **null on the batch just created** — it had no
+number a moment ago. That pair is what the A1 renumbering warning renders from.
+
+#### Gap 1 — THE LIST HAS NO PENDING-ALLOCATION FLAG, so the blue highlight has no source
+
+The requirements ask for *"a blue highlighted line"* on the **list** when items
+are pending allocation. **`allocation` is on the DETAIL payload only** — it sits
+behind the same `include_change_history` flag as the change history, because it
+reads `group.order_items`, which `fetch_consignments_page` deliberately does not
+load. Publishing it from the list would be one query per row for a panel the
+list does not draw, which is exactly the N+1 the eager loads closed.
+
+Measured: a list row carries **no** key containing `alloc`, `outstand` or
+`pending`. There is nothing to colour on.
+
+**What step 8 should add — a boolean, computed in SQL on the list query**, not
+the whole allocation block:
+
+```sql
+EXISTS (SELECT 1 FROM consignment_order_items o
+         WHERE o.batch_group_id = consignments.batch_group_id
+           AND o.is_deleted = false
+           AND o.allocated_quantity < o.ordered_quantity)
+```
+
+One correlated subquery on the page, no collection load, and it answers the only
+question the list asks. **It is a property of the ORDER, not of the row** — every
+batch of an under-allocated order shows the highlight, which is right: the
+pending quantity belongs to the order, and hiding it on all but one batch would
+mean whether you saw it depended on which arrival you happened to be looking at.
+
+#### Gap 2 — THERE IS NO WAY TO FETCH AN ORDER'S OTHER BATCHES
+
+The requirements need it twice: *"Shipping shows batch 1's route and schedule
+locked above"* and the same pattern for clearance. Today:
+
+- the detail payload names **no** siblings — only `batch_group_id` and
+  `batch_sequence`;
+- **`GET /consignments/?batch_group_id=...` is silently ignored.** FastAPI drops
+  an undeclared query param, so the request returns a full unfiltered page and
+  looks like it worked. Measured: `?batch_group_id=184` returned 100 rows out of
+  181. That is worse than a 404 — a developer who guesses the param gets a
+  plausible list and no error anywhere.
+
+`?q=<instrument number>` happens to return the siblings, because
+`instrument_number` is on the group and every batch shares it — measured,
+`q=S8-PROBE` returned both. **It is not a substitute:** it fails for an order
+with no instrument number, and it matches any other order whose number contains
+the same substring.
+
+**What step 8 should add:** a `batch_group_id` filter on `GET /consignments/`,
+in the same change, per CLAUDE.md's rule that a list param and its screen move
+together. A siblings block on the detail payload is the alternative and is
+worse — it would duplicate a list row's shape in a second place and go stale
+against it.
+
+#### Gap 3 — ADDING AN ITEM TO A LATER BATCH WITHOUT `order_item_id` SILENTLY DUPLICATES THE ORDER LINE
+
+The trap most likely to be hit, because the current wizard does not send
+`order_item_id` at all. Measured, on a split order for 100 of "Probe A":
+
+```
+PUT batch 2 with a new item {"item_name": "Probe A", "quantity": 5}
+  -> 200 OK
+  -> order lines 1 -> 2
+  -> allocation: [("Probe A", ordered 100, allocated 100),
+                  ("Probe A", ordered   5, allocated   5)]
+```
+
+Two order lines with the same item name, both fully allocated, and the order now
+says it bought **105** of something it bought 100 of. No error, and the
+over-allocation check cannot see it — each line is within its own order line.
+
+The server behaves correctly given what it was told: an item with no
+`order_item_id` and no existing link is a NEW item on the order, which is the
+right reading on batch 1 and the wrong one on batch 2.
+
+**So step 8's Step 3 screen must send `order_item_id` on every line that
+allocates against something the order already bought**, and offer "add a new
+item to the order" as a visibly different action from "this batch also carries
+item X". The server validates the id against the order
+(`helpers.resolve_order_line` → `UnknownOrderLine`); it cannot validate an id
+that was never sent.
+
+#### Two smaller things worth knowing before the UI is designed
+
+- **A new batch arrives as a `draft` at "TT/LC in Process" with no dates, no
+  ports and no clearing agent** — `add_batch` deliberately copies none of the
+  founding batch's shipping, because the requirements say a later batch's
+  shipping section starts empty. Consequences: it appears in the list
+  immediately, it is caught by the `drafts_only` filter, and **it is absent from
+  every windowed dashboard figure until somebody gives it an ETA**. The wizard
+  should land the user on Step 3 with the route blank rather than pre-filled.
+- **After a split, posting `quantity` alone can never change what was ordered.**
+  `resolve_ordered_quantity` stops following the line once `batches_ever > 1`,
+  so a wizard that only ever sends `quantity` will leave `ordered_quantity`
+  frozen at whatever it was at the moment of the split. If the UI is to let
+  anyone raise or lower the order quantity afterwards — and it must, because
+  that is how the two `ordered_quantity = 0` rows get corrected — it has to send
+  `ordered_quantity` explicitly. Both fields are already on
+  `ConsignmentItemSchema` and both are already published per item.
+
 ### 3.8 "Stored on the group" vs "entered once on batch 1"
 
 You are right that these are different decisions, and the requirements only
@@ -3762,13 +3890,26 @@ Not a commitment — the sequence I would follow, so you can see the shape.
 8. **Frontend.** Two of the four things listed here are now DONE (revision 11);
    what remains is the batching UI itself.
 
+   > **READ §3.7b FIRST.** It records what the API gives step 8 and the **three
+   > things it does not**, each measured against the running server rather than
+   > reasoned about: the LIST has no pending-allocation flag (so the blue
+   > highlight has no source), there is **no way to fetch an order's sibling
+   > batches** (and `?batch_group_id=` is silently ignored rather than
+   > rejected), and adding an item to a later batch without `order_item_id`
+   > **silently duplicates the order line** — leaving an order that claims to
+   > have bought 105 of something it bought 100 of, with no error. The first
+   > two are small additions step 8 has to make; the third is a rule its Step 3
+   > screen has to obey.
+
    **Still to do:**
    - the Step 3 allocation screen, list rows and blue highlight, and the
      expanded per-item view — the batching UI. **Step 7 is done, so this is
-     unblocked**, and the server already publishes what it needs:
-     `allocation` (per item: ordered, allocated, outstanding) on the detail
-     payload, `consignment_number` on both, and `POST /{id}/batches` with its
-     `numbering` block for the renumbering warning A1 requires;
+     unblocked**, and the server already publishes most of what it needs:
+     `allocation` (per item: ordered, allocated, outstanding, and the
+     `order_item_id` every allocation must quote) on the detail payload,
+     `consignment_number` on both, and `POST /{id}/batches` with its
+     `numbering` block for the renumbering warning A1 requires. §3.7b lists
+     what is missing;
    - the `SearchableSelect`-backed country (ISO 3166) and works dropdowns;
    - the per-item price-basis checkbox and the second price field;
    - **`consignment_number()` on screen**, beside the payment reference. The

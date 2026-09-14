@@ -381,7 +381,19 @@ allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
   and can be REFUSED** if the quantity has since gone to a replacement batch.
 - `ordered_quantity` **follows the line while an order holds ONE batch** (which
   is every existing record, and is what lets the wizard work unchanged) and
-  **stops following once it splits** — `helpers.resolve_ordered_quantity`.
+  **stops following once it splits** — `helpers.resolve_ordered_quantity`. So
+  **after a split, posting `quantity` alone can never change what was ordered**;
+  a client that wants to must send `ordered_quantity`. Both are optional fields
+  on `ConsignmentItemSchema` and both are published per item.
+- **A line that allocates against something the order already bought MUST send
+  `order_item_id`.** Without it the server reads the line as a NEW item on the
+  order — correct on the founding batch, wrong on a later one — and **silently
+  creates a second order line**. Measured: adding `{"item_name": "Probe A",
+  "quantity": 5}` to batch 2 of an order for 100 of Probe A returns 200 and
+  leaves the order claiming it bought **105**, with no error and nothing the
+  over-allocation check can see, because each line is within its own order line.
+  The id is validated against the order (`UnknownOrderLine`); an id that is
+  never sent cannot be.
 
 **Numbering — `177` and `177-2`, and neither is the primary key.**
 
@@ -410,6 +422,15 @@ batch under a deleted order.
 
 **NOT BUILT: the group freeze** (design §3.9) — a closed batch does not yet
 stop anyone editing the ORDER's fields. Nothing is stubbed for it.
+
+**A new batch lands as a `draft` at "TT/LC in Process" with no dates, no ports
+and no clearing agent** — `add_batch` copies none of the founding batch's
+shipping, because the requirements say a later batch's shipping section starts
+empty. So it shows in the list at once, the `drafts_only` filter catches it, and
+**it is absent from every windowed dashboard figure until somebody gives it an
+ETA**. That last one also bites the test fixtures: an undated split cannot
+discriminate rows from orders, which is why `batch_fixture.ensure_split` demands
+a dated one.
 
 ## logistics — `/logistics`
 
@@ -1210,6 +1231,18 @@ masters filter by **id**, enums/statuses by stored value. The contract:
   which promised a completeness check that no longer exists — see rule 8),
   `etd_from`/`etd_to`, `include_closed` (default false hides "Arrived at Works"
   and "Order Cancelled"), `include_deleted`, `q`, `page`, `page_size`.
+  **NO `batch_group_id` FILTER YET, and there needs to be one** — there is
+  currently no way to fetch an order's sibling batches, which the batching UI
+  needs to show an earlier batch's route locked above a later one. Worse than
+  missing: FastAPI drops an undeclared query param, so `?batch_group_id=21`
+  returns a full unfiltered page and *looks like it worked*. `?q=<instrument
+  number>` happens to return the siblings (it is on the group, so they share
+  it) but is not a substitute — it fails for an order with no number and
+  matches other orders containing the same substring.
+  **Nor a pending-allocation flag**, which the list's blue highlight needs; the
+  `allocation` block is detail-only on purpose (it reads `group.order_items`,
+  which the list does not load). Add a boolean computed in SQL, not the block.
+  Design §3.7b has both, measured.
 - **Logistics** `GET /logistics/`: `status[]`, `order_type[]`, `customer[]`,
   `gate_out_from`/`gate_out_to`, `include_deleted`, `q`, `page`, `page_size`.
 - **Trucking** `GET /trucking/`: `movement_type[]`, `source[]`, `open_only`,
