@@ -5,7 +5,9 @@ from datetime import date
 from app.imports.demand_dates import (
     earliest_required_date, line_required_date, line_requisition_date,
 )
+from app.imports.allocation import allocation_view
 from app.imports.order_view import (
+    consignment_number,
     order_branch, order_currency, order_exchange_rate, order_incoterm,
     order_instrument_number, order_origin, order_payment_instrument,
     order_rate_booked_on, order_rate_source, order_supplier, order_type,
@@ -90,11 +92,26 @@ def serialize_consignment(consignment, db, include_change_history=True):
         # Both are server-controlled: `batch_sequence` is assigned at creation
         # and never reused, so 177-2 identifies one shipment for ever.
         #
-        # The DISPLAY form built from these ("177" alone while an order has one
-        # batch, "177-2" once it has more) is section 3.4's `consignment_number`
-        # and is not built yet — these are the raw values it will need.
         "batch_group_id" : consignment.batch_group_id,
         "batch_sequence" : consignment.batch_sequence,
+
+        # THE SHIPMENT'S NUMBER: "177" while an order holds one batch, "177-2"
+        # once it has split.
+        #
+        # Published for exactly the reason `payment_reference` was (revision
+        # 11): the rule has existed on the server since step 1 and nothing a
+        # person looks at obeyed it. The list's top line is still
+        # `String(c.id)`, so the moment this change creates a real second batch
+        # the screen would show `184` - a number belonging to no consignment
+        # anyone can look up. Rendering it is step 8; having it to render is
+        # this step's job.
+        #
+        # DERIVED ON THE SERVER, NOT ASSEMBLED IN THE BROWSER. Three values
+        # feed it (the founding batch's id, `batches_ever`, this row's
+        # sequence) and the rule that combines them - a suffix only once an
+        # order has EVER held two - is the one thing about numbering that a
+        # front-end copy would get wrong first.
+        "consignment_number" : consignment_number(consignment) or None,
         "branch" : serialize_master(order_branch(consignment)),
         "supplier" : serialize_master(order_supplier(consignment)),
         # `works` was free text and is RETIRED - the order's `works_branch_id`
@@ -220,6 +237,21 @@ def serialize_consignment(consignment, db, include_change_history=True):
     # this stays free there.
     if include_change_history:
         data["change_history"] = serialize_many(consignment.change_history)
+
+        # THE ORDER'S ALLOCATION - what was bought, what is spoken for, and
+        # what is still outstanding, per item.
+        #
+        # ON THE DETAIL PAYLOAD ONLY, and behind the same flag as the change
+        # history for the same reason: it reads `group.order_items`, which the
+        # list query deliberately does not load. Publishing it from the list
+        # would lazy-load one query per row for a panel the list does not draw
+        # - which is precisely the N+1 the eager loads beside it just closed.
+        #
+        # It is what the Step 3 allocation screen and the "pending allocation"
+        # highlight are built from (step 8). Outstanding is derived here rather
+        # than stored, because a stored copy of `ordered - allocated` is a
+        # third number that can disagree with the two it comes from.
+        data["allocation"] = allocation_view(consignment.batch_group)
 
     return data
 

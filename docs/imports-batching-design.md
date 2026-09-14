@@ -1,22 +1,141 @@
 # Imports batching — design
 
-**Status: approved; PHASE 1, STEP 2b AND STEP 6 ARE BUILT.** Alembic revision
-`a1c4f27b93de` (revision A — expand), the model changes it needs, the minimum
-create logic, the loaders and the `post_load` checks are written and verified
-against a scratch database. **Step 2b** (submission rules removed, closing
-decoupled from submitting — §3.10) shipped as its own PR ahead of step 6.
+**Status: approved; PHASE 1 AND STEPS 1, 2, 2b, 6 AND 7 ARE BUILT.** Alembic
+revision `a1c4f27b93de` (revision A — expand), the model changes it needs, the
+loaders and the `post_load` checks are written and verified against a scratch
+database. **Step 2b** (submission rules removed, closing decoupled from
+submitting — §3.10) shipped as its own PR ahead of step 6.
 
-**Step 6 is now BUILT** (revision 8 below). The 14 attributes are off
-`Consignment` and the 13 off `ConsignmentItem`; every read path, both revert
-paths and the write path are repointed at the order and the order line. The
-COLUMNS are still in the database — Revision B drops them — so the gap §4.7 is
-about is still open, and everything §4.7 says about it still applies.
+**Step 6 is BUILT** (revision 8 below). The 14 attributes are off `Consignment`
+and the 13 off `ConsignmentItem`; every read path, both revert paths and the
+write path are repointed at the order and the order line. The COLUMNS are still
+in the database — Revision B drops them — so the gap §4.7 is about is still
+open, and everything §4.7 says about it still applies.
 
-**Everything from §9 step 7 onward is still a proposal.** One consequence of
-step 6 needs reading before step 7 starts: with `sync_batch_group` deleted, ANY
-batch of an order can now rewrite that order's commercial terms through an
-ordinary `PUT`, and nothing governs which one may. That is §3.8's intended
-behaviour and §3.9's freeze is what constrains it — see revision 8.
+**STEP 7 IS NOW BUILT** (revision 12 below). Allocation, batch creation and
+numbering are live: `POST /consignments/{id}/batches` creates a second, third,
+nth arrival of an order; `app/imports/allocation.py` holds the invariant behind
+a row lock; and the A1/A2/A3 numbering decisions are settled and implemented
+(§3.5a). **The first real second batch can now exist**, which makes several
+things that were harmless suddenly load-bearing — §3.2's count decisions,
+§3.4's display identity and §0.4's "the number is not the primary key".
+
+**Still a proposal: §3.9's group freeze, and §9 steps 8 onward.** The freeze
+matters more now than it did, because step 7 makes it reachable: any batch of
+an order can rewrite that order's commercial terms through an ordinary `PUT`,
+and nothing governs which one may. That is §3.8's intended behaviour and the
+freeze is what constrains it. **Nothing has been stubbed for it** — no flag, no
+dead parameter, no uncalled hook — deliberately, because this document records
+twice that a hook which is never called cannot be told apart from one that is
+called and does nothing.
+
+---
+
+## Changelog — revision 12 (step 7 BUILT: allocation, batch creation, numbering)
+
+The three open numbering questions are **decided** and recorded in §3.5a below.
+What follows is what the build changed and what it found.
+
+### What shipped
+
+- **`POST /consignments/{id}/batches`** — a route of its own, not a parameter
+  on `POST /`. Four reasons, the first decisive: `POST /`'s empty-draft guard
+  requires a supplier, an instrument number or a named item, and a later batch
+  has none of those — its commercial half is on the order and its lines are
+  allocations against order lines that already exist. Making that guard
+  order-aware would weaken a guard shipped one release earlier, for every
+  create, to let one case through.
+- **`app/imports/allocation.py`** — one locked helper, reached by *every* write
+  path: create, update, batch creation, delete, undo-delete and **revert**. A
+  route that enforces the invariant while the ordinary edit walks round it is
+  worth nothing.
+- **`ordered_quantity` and `order_item_id` on `ConsignmentItemSchema`**, both
+  optional. While an order holds one batch the order quantity FOLLOWS the line,
+  which is what every one of the 179 live records does and what lets the
+  current wizard keep working untouched before step 8. From the split onwards
+  it stops following (`helpers.resolve_ordered_quantity`).
+- **Two lower-bound CHECK constraints** (Alembic `c7b210d4e9f3`), because
+  `allocated <= ordered` bounds a SUM and a sum containing a negative term
+  satisfies it while the quantities it is made of do not.
+- **`consignment_number` published by the serializer**, for the reason
+  `payment_reference` was in revision 11: the rule has existed since step 1 and
+  nothing a person looks at obeyed it.
+- **`cross_module.py`'s trucking-queue label** now renders the consignment
+  number rather than the primary key — §0.4's "cosmetic edit" that stops being
+  cosmetic at the first split.
+
+### What the build found — four things, none of them predicted
+
+1. **The lock was taken BEFORE the flush, and on CREATE that meant it matched
+   nothing.** A brand-new order's rows do not exist in the database yet, so
+   `SELECT ... FOR UPDATE` returned an empty set, the reconcile loop ran over
+   nothing, and `allocated_quantity` was left at its server default of **0 on
+   every line of every newly created order**. Nothing raised. The next save
+   corrected it, so any test that saved twice would have missed it; the detail
+   payload reported *"250 ordered, 0 allocated"* on an order fully allocated to
+   its only batch. Found by asserting the create response, not by reading the
+   code. It is flush → lock → read now, and the lock ordering is still safe
+   because every path that touches the group row does so before calling this.
+2. **`consignment_batch_groups.is_deleted` HAD NO WRITER AT ALL.** Revision A's
+   back-fill set it once; nothing in the application has written it since — the
+   delete route sets the flag on the CONSIGNMENT and stops there. Invisible
+   while nothing read the group's flag, and immediately visible once the batch
+   route did: undo-deleting one of the four soft-deleted consignments produced
+   a **live batch under a deleted order**, and the route correctly refused to
+   add anything to an order that says it does not exist.
+   `helpers.sync_group_deleted_state` now derives it from the live batches, in
+   both directions, and delete and undo-delete call it.
+3. **Reverting can over-allocate FROM BELOW, and nothing had noticed.**
+   `ordered_quantity` lives on the order line, shared by every batch, so
+   undoing an edit made on batch 2 can put the ORDER back to a smaller figure
+   while batch 1's allocation stays where it is. The limit comes DOWN to meet a
+   sum that was legal when it was written — no over-large quantity is ever
+   typed, which is why no amount of validating input would have caught it.
+   `revert_update` now reconciles and refuses.
+4. **`undo-delete` was an unguarded flag flip.** Delete a batch holding 150,
+   create a replacement for that 150, undo the delete, and the order is
+   committed to 300 against 250 — with `ck_allocation_within_order` satisfied
+   throughout, because nothing recomputed the column it checks. Now refused,
+   naming the overage.
+
+### What switching the fixture onto the real routes found
+
+`tests/batch_fixture.py` built its second batch with raw SQL because until now
+nothing else could. Moving it onto `POST /{id}/batches` exposed three bugs **in
+the fixture**, each of which had been quietly propping up a check:
+
+- it wrote **`consignment_items.unit_price`**, a column the ORM has not written
+  since part 4. `check_dashboard_consistency.py` was summing it, so the "the
+  two batches' totals sum to the order's value" check would have failed against
+  a batch created for real. Repointed onto the order line.
+- it **copied the founding batch's route, schedule and status**, which
+  `add_batch` deliberately does not. A real batch has no ETA and falls out of
+  every windowed figure — which would have made the count assertions *vacuous*
+  rather than wrong, since rows and orders would have agreed again. The fixture
+  now sets them through the real `PUT`, which is what an operator does next
+  anyway.
+- it wrote **the retired `consignments` columns** — `supplier_id`, `origin`,
+  `currency`, `works`. Those are left in the database with no mapped attribute
+  precisely so that no ORM path can keep the orphaned copy alive (§4.7). The
+  test suite was keeping them alive, which is §4.7's fourth bypass path in the
+  one place nobody was looking.
+
+### The eight sites that assumed one batch per group — all closed
+
+The step-7 survey listed eight places that assumed it without saying so. None
+is left as a note for later; each is either fixed or carries a written reason
+it is safe, at the code. The table is §3.7a.
+
+### Two live bugs found during the survey and shipped ahead of this
+
+Three queries had their column names repointed onto `consignment_order_items`
+in part 4 **without a join being added**, producing cartesian products. The
+requisition-type filter returned all 179 live consignments for both types in
+use (right answers: 1 and 0); the free-text search returned the whole list for
+any term matching any item anywhere. Shipped as their own PR before this one,
+with `tests/test_list_filter_joins.py` pinning all six sites against the
+compiled SQL. Recorded here because the same part-4 change caused them and the
+same reading found them: **compile the statement and look at the FROM clause.**
 
 ---
 
@@ -1277,6 +1396,78 @@ batch would need UPDATEs against locked siblings, and the 423 would either block
 the delete or force a lock bypass. The permanent rule removes even the
 temptation.
 
+### 3.5a The three numbering decisions — SETTLED, and built
+
+§3.5 above argued for a **permanent suffix on everything**. Two of its three
+conclusions survive; the first does not, and the reasoning for each is recorded
+here because these are the rules a later reader will most want to argue with.
+
+#### A1 — a single batch keeps the PLAIN number. This overrides §3.5.
+
+`177` while an order holds one batch; `177-1` and `177-2` the moment it splits.
+
+§3.5 proposed suffixing every batch permanently, including the only batch of an
+unsplit order. **That is overridden.** The requirements asked for the plain
+number explicitly, and the data settles it: nearly every order arrives in one
+shipment, so a universal suffix would put `-1` on almost every record in the
+system and thereby say nothing. A mark that appears everywhere is not a mark.
+
+**The cost is real and is handled rather than hidden.** Creating a second batch
+**renumbers the first**, from `177` to `177-1`. That is a visible change to a
+number somebody may have written down.
+
+- It happens **once**, at a deliberate user action, not continuously.
+- **No row is written to do it.** The number is derived from
+  `founding_consignment_id` + `batches_ever` + `batch_sequence`
+  (`order_view.consignment_number_from`), so the only column that moves is
+  `batches_ever` on the group. This matters more than it looks: **142 of 179
+  live consignments are locked**, and a stored suffix would have required an
+  `UPDATE` against a locked sibling in order to renumber it — the 423 would
+  either block the split or force a lock bypass.
+- **The API states it.** `POST /{id}/batches` returns a `numbering` block
+  giving every batch's number and its previous one, and a `siblings_renumbered`
+  flag. The client is told rather than left to notice by fetching the list
+  again and comparing. The user-facing warning before the action is step 8's.
+
+#### A2 — the next batch exists when somebody creates it, not before
+
+The requirements say unallocated items are *"automatically placed into
+`177-2`"*. **Read that as describing the SCREEN** — a pending-allocation area —
+**not a row in `consignments`.**
+
+A batch with no route, no ETA and no status is not a shipment; it is a list of
+things not yet shipped, and the requirements already name that state (the blue
+highlight). Creating it early would put a phantom consignment into every list,
+count and dashboard in the app — and §3.2 has just spent fourteen decisions
+making those counts mean something.
+
+Unallocated quantity lives on the order line as `ordered_quantity -
+allocated_quantity`, published as `outstanding_quantity` in the detail
+payload's `allocation` block, which is what §3.7 designed it for.
+
+#### A3 — numbers are permanent, gaps and all. §3.5 stands.
+
+Delete `177-2` and `177-3` still follows `177-1`. A number that has been on a
+document, in an email or spoken on a call must not later mean something else: a
+gap is a question somebody can ask and get an answer to; a **reused number is a
+wrong answer nobody knows to question.**
+
+**Note the interaction with A1, which is the part that is easy to get wrong.**
+An order that splits to two and then has one deleted keeps `177-1`. It does
+**NOT** revert to a bare `177`. Renumbering runs **forward only**, at the
+split — `batches_ever` is incremented and never decremented, which is what
+implements this. Reverting to `177` would make a number that has been on
+paperwork mean something new, which is the same failure as reusing one reached
+from the other direction.
+
+`helpers.claim_batch_sequence` takes the next number with
+`UPDATE ... SET batches_ever = batches_ever + 1 ... RETURNING`, atomically:
+reading the column into Python and writing back `n+1` is a read-modify-write,
+and two operators splitting one order at the same moment would both read 1 and
+both write 2. `uq_consignments_group_sequence` stays as the backstop beneath
+it, and a fire is a bug report about that function rather than something for a
+caller to retry around.
+
 ### 3.6 What happens to `batch_no` — DECIDED: frozen, never converted
 
 **This is settled, and it is stronger than what revision 2 proposed.** Revision 2
@@ -1458,6 +1649,29 @@ carry stored snapshots built under the old meaning. Those are frozen JSON and do
 not change retroactively, so nothing breaks; but a job created after this change
 means something subtly different from one created before, with nothing in the
 data saying which. §7 item 4.
+
+### 3.7a The sites that assumed one batch per group — closed out, not carried forward
+
+The step-7 survey found eight places that assumed one batch per group without
+saying so. **None is left as a note for later.** Each is either fixed or
+carries, at the code, a written reason it is safe. The point of the table is
+that "we did not know" should not be available as an answer in step 8.
+
+| Site | What it assumed | Outcome |
+|---|---|---|
+| `helpers.sync_order_item_from_line` | one line per order line | **FIXED.** It no longer writes `allocated_quantity` (one writer: `reconcile_allocation`) or `is_deleted` (an order line is retired only when the LAST live line across the order goes). `ordered_quantity` stops following the line once `batches_ever > 1`. Unfixed, saving batch 2 would have restated the whole order's quantity, and deleting batch 2's line would have soft-deleted the order line batch 1 points at. |
+| `helpers.sync_order_items` header fan-out | the batch's lines are the order's lines | **SAFE, with a reason.** The three fanned fields — `branch_id`, `requisition_date`, `required_date` — are facts about what was ORDERED, so one order line holds one value and every batch reads the same one. A save of batch 2 writes a value batch 1 can see; that is the two batches agreeing about the order, not drift. The fan-out reaches only the order lines *this* batch carries, so an order line only batch 1 carries is untouched. The real hazard is unchanged and pre-existing — one header value fanned across lines that may legitimately differ — and it becomes live at step 8's per-item control, not at a split. |
+| `helpers.apply_item_updates` | an item diff belongs to one batch | **SAFE, with a reason**, same argument: the order-line half of the diff writes a row the order shares, which is the point of the table. The change history records the edit against the batch it was made on, which is also right — somebody did it, from there, and that is who can undo it. The one key that can break an invariant is `ordered_quantity`, and both routes reaching it end at `reconcile_allocation`. |
+| `helpers.revert_local_fields` fan-out | ditto, on the way back | **SAFE** by the same reasoning, **plus a fix**: `revert_update` now calls `reconcile_allocation`, because a revert can lower `ordered_quantity` on a shared order line and over-allocate FROM BELOW (revision 12, finding 3). |
+| `helpers.revert_old_values` order-line half | ditto, per line | **SAFE** + the same fix. |
+| `helpers.apply_item_master_values` | per-batch run ≡ per-group run | **SAFE, with a reason, and the reason is written at the function.** Both batches' lines point at the same order line, which carries one `item_code`, which resolves to one master row — so whichever batch saves writes the value the other would have. It only ever writes the master's own current value, so it cannot carry a batch-specific edit to a sibling; and it writes the ORDER line, which is shared by construction and is not what `is_locked` protects. §3.7 suggested moving it to run once per group; deliberately not done, because it would change *when* the correction runs for no gain in correctness. |
+| `DELETE` + `POST /undo-delete` | deletion is bookkeeping | **FIXED, and it was worse than the survey said.** Delete now releases the allocation (`allocation_totals` counts only lines on LIVE batches) and undo-delete re-claims it and **can refuse**. The survey predicted that; what it did not predict is that `consignment_batch_groups.is_deleted` had no writer at all, so undo-delete produced a live batch under a deleted order (revision 12, finding 2). `helpers.sync_group_deleted_state` closes it. |
+| `cross_module._import_snapshot` | `item.quantity` means the order's quantity | **SAFE, and MORE correct than before**, with the consequence written at the code: `quantity` is now what this arrival carries, which is what a truck actually loads — before batching it was handed the whole order regardless. The risk is in the 1,370 STORED snapshots, which were written when a consignment could only be a whole order. They do not change retroactively and nothing breaks, but a job created from now on means something subtly different from one created before, and no migration could tell them apart: for an unsplit order the two meanings coincide, which is every existing job. |
+
+Two further sites the survey named outside that table, both fixed:
+`cross_module.py`'s `f"Import {ref}"` label (now the consignment number), and
+`fetch_consignment` / `fetch_consignments_page` / `derive_open_requests`
+missing the `ConsignmentItem.order_item` eager load (shipped with the list-filter PR).
 
 ### 3.8 "Stored on the group" vs "entered once on batch 1"
 
@@ -1641,7 +1855,14 @@ ADMIN_FROZEN = {"supplier_id", "origin", "consignment_type", "incoterm",
                 "instrument_number", "payment_instrument", "works_branch_id"}
 
 def group_is_frozen(group):
-    return any(is_closed(b) for b in group.consignments if not b.is_deleted)
+    # `batches`, NOT `consignments`. This sketch said `group.consignments` for
+    # four revisions and there is no such relationship - the one on
+    # ConsignmentBatchGroup is `batches` (app/imports/models.py), and it needs
+    # its explicit foreign_keys because the two tables reference each other in
+    # both directions. Corrected in revision 12 rather than left, because a
+    # sketch is copied verbatim and an AttributeError inside a freeze check
+    # would surface as a 500 on an ordinary save.
+    return any(is_closed(b) for b in group.batches if not b.is_deleted)
 
 def frozen_fields_for(group, user):
     """Which group fields this user may not write right now."""
@@ -3474,14 +3695,80 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    attributes moving. Then the real HTTP routes: create, update, list, detail,
    submit, revert and all five dashboards, because what remains after that is
    read paths, which the helpers cannot prove.
-7. **Backend:** group and order-item models, allocation with the row lock
-   (§6 B3), batch creation, numbering (§3.5), the group freeze (§3.9).
+7. **DONE — see revision 12.** Allocation with the row lock (§6 B3), batch
+   creation, and numbering (§3.5a). The group and order-item MODELS came
+   earlier, with revision A.
+
+   **The group freeze (§3.9) is NOT part of this and was deliberately left
+   out.** It needs batches that can close before it can be tested, and the
+   survey may find its tier boundaries want adjusting now that allocation is
+   real. **Nothing was left behind for it** — no stub, no dead parameter, no
+   flag — because a hook that is never called is indistinguishable from one
+   that is called and does nothing, and this document records that failure
+   twice. The one place it is mentioned in code is a comment in
+   `routes/create_batch.py` saying why there is deliberately no `is_locked`
+   guard on that route.
+
+   Built:
+
+   - **`POST /consignments/{consignment_id}/batches`** — its own route, for
+     the four reasons in revision 12. Takes `allocations` (`order_item_id` +
+     `quantity`) and nothing else: route, schedule, clearance and status are
+     entered afterwards through the ordinary `PUT`, because the requirements
+     say a later batch's shipping section starts empty.
+   - **`app/imports/allocation.py`** — `lock_order_lines`,
+     `allocation_totals`, `reconcile_allocation`, `allocation_view` and the
+     three refusals. Its own module for the same reason `order_view.py` is
+     one: it imports models and nothing else, so every caller can reach it.
+   - **Six write paths end at `reconcile_allocation`**: create, update, batch
+     creation, delete, undo-delete, revert. Not five — the revert path was
+     found during the build (revision 12, finding 3).
+   - **`helpers.claim_batch_sequence`**, `add_batch`, `renumbering_note`,
+     `resolve_ordered_quantity`, `resolve_order_line`,
+     `sync_group_deleted_state`.
+   - **Alembic `c7b210d4e9f3`** — the two lower-bound constraints. Applied and
+     downgraded against a scratch clone; both validate immediately (455 of 455
+     rows already satisfy them, minimum 0 on each).
+   - **`consignment_number` and `allocation` published** by the serializer;
+     `allocation` on the DETAIL payload only, behind the same flag as the
+     change history, because it reads `group.order_items` which the list does
+     not load.
+
+   Verification, and what it took to make each check able to fail:
+
+   - **The over-allocation invariant had never rejected anything**, for a
+     structural reason: the only two writers set `allocated_quantity` and
+     `ordered_quantity` to the same value, so the CHECK evaluated `q <= q` on
+     every row ever written. `tests/check_batch_allocation.py` drives it until
+     it refuses, then shows the accepted case beside it — including the exact
+     boundary, where the outstanding quantity is allowed and one more is not.
+   - **The concurrency case is reproduced against unlocked code**, not merely
+     passed against locked code. `tests/check_allocation_concurrency.py` part 1
+     reconstructs the pre-lock shape locally — same flush, same aggregate, same
+     write, no `FOR UPDATE` — and drives two threads through the interleaving
+     §6 B3 describes. It ends with **300 allocated against an order for 250,
+     both saves committed, nothing raised, and `ck_allocation_within_order`
+     satisfied throughout**. Part 2 runs the identical scenario through the
+     real function and requires one of the two to be refused. If part 1 ever
+     stops reproducing the corruption the script stops rather than reporting a
+     pass. **No `use_lock=False` parameter exists** — a flag that exists only
+     for a test is a flag production code can pass.
+   - **The count assertions discriminate against a genuinely split order.**
+     `tests/batch_fixture.py` now splits through the real routes;
+     `check_dashboard_consistency.py` reports 180 batches across 179 orders and
+     every "the two units differ" guard passes.
+   - **`tests/test_batch_numbering.py`** — 31 pure assertions on A1/A3,
+     `resolve_ordered_quantity` and the refusal messages. No database.
 8. **Frontend.** Two of the four things listed here are now DONE (revision 11);
    what remains is the batching UI itself.
 
    **Still to do:**
    - the Step 3 allocation screen, list rows and blue highlight, and the
-     expanded per-item view — the batching UI, which needs step 7 first;
+     expanded per-item view — the batching UI. **Step 7 is done, so this is
+     unblocked**, and the server already publishes what it needs:
+     `allocation` (per item: ordered, allocated, outstanding) on the detail
+     payload, `consignment_number` on both, and `POST /{id}/batches` with its
+     `numbering` block for the renumbering warning A1 requires;
    - the `SearchableSelect`-backed country (ISO 3166) and works dropdowns;
    - the per-item price-basis checkbox and the second price field;
    - **`consignment_number()` on screen**, beside the payment reference. The
