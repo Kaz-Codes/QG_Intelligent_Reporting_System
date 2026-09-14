@@ -722,6 +722,46 @@ def item_current_values(item):
     return values
 
 
+#---------------------------------------------------------------------------
+# FIELDS AN ABSENT KEY MUST NOT CLEAR
+#
+# `ConsignmentItemSchema` defaults every optional field to None, and
+# `model_dump()` cannot tell "the client sent null" from "the client never
+# mentioned it". The diff below reads both as a change TO null - which is
+# deliberate and correct for the ordinary fields, because that is how the
+# wizard clears one: `draftToPayload` omits an emptied input rather than
+# sending "".
+#
+# IT IS WRONG FOR THESE TWO, AND IT WAS A 500 ON EVERY EDIT. Both are NOT NULL
+# and both are resolved by the SERVER, not typed by anyone:
+#
+#   * `ordered_quantity` - `resolve_ordered_quantity` owns it, and its whole
+#     contract is "None means leave it alone" (case 4). The diff got there
+#     first and wrote the NULL before `sync_order_items` could run.
+#   * `order_item_id` - `resolve_order_line` owns it, and a line that already
+#     has one keeps it.
+#
+# MEASURED, at c8a450f, against a scratch clone: saving ANY existing
+# consignment through the imports wizard - the wizard sends neither key -
+# ended in
+#
+#     UPDATE consignment_order_items SET item_id=NULL, ordered_quantity=NULL
+#     NotNullViolation: null value in column "ordered_quantity"
+#
+# a 500 with nothing saved. Found by driving the browser for step 8; the
+# reproduction was replayed against an untouched HEAD worktree to confirm it
+# is not step 8's.
+#
+# WHY NOT `model_dump(exclude_unset=True)` FOR THE WHOLE PAYLOAD. That would
+# make every absent key mean "leave it", and clearing a field in the wizard
+# works precisely because an emptied input arrives absent. The narrow set is
+# the point: absence means "leave it" only where a server-owned column would
+# otherwise be destroyed by it.
+#---------------------------------------------------------------------------
+
+SERVER_RESOLVED_ITEM_FIELDS = ("ordered_quantity", "order_item_id")
+
+
 def updated_items(consignment, update_consignment_data, db):
     updated_items_list = []
     items_in_updated_data = update_consignment_data.items
@@ -737,9 +777,16 @@ def updated_items(consignment, update_consignment_data, db):
         item_dict = item.model_dump()
         consignment_item = serialized_dict.get(item_dict["id"])
 
+        # What the client actually SENT, as opposed to what Pydantic defaulted.
+        posted = item.model_fields_set
+
         if consignment_item is not None:
 
             for field in list(item_dict.keys()):
+                # See SERVER_RESOLVED_ITEM_FIELDS above: an absent key here is
+                # "leave it", not "set it to null".
+                if field in SERVER_RESOLVED_ITEM_FIELDS and field not in posted:
+                    continue
                 # `.get`, not `[...]`: a payload key that matches no column on
                 # either row is caught by split_item_payload when the change is
                 # APPLIED, which raises and names it. Here it simply cannot be
@@ -1474,9 +1521,10 @@ def stamp_landed_cost_audit(item, user, stamp_elc, stamp_alc):
 #---------------------------------------
 # HOW A CONSIGNMENT IS NAMED IN A MESSAGE
 #
-# The payment instrument number is what the list, the reports and the
-# notifications all show as the consignment's reference; IMP-{id} is the
-# fallback for a draft that has not been given one yet. One definition,
+# The payment reference is what the list, the reports and the notifications
+# all show as the consignment's reference; the CONSIGNMENT NUMBER is the
+# fallback for an order that has not been given an instrument number (it was
+# `IMP-{id}` until step 8 - see order_view.reference_label_from). One definition,
 # because a notification naming a consignment differently from the screen the
 # reader then opens is a notification they cannot act on.
 #---------------------------------------
@@ -1702,7 +1750,12 @@ PAYLOAD_TO_ORDER_ITEM = {
 RETIRED_PAYLOAD_FIELDS = {
     # Free text for the factory, superseded by the group's `works_branch_id`:
     # Works and Branch were always the same thing to the business (section 3.3).
-    # The wizard still sends it until step 8 makes that field a dropdown.
+    # STEP 8 STOPPED THE WIZARD SENDING IT - Works is now Step 1's
+    # "Works / Branch" dropdown, which writes `branch_id`, and the duplicate
+    # free-text input on Finance is gone. The entry stays because a client that
+    # has not reloaded still posts the key, and because an old change-history
+    # row can still carry it on a revert; dropping it would turn either into
+    # the "belongs to no table" ValueError above.
     "works",
 }
 

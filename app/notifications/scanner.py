@@ -526,6 +526,12 @@ def check_clearance_aging(db, today):
             Consignment.id, ConsignmentBatchGroup.instrument_number,
             # mode too - the reference is mode + number (order_view).
             ConsignmentBatchGroup.payment_instrument,
+            # The three values the consignment number derives from - the
+            # fallback `reference_label_from` uses when an order has no
+            # instrument number (order_view, "DISPLAY IDENTITY").
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             Consignment.current_status, since.label("since"),
             NotificationState.state_value,
             entering.label("is_aging"),
@@ -558,7 +564,9 @@ def check_clearance_aging(db, today):
             entity_id=r.id,
             payload={
                 "reference": reference_label_from(
-                        r.payment_instrument, r.instrument_number, r.id),
+                        r.payment_instrument, r.instrument_number,
+                        r.founding_consignment_id, r.batches_ever,
+                        r.batch_sequence),
                 "status": r.current_status,
                 "days_in_clearance": (today - r.since).days if r.since else "?",
                 "port": "port",
@@ -586,6 +594,12 @@ def check_demurrage_risk(db, today):
             key.label("state_key"),
             Consignment.id, ConsignmentBatchGroup.instrument_number,
             ConsignmentBatchGroup.payment_instrument,
+            # The three values the consignment number derives from - the
+            # fallback `reference_label_from` uses when an order has no
+            # instrument number (order_view, "DISPLAY IDENTITY").
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             Consignment.eta, Consignment.free_days_allowed,
             NotificationState.state_value,
             entering.label("at_risk"),
@@ -620,7 +634,9 @@ def check_demurrage_risk(db, today):
             entity_id=r.id,
             payload={
                 "reference": reference_label_from(
-                        r.payment_instrument, r.instrument_number, r.id),
+                        r.payment_instrument, r.instrument_number,
+                        r.founding_consignment_id, r.batches_ever,
+                        r.batch_sequence),
                 "free_days_left": max((starts - today).days, 0),
                 "port": "port",
                 "arrived_on": r.eta.isoformat(),
@@ -644,6 +660,12 @@ def check_payment_overdue(db, today):
             Payment.id, Payment.retirement_date, Payment.consignment_id,
             ConsignmentBatchGroup.instrument_number,
             ConsignmentBatchGroup.payment_instrument,
+            # The three values the consignment number derives from - the
+            # fallback `reference_label_from` uses when an order has no
+            # instrument number (order_view, "DISPLAY IDENTITY").
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             NotificationState.state_value,
             entering.label("is_overdue"),
         )
@@ -676,7 +698,9 @@ def check_payment_overdue(db, today):
                 "instrument": r.payment_instrument or "Payment",
                 "instrument_number": r.instrument_number or "",
                 "reference": reference_label_from(
-                    r.payment_instrument, r.instrument_number, r.consignment_id),
+                    r.payment_instrument, r.instrument_number,
+                    r.founding_consignment_id, r.batches_ever,
+                    r.batch_sequence),
                 "supplier": "the supplier",
                 "due_date": r.retirement_date.isoformat(),
                 "days_overdue": (today - r.retirement_date).days,

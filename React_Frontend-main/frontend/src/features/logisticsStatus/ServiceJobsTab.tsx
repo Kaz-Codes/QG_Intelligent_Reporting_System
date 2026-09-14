@@ -167,10 +167,15 @@ export function ServiceJobsTab({ initialTypeFilter }: { initialTypeFilter?: Type
 function ImportFobRow({ job, onOpenImports }: { job: ApiImportFobJob; onOpenImports: (id: number) => void }) {
   return (
     <tr className="border-t border-line hover:bg-canvas-alt">
-      {/* The LC/DP instrument number is what people recognise a consignment
-          by; the id is the fallback for one that hasn't got one yet. */}
+      {/* THE CONSIGNMENT NUMBER, with the payment reference under it — the
+          same two lines the imports list shows, so a record called `21-2 /
+          lc6222` there is called that here too. Both come from the server.
+          This cell used to be `instrument_number || IMP-${consignment_id}`, a
+          hand-rolled copy of a rule that lives in order_view.py, and the
+          `IMP-` half named a consignment that could not be looked up. */}
       <td className="px-3 py-2 font-semibold tabular-nums">
-        {job.instrument_number || `IMP-${job.consignment_id}`}
+        <div>{job.consignment_number || '—'}</div>
+        <div className="text-[11px] font-normal text-muted">{job.payment_reference || '—'}</div>
       </td>
       <td className="px-3 py-2"><TypeTag type="import-fob" /></td>
       {/* Supplier, not customer: on an inbound FOB import the counterparty is

@@ -427,6 +427,12 @@ export interface ApiOpenRequest {
   customer?: string | null
   mo_no?: string | null
   instrument_number?: string | null
+  /** The ORDER's payment reference, mode + number: `lc6222`. Built by the
+   *  server (order_view.payment_reference) so this queue names a consignment
+   *  the way the imports list, the notifications and every export do — it used
+   *  to print `instrument_number` raw and call the same record `6222`. Only
+   *  import-sourced requests carry it. */
+  payment_reference?: string | null
   snapshot: ApiSnapshotLine[]
   /** Days since the source record's own handoff timestamp
    *  (cross_module.py::_days_open) — null when that record has no timestamp

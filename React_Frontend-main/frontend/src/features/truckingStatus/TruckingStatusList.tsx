@@ -327,7 +327,11 @@ export function TruckingStatusList() {
                     <td className="px-3 py-2"><SourceTag source={r.source} /></td>
                     <td className="px-3 py-2">{r.movement_type ?? '—'}</td>
                     <td className="px-3 py-2 text-muted">{r.customer ?? r.supplier ?? '—'}</td>
-                    <td className="px-3 py-2 tabular-nums">{r.mo_no ?? r.instrument_number ?? '—'}</td>
+                    {/* The payment REFERENCE (lc6222), not the bare instrument
+                        number — built server-side, so this queue and the
+                        imports list cannot call one consignment two things.
+                        The consignment NUMBER is already in `label`. */}
+                    <td className="px-3 py-2 tabular-nums">{r.mo_no ?? r.payment_reference ?? r.instrument_number ?? '—'}</td>
                     <td className="px-3 py-2"><AgeBadge daysOpen={r.days_open} /></td>
                     <td className="px-3 py-2">
                       {/* A request is derived from its source record — there is

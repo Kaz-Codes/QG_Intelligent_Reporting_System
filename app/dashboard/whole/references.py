@@ -88,6 +88,14 @@ def _consignment_query():
             # the number is what let a drill-down row print a different label
             # from the screen it links to.
             ConsignmentBatchGroup.payment_instrument,
+            # THE THREE VALUES THE CONSIGNMENT NUMBER IS DERIVED FROM, because
+            # `reference_label_from` falls back to it when an order carries no
+            # instrument number (order_view, "DISPLAY IDENTITY"). Selecting
+            # `Consignment.id` and calling it the number is what section 0.4
+            # bans: on a later batch those are different integers.
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             Consignment.current_status,
             Supplier.name,
             Branch.name,
@@ -112,12 +120,14 @@ def _consignment_rows(db, query, total, page, page_size, badge_value=True):
     return _set(total, [
         {
             "id": cid,
-            "reference": reference_label_from(mode, instrument, cid),
+            "reference": reference_label_from(mode, instrument,
+                                              founding, ever, sequence),
             "detail": status,
             "meta": _joined(supplier, branch),
             "badge": _money(value) if badge_value else status,
         }
-        for cid, instrument, mode, status, supplier, branch, value in rows
+        for (cid, instrument, mode, founding, ever, sequence,
+             status, supplier, branch, value) in rows
     ], page, size)
 
 
@@ -550,6 +560,14 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
         select(
             Consignment.id, ConsignmentBatchGroup.instrument_number,
             ConsignmentBatchGroup.payment_instrument,
+            # THE THREE VALUES THE CONSIGNMENT NUMBER IS DERIVED FROM, because
+            # `reference_label_from` falls back to it when an order carries no
+            # instrument number (order_view, "DISPLAY IDENTITY"). Selecting
+            # `Consignment.id` and calling it the number is what section 0.4
+            # bans: on a later batch those are different integers.
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             Supplier.name, Branch.name, days_late.label("days"),
         )
         .select_from(Consignment)
@@ -565,12 +583,14 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     return _set(total, [
         {
             "id": cid,
-            "reference": reference_label_from(mode, instrument, cid),
+            "reference": reference_label_from(mode, instrument,
+                                              founding, ever, sequence),
             "detail": f"{days} days late",
             "meta": _joined(supplier, branch),
             "badge": f"{days} days late",
         }
-        for cid, instrument, mode, supplier, branch, days in rows
+        for (cid, instrument, mode, founding, ever, sequence,
+             supplier, branch, days) in rows
     ], page, size, unit="consignment")
 
 
@@ -641,6 +661,14 @@ def _line_query(conditions):
             Consignment.id.label("consignment_id"),
             ConsignmentBatchGroup.instrument_number,
             ConsignmentBatchGroup.payment_instrument,
+            # THE THREE VALUES THE CONSIGNMENT NUMBER IS DERIVED FROM, because
+            # `reference_label_from` falls back to it when an order carries no
+            # instrument number (order_view, "DISPLAY IDENTITY"). Selecting
+            # `Consignment.id` and calling it the number is what section 0.4
+            # bans: on a later batch those are different integers.
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             ConsignmentOrderItem.item_name,
             ConsignmentItem.quantity,
             ConsignmentOrderItem.unit_of_measurement,
@@ -654,6 +682,19 @@ def _line_query(conditions):
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
         .join(ConsignmentBatchGroup,
               ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        # THE ORDER LINE ABOVE THE SHIPMENT LINE. NAMED WITHOUT THIS JOIN,
+        # `consignment_order_items` became a second FROM element and the whole
+        # query a CARTESIAN PRODUCT: every live shipment line crossed with
+        # every order line in the database. Measured on a scratch clone - three
+        # consecutive rows of this drill-down came back as ONE line id repeated
+        # with three different item names, `total` said 446 (the count query
+        # below has no such cross join, so it was right) and no page ever
+        # reached the other 445. A 200 with a full page of plausible rows in
+        # it, which is why `tests/test_list_filter_joins.py` reads compiled SQL
+        # rather than response bodies. Pre-existing; found while adding the
+        # numbering columns above.
+        .join(ConsignmentOrderItem,
+              ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
         .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
         .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(ConsignmentItem.is_deleted.is_(False))
@@ -684,6 +725,12 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
         .join(Consignment, Consignment.id == ConsignmentItem.consignment_id)
         .join(ConsignmentBatchGroup,
               ConsignmentBatchGroup.id == Consignment.batch_group_id)
+        # The search clause above names `ConsignmentOrderItem.item_name`, so
+        # without this join a SEARCHED count crossed the two tables while an
+        # unsearched one did not - the count agreeing with the list only while
+        # nobody typed anything.
+        .join(ConsignmentOrderItem,
+              ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
         .outerjoin(Supplier, Supplier.id == ConsignmentBatchGroup.supplier_id)
         .outerjoin(Branch, Branch.id == ConsignmentBatchGroup.works_branch_id)
         .where(ConsignmentItem.is_deleted.is_(False))
@@ -706,7 +753,8 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
     items = [
         {
             "id": f"line-{line_id}",
-            "reference": reference_label_from(mode, instrument, cid),
+            "reference": reference_label_from(mode, instrument,
+                                              founding, ever, sequence),
             "detail": name,
             "meta": " · ".join(part for part in (
                 measure(quantity, unit),
@@ -715,7 +763,8 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
             ) if part),
             "badge": _money(value),
         }
-        for line_id, cid, instrument, mode, name, quantity, unit, eta, supplier, branch, value in rows
+        for (line_id, cid, instrument, mode, founding, ever, sequence,
+             name, quantity, unit, eta, supplier, branch, value) in rows
     ]
 
     return paginate(items, page, size, total=total or 0,

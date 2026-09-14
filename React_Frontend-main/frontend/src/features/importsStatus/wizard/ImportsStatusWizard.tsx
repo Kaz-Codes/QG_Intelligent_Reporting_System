@@ -339,10 +339,16 @@ function ImportsStatusWizardInner() {
     )
   }
 
+  // WHAT THIS RECORD IS CALLED — the consignment NUMBER (`21-2`), not the row
+  // id. On a later batch those are different integers and the id is a number
+  // nobody can look up (design 0.4). Falls back to the route id only while a
+  // record that has just been created has not been re-read yet.
+  const recordName = methods.getValues('consignmentNumber') || consignmentId || id
+
   if (isLocked) {
     return (
       <div className="flex flex-col gap-6">
-        <PageHeader title={`Consignment ${id}`} subtitle="Closed" module="importsStatus" />
+        <PageHeader title={`Consignment ${recordName}`} subtitle="Closed" module="importsStatus" />
         <div className="rounded-lg border border-line bg-canvas-alt px-3.5 py-2.5 text-sm text-muted">
           This consignment is closed. An admin must reopen it before it can be edited.
         </div>
@@ -364,7 +370,7 @@ function ImportsStatusWizardInner() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={isNew ? 'New Consignment' : `Edit Consignment ${consignmentId ?? id}`}
+        title={isNew ? 'New Consignment' : `Edit Consignment ${recordName}`}
         subtitle={`Step ${stepDef.step} of ${WIZARD_STEPS.length} — ${stepDef.label}`}
         module="importsStatus"
       />

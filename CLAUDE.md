@@ -413,7 +413,19 @@ allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
   is a bug report, not something to retry around.
 - **Never derive a display number from `consignment.id`.** On batch 2 they are
   different integers and the id belongs to no number anyone can look up. Use
-  `order_view.consignment_number()`; the serializer publishes it.
+  `order_view.consignment_number()`; the serializer publishes it, the imports
+  list and detail header render it, and the wizard's own header does too. The
+  id stays the link target and the React key — that distinction is the whole
+  point, and collapsing it is how this drifts back.
+- **`reference_label()`'s `IMP-{id}` fallback is GONE — step 8.** A row with no
+  instrument number now prints the **consignment number**. The fallback was
+  meant to disappear entirely once the number was on screen, but none of its
+  callers is an imports screen: they are the dashboard drill-downs, the
+  notification payloads, the activity log and the reports `ref` column, each
+  rendering ONE string with no field beside it, so blanking would have left
+  them with no identifier. `reference_label_from` now takes the three numbering
+  values instead of a consignment id, so a caller that was not updated raises a
+  `TypeError` rather than silently passing the id back in.
 
 **`consignment_batch_groups.is_deleted` is derived from the live batches**
 (`helpers.sync_group_deleted_state`, called by delete and undo-delete). It had
@@ -601,9 +613,15 @@ the link back, which is why a taken request drops off that one queue.
   (NOT every FOB consignment — that older behaviour filled the queue with work
   nobody had asked for), **minus** the ones a trucking job already took (matched
   by `(source, source_ref)`). Each carries a snapshot the "New Trucking Job"
-  form pre-fills from.
+  form pre-fills from, plus **`payment_reference`** — the queue used to print
+  `instrument_number` raw and call one consignment `6222` where every other
+  screen said `lc6222`.
 - **`GET /logistics/import-fob-jobs`** — the logistics side: consignments with
-  `sent_to_logistics_at`. Never consumed; logistics has no "take" step.
+  `sent_to_logistics_at`. Never consumed; logistics has no "take" step. Carries
+  **`consignment_number`** and **`payment_reference`**: the Service Jobs row
+  held a front-end copy of the display rule, `IMP-{consignment_id}` fallback
+  and all, which after step 8 would have been the last place in the app still
+  printing `IMP-`.
 - **`GET /consignments/{id}/trucking-jobs`** and
   **`GET /logistics/{id}/trucking-jobs`** — the reverse lookup (which jobs came
   from this consignment/order).
@@ -1057,8 +1075,9 @@ hand back all five rows under the shaft filter.
   (no such concept on a consignment) / `shipping line` / `bank` (Payment is its
   own one-to-many child table, not folded in) / `documentation status`
   (the Documentation dashboard tab was never built either); inventory
-  `last_restocked`; purchases `material`. Imports `ref` falls back to the LC
-  instrument number (then `IMP-{id}`); `ppc_store` stays a date.
+  `last_restocked`; purchases `material`. Imports `ref` is the payment
+  reference, falling back to the **consignment number** (`177`, `177-2`) — it
+  was `IMP-{id}` until step 8; `ppc_store` stays a date.
 
 ## loading
 
@@ -1209,6 +1228,22 @@ models (`Stock`, `Issuance`, `StoreRequisition`, `PurchasesData`) the purchases
 objects and saves in one flush. update diffs: new lines (no id), field-level
 changes on existing lines, and lines missing from the payload (soft-deleted) —
 recording each in the change history so it can be undone.
+
+**AN ABSENT PAYLOAD KEY MEANS "CLEAR IT" — except for the columns the SERVER
+resolves.** The request schemas default every optional field to `None` and
+`model_dump()` cannot tell a null the client sent from a key it never
+mentioned, so the diff reads both as a change to null. That is correct and
+relied upon: the wizard clears a field by OMITTING it (`draftToPayload` sends
+`undefined`, not `""`). It is wrong for a NOT-NULL column nobody types, and it
+was a **500 on every edit of an existing consignment** — the imports wizard
+sends neither `ordered_quantity` nor `order_item_id`, the diff wrote NULL over
+both, and the next autoflush hit the constraint before `sync_order_items` could
+resolve them. `imports.helpers.SERVER_RESOLVED_ITEM_FIELDS` names the two, and
+`updated_items` skips a field in it that the client did not actually set
+(`model_fields_set`). **`exclude_unset=True` on the whole payload is the wrong
+fix** — it would make clearing any field silently stop working. Add a name to
+that set only for a column a server function owns; `item_id` deliberately is
+NOT in it (see `tests/test_item_diff.py`).
 
 **Change history + field-level revert.** Every update writes one
 `*ChangeHistory` row whose `history` JSON holds the pre-change values (header
@@ -1396,6 +1431,28 @@ The imports module is wired end-to-end (the pattern to follow for the others):
   on 172 of 178 live records (96.6%). Fixed in the data by Alembic revision
   `d5e81b6a2c07`, not in the map; the map still does not gate, so **anything
   reaching these columns from outside the app must already be canonical.**
+  **`consignmentNumber` is separate from `systemId`, and that is load-bearing.**
+  `systemId` is `String(c.id)` — a route target and a React key. What the list,
+  the detail header and the wizard header SHOW is `consignmentNumber`, straight
+  off the payload. It does not fall back to the id: on a later batch the id is
+  a number belonging to no consignment (design 0.4), so a blank is the honest
+  rendering of a missing number and a dash is what appears.
+
+  **`works` is gone from the draft and from the payload.** It was free text on
+  the Finance step that the server discards (`RETIRED_PAYLOAD_FIELDS`); Works
+  and Branch are one field, and Step 1's **"Works / Branch"** dropdown — which
+  writes `branch_id` → the order's `works_branch_id` — is the dropdown the
+  requirements asked for. The backend still accepts the key, for an old client
+  and for a revert across an old history row.
+
+  **`origin` is a `SearchableSelect` over ISO 3166 (`lib/countries.ts`), with
+  free text OFF.** It replaced an eight-option `<select>` that rendered BLANK
+  for any stored value outside those eight — 76 of the 174 consignments that
+  state an origin — while the value itself was intact. A non-ISO stored value
+  (`UAE`, `SA`, `USA`, `Turkey`, `KSA`, `Phillpines`…) is DISPLAYED, SURVIVES a
+  save it was not edited in, and is flagged beside the field. **Nothing maps it
+  onto an ISO name**: `SA` alone is ambiguous between Saudi Arabia and South
+  Africa on a database holding both.
 - `lib/api/useImports.ts` — React Query hooks; mutations invalidate the list + record.
 - List/detail/wizard are wired; the wizard creates on first save then `PUT`s,
   and the final Submit calls `/submit`.

@@ -42,7 +42,7 @@ export function Step3Shipping() {
   return (
     <div className="space-y-5">
       <CarriedContext items={[
-        { label: 'Consignment', value: watch('systemId') || 'New' },
+        { label: 'Consignment', value: watch('consignmentNumber') || 'New' },
         { label: 'Supplier', value: watch('supplier') },
         { label: 'Origin', value: watch('origin') },
       ]} />

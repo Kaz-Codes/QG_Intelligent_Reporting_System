@@ -9,6 +9,7 @@ from app.trucking.models import TruckingConsignment
 from app.imports.order_view import (
     consignment_number, line_item_name, line_specification,
     order_instrument_number, order_origin, order_supplier_name,
+    payment_reference,
 )
 
 #-----------------------------------------------------
@@ -230,6 +231,13 @@ def derive_open_requests(db):
             "label": f"Import {number} — {order_supplier_name(consignment) or order_origin(consignment) or ''}".strip(" —"),
             "supplier": order_supplier_name(consignment),
             "instrument_number": order_instrument_number(consignment),
+            # THE ORDER'S PAYMENT REFERENCE, mode + number: `lc6222`. The
+            # trucking queue printed `instrument_number` raw, so one
+            # consignment was called `6222` there and `lc6222` on the imports
+            # list, in the notifications and in every export. Same rule, same
+            # source - concatenated on the server so this cannot become an
+            # eleventh spelling of it (revision 11).
+            "payment_reference": payment_reference(consignment) or None,
             "snapshot": _import_snapshot(consignment),
             "days_open": _days_open(consignment.sent_to_trucking_at),
         })
@@ -337,6 +345,14 @@ def derive_import_fob_jobs(db):
             "source_ref": str(consignment.id),
             "consignment_id": consignment.id,
             "instrument_number": order_instrument_number(consignment),
+            # THE NUMBER AND THE REFERENCE, for the same reason as above. The
+            # Service Jobs row carried a FRONT-END copy of the whole display
+            # rule - instrument_number or else `IMP-{consignment_id}` -
+            # including the fallback this step deletes from the server. Left
+            # alone it would have gone on printing `IMP-184` for a batch the
+            # rest of the app calls `21-2`.
+            "consignment_number": consignment_number(consignment) or None,
+            "payment_reference": payment_reference(consignment) or None,
             "supplier": order_supplier_name(consignment),
             "origin": order_origin(consignment),
             "item_summary": (

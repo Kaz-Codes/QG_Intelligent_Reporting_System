@@ -31,7 +31,7 @@ import pytest
 from app.imports.allocation import (
     OrderLineHasNoQuantity, OverAllocation, UnknownOrderLine, plain,
 )
-from app.imports.order_view import consignment_number_from
+from app.imports.order_view import consignment_number_from, reference_label_from
 
 from conftest import Obj
 
@@ -92,6 +92,47 @@ class TestTheSuffixRule:
         """Defensive, because the column is NOT NULL but old in-session copies
         can be expired: a missing count must never invent a suffix."""
         assert consignment_number_from(177, None, 1) == "177"
+
+
+#---------------------------------------------------------------------------
+# What a row PRINTS when the order has no payment reference
+#
+# `reference_label_from` used to fall back to `IMP-{consignment_id}`. Step 8
+# replaced that with the consignment number, because the fallback's ten
+# callers are notification payloads, drill-down rows, log lines and the
+# reports `ref` column - each rendering ONE string, none of them a screen that
+# shows the number beside it. Pinned here because the failure is silent: a
+# label is not something any route asserts on, and the only way anyone would
+# notice it going wrong is by reading a notification about a consignment they
+# cannot find.
+#---------------------------------------------------------------------------
+
+class TestTheReferenceLabelFallback:
+
+    def test_the_payment_reference_wins_when_there_is_one(self):
+        assert reference_label_from("LC", "6222", 177, 1, 1) == "lc6222"
+
+    def test_it_wins_on_a_later_batch_too_because_it_is_the_ORDER_S(self):
+        """Both batches of one LC print the same reference - that is what makes
+        the consignment NUMBER the thing that tells them apart."""
+        assert reference_label_from("LC", "6222", 177, 2, 2) == "lc6222"
+
+    def test_no_instrument_number_falls_back_to_the_consignment_number(self):
+        assert reference_label_from(None, None, 177, 1, 1) == "177"
+
+    def test_the_fallback_SUFFIXES_on_a_split(self):
+        """The half `IMP-{id}` got wrong. Batch 2 of order 177 is row 184, so
+        the old fallback printed `IMP-184` beside a sibling printing `IMP-177`
+        - two labels for one order, neither of which was the number."""
+        assert reference_label_from(None, None, 177, 2, 2) == "177-2"
+
+    def test_a_blank_instrument_number_is_not_a_reference(self):
+        assert reference_label_from("LC", "   ", 177, 1, 1) == "177"
+
+    def test_IMP_IS_GONE(self):
+        """The token itself, so a revert to the old fallback fails here rather
+        than only showing up in somebody's inbox."""
+        assert "IMP-" not in reference_label_from(None, None, 177, 1, 1)
 
 
 #---------------------------------------------------------------------------

@@ -113,9 +113,15 @@ export function Step2Finance() {
             <Input type="date" {...register('instrumentDate')} />
           </Field>
 
-          <Field label="Works" hint="The entity the import is filed under" error={errors.works?.message}>
-            <Input {...register('works')} autoComplete="off" />
-          </Field>
+          {/* "WORKS" WAS HERE AND IS NOW STEP 1'S "Works / Branch" DROPDOWN.
+              It was free text that reached no column: `works` is retired on
+              the server (helpers.RETIRED_PAYLOAD_FIELDS — accepted from the
+              payload and discarded), superseded by the order's
+              `works_branch_id`, which Step 1's Branch select already writes.
+              The serializer even returns the BRANCH NAME under `works` now,
+              so this input round-tripped a value it could not change. Two
+              editable controls over one stored value is the thing to avoid,
+              so the duplicate goes rather than becoming a second dropdown. */}
 
           <Field label="Exchange rate" htmlFor="exchangeRate" required error={errors.exchangeRate?.message} hint="Rate booked, not live">
             <Input id="exchangeRate" type="number" min="0" step="any" className="tabular-nums" {...register('exchangeRate')} placeholder="0.00" />

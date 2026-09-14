@@ -860,7 +860,8 @@ def line_reference(row):
         # IDENTITY". The query selects payment_instrument alongside the
         # number so the mode can be concatenated here as it is everywhere else.
         "reference": reference_label_from(
-            row.payment_instrument, row.instrument_number, row.consignment_id),
+            row.payment_instrument, row.instrument_number,
+            row.founding_consignment_id, row.batches_ever, row.batch_sequence),
         "detail": row.item_name,
         "meta": " · ".join(part for part in (
             f"{measure} {unit}".strip() or None,

@@ -166,6 +166,14 @@ def _line_query(shafts_only=False):
             # number is what let this row print a different label from the
             # screen it links to.
             ConsignmentBatchGroup.payment_instrument,
+            # THE THREE VALUES THE CONSIGNMENT NUMBER IS DERIVED FROM, because
+            # `reference_label_from` falls back to it when an order carries no
+            # instrument number (order_view, "DISPLAY IDENTITY"). Selecting
+            # `Consignment.id` and calling it the number is what section 0.4
+            # bans: on a later batch those are different integers.
+            ConsignmentBatchGroup.founding_consignment_id,
+            ConsignmentBatchGroup.batches_ever,
+            Consignment.batch_sequence,
             ConsignmentOrderItem.item_name,
             ConsignmentItem.quantity,
             ConsignmentOrderItem.unit_of_measurement,

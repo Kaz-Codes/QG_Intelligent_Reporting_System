@@ -67,14 +67,29 @@ export type PaymentState = 'paid' | 'partial' | 'unpaid' | 'unknown'
 export interface ImportsListRow {
   /** The real database id — what every endpoint and route uses. */
   id: number
-  /** What the table shows in the ID column. There is no separate reference
-   *  number on the backend, so the id is the identity. */
+  /** THE ROUTE TARGET AND THE REACT KEY, as a string. NOT what the screen
+   *  shows: on batch 2 of an order this is `184` while the consignment is
+   *  called `21-2`, and printing it names a consignment nobody can look up
+   *  (design 0.4). Use `consignmentNumber` for anything a person reads. */
   systemId: string
+  /** WHAT THE SCREEN SHOWS: `177`, or `177-1` / `177-2` once the order has
+   *  split. Built by the server, never assembled here — the rule is "suffix
+   *  only once an order has EVER held two batches", which is exactly the part
+   *  a browser-side copy would get wrong. Empty only if the payload carried
+   *  no number, which cannot happen for a row that has an order; it renders
+   *  as a dash rather than falling back to the id, because a fallback that is
+   *  wrong precisely in the case it exists for is worse than a visible gap. */
+  consignmentNumber: string
   branch: string
   supplier: string
   origin: string
   currency: string
   incoterm: string | null
+  /** THE ORDER'S BRANCH NAME, under its old key. `works` was free text on
+   *  the consignment and is retired: the server now returns the works/branch
+   *  NAME here, which is the same string as `branch`. Kept so nothing reading
+   *  it breaks; nothing renders it any more (the detail's Finance section
+   *  showed it beside an identical Branch row) and nothing writes it. */
   works: string | null
 
   items: ImportsListItem[]
@@ -269,6 +284,7 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
   return {
     id: c.id,
     systemId: String(c.id),
+    consignmentNumber: c.consignment_number ?? '',
     branch: c.branch?.name ?? '—',
     supplier: c.supplier?.name ?? '—',
     origin: c.origin ?? '—',
@@ -488,7 +504,6 @@ export function draftToPayload(draft: ConsignmentDraft, masters: WizardMasters):
     payment_instrument: strOrUndef(draft.paymentInstrument),
     instrument_number: strOrUndef(draft.instrumentNo),
     opening_or_retirement_date: strOrUndef(draft.instrumentDate),
-    works: strOrUndef(draft.works),
     exchange_rate: numGe0(draft.exchangeRate),
     rate_booked_on: strOrUndef(draft.rateDate),
     rate_source: strOrUndef(draft.rateSource),
@@ -569,6 +584,10 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
   return {
     ...DRAFT_DEFAULT_VALUES,
     systemId: String(c.id),
+    // Display only — the wizard's step chips name the consignment by it. It is
+    // never sent back: the server owns the number (draftToPayload does not
+    // carry it).
+    consignmentNumber: c.consignment_number ?? '',
 
     branch: c.branch?.name ?? '',
     supplier: c.supplier?.name ?? '',
@@ -615,7 +634,6 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
     paymentInstrument: (c.payment_instrument ?? '') as ConsignmentDraft['paymentInstrument'],
     instrumentNo: c.instrument_number ?? '',
     instrumentDate: c.opening_or_retirement_date ?? '',
-    works: c.works ?? '',
     exchangeRate: toNumber(c.exchange_rate) ?? undefined,
     rateDate: c.rate_booked_on ?? '',
     rateSource: c.rate_source ?? '',

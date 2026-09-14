@@ -249,11 +249,15 @@ export function ImportsStatusList() {
 
   const columns: SortableColumn<ImportsListRow>[] = [
     {
-      key: 'systemId', label: 'ID / Reference', width: 150,
+      key: 'systemId', label: 'Consignment / Reference', width: 150,
+      // Sorted on the numeric id, displayed as the consignment NUMBER. The two
+      // agree for an unsplit order and diverge on a later batch, where the id
+      // still gives the right ordering (batches are created in sequence) and
+      // the number is the only thing a person can look up — design 0.4.
       sortValue: (r) => r.id,
       render: (r) => (
         <div>
-          <div className="font-semibold tabular-nums">{r.systemId}</div>
+          <div className="font-semibold tabular-nums">{r.consignmentNumber || '—'}</div>
           {/* The payment REFERENCE (lc68756), not the bare number. Built
               server-side, so this row and a notification about the same
               consignment cannot disagree. Falls back to the first item's
@@ -555,7 +559,7 @@ export function ImportsStatusList() {
             <RowDeleteActions
               isDeleted={r.isDeleted}
               busy={deletingId === r.id}
-              label={`consignment ${r.systemId}`}
+              label={`consignment ${r.consignmentNumber || r.id}`}
               onDelete={() => void handleDelete(r, false)}
               onUndo={() => void handleDelete(r, true)}
             />
@@ -724,7 +728,7 @@ export function ImportsStatusList() {
         title="Reopen this consignment?"
         description={
           <>
-            <span className="font-medium text-ink">{confirmReopen?.systemId}</span> is closed. Reopening makes it
+            <span className="font-medium text-ink">{confirmReopen?.consignmentNumber}</span> is closed. Reopening makes it
             editable again until it is submitted at "Arrived at Works" once more.
           </>
         }
@@ -808,7 +812,7 @@ function ForwardedPanel({ onNavigate }: { onNavigate: (to: string) => void }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="border-t border-line hover:bg-canvas-alt">
-              <td className="px-3 py-2 font-semibold tabular-nums">{r.systemId}</td>
+              <td className="px-3 py-2 font-semibold tabular-nums">{r.consignmentNumber || '—'}</td>
               <td className="px-3 py-2">{r.supplier}<div className="text-[11px] text-muted">{r.origin}</div></td>
               <td className="px-3 py-2">
                 {r.items[0]?.itemName

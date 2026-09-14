@@ -308,24 +308,41 @@ def consignment_number_from(founding_consignment_id, batches_ever, batch_sequenc
     return number
 
 
-def reference_label_from(payment_instrument, instrument_number, consignment_id):
+def reference_label_from(payment_instrument, instrument_number,
+                         founding_consignment_id, batches_ever, batch_sequence):
     """What a list row, a notification or an export cell actually prints.
 
-    The payment reference, falling back to `IMP-{id}` when the order carries no
-    instrument number - which is what all ten replaced call sites did, spelled
-    out ten times.
+    The payment reference, falling back to the CONSIGNMENT NUMBER when the
+    order carries no instrument number.
 
-    THE FALLBACK IS SCHEDULED TO GO, AT STEP 8. It exists only because the
-    consignment number is not on screen anywhere yet: with nothing else to
-    show, a row with no LC number needed *something*. Once step 8 puts
-    `consignment_number()` beside the payment reference, this becomes
-    `payment_reference()` alone and an order with no instrument number simply
-    shows a blank in that column. Changing it before then would alter what
-    appears in notifications and in the queues other modules read, for records
-    that would then display nothing at all.
+    `IMP-{id}` IS GONE - STEP 8. It was the fallback from step 1 until the
+    consignment number reached a screen, and the reasoning recorded for its
+    removal was that the number would then sit beside the reference and the
+    reference could simply go blank. CHECKING THE CALLERS SHOWED THAT PREMISE
+    DOES NOT HOLD HERE. Not one of this function's callers is an imports
+    screen: they are the dashboard drill-downs, the notification payloads, the
+    activity log and the reports `ref` column, and each renders ONE string with
+    no second field beside it. The imports list and detail - the two screens
+    that DO now show the number - never called this at all; they render
+    `payment_reference` directly. Blanking would have removed the only
+    identifier those places have.
+
+    What replaces it is the real number rather than a made-up token. `IMP-184`
+    resolved to nothing anyone could look up, and on a later batch it was
+    additionally wrong: batch 2 of order 177 printed `IMP-184` beside a
+    sibling printing `IMP-177`, so one order's two shipments carried two
+    unrelated labels, neither of which was the number. `177-1` / `177-2` is
+    both correct and lookupable.
+
+    THE SIGNATURE CHANGED ON PURPOSE. It takes the three numbering values
+    rather than a consignment id, so a caller that has not been updated raises
+    a TypeError rather than quietly passing `consignment.id` - the exact
+    substitution section 0.4 bans, and the one a same-arity change would have
+    let through unnoticed.
     """
     return payment_reference_from(payment_instrument, instrument_number) \
-        or f"IMP-{consignment_id}"
+        or consignment_number_from(founding_consignment_id, batches_ever,
+                                   batch_sequence)
 
 
 #---------------------------------------------------------------------------
@@ -354,9 +371,5 @@ def consignment_number(consignment):
 
 
 def reference_label(consignment):
-    """`reference_label_from` over a Consignment - the IMP-{id} fallback included."""
-    return reference_label_from(
-        order_payment_instrument(consignment),
-        order_instrument_number(consignment),
-        consignment.id,
-    )
+    """`reference_label_from` over a Consignment - the number as the fallback."""
+    return payment_reference(consignment) or consignment_number(consignment)

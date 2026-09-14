@@ -78,7 +78,21 @@ export interface ApiPayment {
 }
 
 export interface ApiConsignment {
+  /** The row's PRIMARY KEY. A link target and a React key — never a display
+   *  number. On a later batch the id and the number are different integers
+   *  (design 0.4), so rendering this is how `184` reaches a screen. */
   id: number
+  /** THE SHIPMENT'S NUMBER: `177`, or `177-2` once the order has split.
+   *  Derived on the server from the founding batch's id, `batches_ever` and
+   *  this row's sequence (order_view.consignment_number) — the suffix rule is
+   *  the one thing a front-end copy would get wrong first. Null only if a row
+   *  somehow has no order above it; `batch_group_id` is NOT NULL, so it does
+   *  not happen. */
+  consignment_number: string | null
+  /** The ORDER this batch belongs to, and its place in the order. Two batches
+   *  of one LC share the group id and differ by the sequence. */
+  batch_group_id: number | null
+  batch_sequence: number | null
   branch: ApiMaster | null
   supplier: ApiMaster | null
   clearing_agent: ApiMaster | null

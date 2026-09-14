@@ -31,6 +31,152 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 13 (step 8, FIRST HALF: the values reach the screen)
+
+Step 8's contained half — the things that render values the API already
+publishes. **The allocation screen, batch creation from the UI, the blue
+pending-allocation highlight, the locked-above sections and the expanded
+per-item view are NOT in this, and nothing was left behind for them** — no
+stub, no dead parameter, no flag.
+
+### What shipped
+
+| What | Detail |
+|---|---|
+| **The consignment number is on screen** | The list's identity column (renamed **"Consignment / Reference"**), the detail breadcrumb and header, both reopen dialogs, the wizard's own header and its step chips. Verified on real splits: the list shows `21-1`/`21-2` and `184-1`/`184-2`, an unsplit order shows `183`, and the wizard header for row **186** reads **"Edit Consignment 21-2"**. |
+| **`systemId` and `consignmentNumber` are two fields now, deliberately** | `systemId` stays `String(c.id)` and is the route target and the React key; `consignmentNumber` is what a person reads. A row SORTS on the numeric id and DISPLAYS the number. **It does not fall back to the id** — on a later batch the id is a number belonging to no consignment, so a missing number renders as a dash. A fallback that is wrong precisely in the case it exists for is worse than a visible gap. |
+| **`IMP-{id}` is gone — replaced by the NUMBER, not by a blank** | §9 step 8's premise was that once the number is on screen the payment reference can simply go blank. **Checking the callers showed that premise does not hold.** Not one of `reference_label_from`'s callers is an imports screen: they are the dashboard drill-downs, the notification payloads, the activity log and the reports `ref` column, each rendering ONE string with no field beside it. The imports list and detail — the two screens that now DO show the number — never called it at all; they render `payment_reference` directly. Blanking would have removed the only identifier those places have. |
+| **…and the signature changed so a missed caller is loud** | `reference_label_from` now takes the three numbering values (`founding_consignment_id`, `batches_ever`, `batch_sequence`) instead of a consignment id, so an un-updated caller raises `TypeError` rather than quietly passing `consignment.id` back in — the exact substitution §0.4 bans, and the one a same-arity change would have let through. Eight SQL sites took three extra SELECT columns: `whole/references.py` ×3, `notifications/scanner.py` ×3, `imports/helpers._line_query`, `imports/calculations.line_reference`. |
+| **`IMP-184` was wrong twice over, which settles it** | It resolved to nothing anyone could look up, AND on a split it printed `IMP-184` beside a sibling printing `IMP-177` — one order, two unrelated labels, neither of them the number. `177-1`/`177-2` is correct and lookupable. Measured on the scratch clone: 5 of 179 live consignments carry no instrument number, so 5 rows change label. |
+| **The two other-module screens were brought IN, not left again** | Revision 11 reported `ServiceJobsTab.tsx:173` and `TruckingStatusList.tsx:330` and left them. Leaving them again stopped being neutral: `ServiceJobsTab` held a FRONT-END copy of the whole rule including `IMP-${consignment_id}`, so it would have become the last place in the app still printing `IMP-`. `cross_module.py` now publishes `payment_reference` on the trucking queue and `consignment_number` + `payment_reference` on the import-FOB list, and both screens render them. Verified on the one consignment both queues hold, which happens to have no instrument number: Service Jobs reads `183` over `—`, the queue reads `Import 183 — HNC` with reference `—`. |
+| **Country of origin is a `SearchableSelect` over ISO 3166** | `lib/countries.ts` — 249 entries, ISO English short name + alpha-2 + a search-only `also` for the forms people actually type. Driven in the browser: `paki` → Pakistan, `UAE` → United Arab Emirates, `PK` → Pakistan. |
+| **Works is Step 1's "Works / Branch" dropdown — a RENAME, not a new control** | The Finance step's free-text "Works" input reached NO column: `works` is retired server-side (`RETIRED_PAYLOAD_FIELDS` — accepted from the payload and discarded), superseded by the order's `works_branch_id`, which Step 1's Branch select already writes. The serializer even returns the BRANCH NAME under `works`, so that input was round-tripping a value it could not change. The duplicate is deleted — along with its twin on the detail page's Finance card, which printed the same string as the Branch row above it — rather than promoted to a second dropdown over one stored value. `works` is gone from the draft and from the payload; the backend still accepts the key, for a client that has not reloaded and for a revert across an old history row. |
+| **Price basis: NOT BUILT, and it is backend work first** | See below. |
+
+### The country decision — stored values are KEPT, never mapped
+
+**The `<select>` it replaced was already losing data, and that is the finding
+that mattered.** `origin` is free text on the order and holds **22 distinct
+spellings**; the old control offered **eight** options. A `<select>` whose value
+matches no `<option>` renders as unselected **without firing a change**, so this
+required field looked EMPTY on **76 of the 174** consignments that state an
+origin while the stored value was perfectly intact — and picking anything to
+make the "empty" field look right overwrote it.
+
+`SearchableSelect` is a text input over a list, so it **displays whatever is
+stored**, ISO or not. `allowFreeText` is **off**, so nobody can type a NEW
+non-ISO value, and its `handleBlur` puts an un-chosen value back untouched:
+**nothing is blanked and no save is refused.** A value that is not an ISO name
+is flagged beside the field — *"Not an ISO country name — kept as it is. Pick
+the ISO name from the list to standardise it."*
+
+**Nothing is mapped.** Measured on the scratch clone (183 consignments, 174
+with an origin):
+
+| Stored | Rows | ISO? |
+|---|---|---|
+| China · South Africa · Canada · Sweden · Germany · Italy · Pakistan · Singapore · Malaysia · Hong Kong | 118 | ✔ already the ISO short name |
+| Turkey | 16 | ISO says **Türkiye** |
+| UAE | 12 | **United Arab Emirates** |
+| **SA** | **11** | **AMBIGUOUS — Saudi Arabia or South Africa?** Both appear separately in this same column (`South Africa` 7, `KSA` 1) |
+| USA | 6 | United States of America |
+| South Korea 4 · Korea 3 | 7 | bare `Korea` is ambiguous between the two |
+| Taiwan 2 · Tanzania 2 | 4 | ISO adds a qualifier to each |
+| KSA | 1 | Saudi Arabia |
+| Phillpines 1 · Philipine 1 | 2 | misspellings of Philippines |
+| (none) | 9 | — |
+
+**`SA` is why there is no mapping table.** Eleven consignments — the third
+commonest value in the column — and this database holds both candidate
+countries under other names, so which one was meant is a business call about
+those eleven records, not something to infer. Normalising the unambiguous ones
+and leaving `SA` would be worse than normalising none: the column would look
+clean while its largest remaining defect stayed invisible.
+
+**A migration is available whenever the business wants one** — every non-ISO
+value above except `SA` and bare `Korea` is a mechanical rewrite. It is
+deliberately not part of this step, and `isIsoCountry` in `lib/countries.ts`
+records the reasoning where the next person will meet it.
+
+### Price basis — the control was NOT built, and why
+
+`price_basis`, `weight_unit_price` and `unit_weight` exist on
+`consignment_order_items`. **The backend does nothing with them and cannot even
+store a choice:**
+
+- **`recompute_derived` never reads `price_basis`.** It is `quantity ×
+  line_unit_price(item)`, unconditionally — and so is every other valuation in
+  the app: `dashboard/imports/calculations.py` (×2), `reports/serializers.py`,
+  `whole/references._line_query`, `imports/helpers.LINE_VALUE_PKR`. Nothing
+  anywhere branches on the basis.
+- **The three columns are not on `ConsignmentItemSchema`**, so Pydantic drops
+  them from any payload. The checkbox could not persist its own choice, let
+  alone have it acted on.
+- Measured: **455 of 455** order lines sit at `price_basis='quantity'` (the
+  server default), and `weight_unit_price` and `unit_weight` are **empty on
+  every row**.
+
+A checkbox here would tell an operator the line is valued by weight while every
+figure in the system kept multiplying by `unit_price` — a control that lies
+about the number printed beside it, which is worse than no control at all.
+
+**It is backend work first:** the three fields onto `ConsignmentItemSchema`,
+then ONE `line_value` function that branches on the basis, then every valuation
+site above onto it — the same "one metric, one definition" the dashboards
+already learned the hard way — and only then the checkbox and the second price
+input.
+
+### Two bugs found by running it, neither of them this step's
+
+Both were reproduced against an untouched `c8a450f` worktree before being
+called pre-existing.
+
+| Bug | Detail |
+|---|---|
+| **SAVING ANY EXISTING CONSIGNMENT 500s — the imports wizard's edit path is broken on `main`** ⚠️ | `UPDATE consignment_order_items SET item_id=NULL, ordered_quantity=NULL` → `NotNullViolation`. The wizard sends neither `ordered_quantity` nor `order_item_id` — it has no control for either and the server owns both — but `ConsignmentItemSchema` defaults them to `None` and `model_dump()` cannot tell that from a null the client sent, so `updated_items` recorded a change TO null and `apply_item_updates` wrote it before `sync_order_items` could resolve it. Introduced with step 7's NOT-NULL `ordered_quantity`; invisible to every check in the suite because none of them drives a wizard-shaped PUT. **Fixed**, narrowly: `helpers.SERVER_RESOLVED_ITEM_FIELDS` + `model_fields_set`, so an absent key means "leave it" for those two and still means "clear it" for everything else — which is how the wizard empties a text field, so `exclude_unset=True` across the payload would have been the wrong fix. Pinned both ways in `tests/test_item_diff.py`. |
+| **The Overview's imports LINE drill-downs were a CARTESIAN PRODUCT** | `whole/references.py::_line_query` selects `ConsignmentOrderItem.item_name`, `unit_of_measurement` and `unit_price` and **never joins that table**. Every live shipment line crossed with every order line: three consecutive rows of `imports.period_value` came back as ONE line id repeated with three different item names, the same reference and the same badge. `total` (446) was right — the count query has no such cross join — so **no page ever reached the other 445 records**, which breaks `references.py`'s own "the list is COMPLETE" rule. A 200 with a full page of plausible rows in it, which is exactly why `tests/test_list_filter_joins.py` reads compiled SQL rather than response bodies. **Fixed** in both the row query and the count (whose search clause names the same table, so a SEARCHED count crossed while an unsearched one did not). Every dashboard and reference endpoint was then swept under `PYTHONWARNINGS=always`: zero cartesian warnings. |
+
+**Reported, NOT fixed: `item_id` is cleared on every save.** Same mechanism one
+tier down — the column is nullable, so it is silent data loss rather than a
+500. It is the line's link to the `items` master, which
+`order_view.line_item_master` reads and the imports dashboard's category-delay
+chart is built on; 20 of 102 lines on the scratch clone still carry one. It is
+deliberately NOT in `SERVER_RESOLVED_ITEM_FIELDS`: no server function owns it,
+the wizard simply never posts it back, and whether a save should re-link a line
+to the master is a business call about rule 12 ("the line stores its own
+copy"). Pinned as CURRENT behaviour, labelled as a defect, in
+`tests/test_item_diff.py`.
+
+### What was verified, and how
+
+Against `scratch_s8` (185 consignments) holding **two** split orders — the
+pre-existing `184-1`/`184-2` and a dated one built through the real routes with
+`python -m tests.batch_fixture` (`21-1`/`21-2`).
+
+- `configure_mappers()` clean; **pytest 154 passed** (was 139: +6 on the
+  reference-label fallback, +9 on the item diff).
+- **`check_dashboard_consistency.py` 94 passed / 0 failed**, including every
+  batches-vs-orders assertion — which needs the DATED split to discriminate at
+  all.
+- **`check_batch_allocation.py` 50 passed / 0 failed.**
+- `tsc -b` clean.
+- **Browser** (Playwright + Chromium, Vite against the scratch backend): login,
+  the list, two detail pages, the six-step wizard, the Service Jobs tab and the
+  trucking queue. Two saves driven through the UI: choosing `United Arab
+  Emirates` over a stored `UAE` persists and reads back, and saving consignment
+  174 **without touching it** leaves its stored `Turkey` exactly as it was.
+
+### A caution that cost a run, again
+
+The thing that caught the `payment_instrument` KeyError was the running server,
+not the type checker. A patch inserting the three numbering columns into
+`imports/helpers._line_query` **replaced** the `payment_instrument` line rather
+than following it, and the imports dashboard 500'd — while `tsc -b`,
+`configure_mappers()` and pytest were all green. Kill uvicorn by PID from
+`netstat -ano | findstr LISTENING`; `pkill -f` still does not work here.
+
+---
+
 ## Changelog — revision 12 (step 7 BUILT: allocation, batch creation, numbering)
 
 The three open numbering questions are **decided** and recorded in §3.5a below.
@@ -1290,9 +1436,13 @@ Per §0.4 the requirements need **two** values shown together, where the code ha
 >
 > There are also THREE functions, not two. `payment_reference()` returns empty
 > when an order has no instrument number, so `reference_label()` carries the
-> `IMP-{id}` fallback that all ten call sites spelled out individually. That
-> fallback is scheduled to go at step 8, once the consignment number is on
-> screen to stand in its place.
+> fallback that all ten call sites spelled out individually.
+>
+> **UPDATED, revision 13: that fallback is now the CONSIGNMENT NUMBER, not
+> `IMP-{id}` and not a blank.** The plan was to delete it outright once the
+> number was on screen. Checking the callers first showed why that would have
+> been wrong: none of them is an imports screen, so none of them has the
+> number beside it to fall back on (revision 13).
 
 **Target state — one function each (built in `order_view.py`, see above):**
 
@@ -3887,8 +4037,13 @@ Not a commitment — the sequence I would follow, so you can see the shape.
      every "the two units differ" guard passes.
    - **`tests/test_batch_numbering.py`** — 31 pure assertions on A1/A3,
      `resolve_ordered_quantity` and the refusal messages. No database.
-8. **Frontend.** Two of the four things listed here are now DONE (revision 11);
-   what remains is the batching UI itself.
+8. **Frontend — SPLIT IN TWO. The first half is BUILT (revision 13); the
+   second half is the batching UI and has not started.**
+
+   The split is not administrative. The first half renders values the API
+   already publishes and could be verified by looking at a screen; the second
+   half **starts with backend work** — §3.7b names two API gaps it cannot begin
+   without.
 
    > **READ §3.7b FIRST.** It records what the API gives step 8 and the **three
    > things it does not**, each measured against the running server rather than
@@ -3898,30 +4053,68 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    > rejected), and adding an item to a later batch without `order_item_id`
    > **silently duplicates the order line** — leaving an order that claims to
    > have bought 105 of something it bought 100 of, with no error. The first
-   > two are small additions step 8 has to make; the third is a rule its Step 3
-   > screen has to obey.
+   > two are small additions the second half has to make; the third is a rule
+   > its Step 3 screen has to obey.
 
-   **Still to do:**
-   - the Step 3 allocation screen, list rows and blue highlight, and the
-     expanded per-item view — the batching UI. **Step 7 is done, so this is
-     unblocked**, and the server already publishes most of what it needs:
-     `allocation` (per item: ordered, allocated, outstanding, and the
-     `order_item_id` every allocation must quote) on the detail payload,
-     `consignment_number` on both, and `POST /{id}/batches` with its
-     `numbering` block for the renumbering warning A1 requires. §3.7b lists
-     what is missing;
-   - the `SearchableSelect`-backed country (ISO 3166) and works dropdowns;
-   - the per-item price-basis checkbox and the second price field;
-   - **`consignment_number()` on screen**, beside the payment reference. The
-     list's top line is still `String(c.id)`, so batch 2 of order 21 displays
-     `184` — a number belonging to no consignment anyone can look up (§0.4).
-     The server-side function exists and is verified; only the rendering is
-     left.
-   - **and then, only then, delete `reference_label()`'s `IMP-{id}` fallback.**
-     It exists solely because the consignment number is not on screen: with
-     nothing else to identify a row by, an order with no instrument number
-     needed *something*. Once the number is displayed, the payment reference
-     column can simply be blank.
+   **DONE — first half, revision 13:**
+   - **`consignment_number()` on screen** — the list's identity column, the
+     detail breadcrumb and header, both reopen dialogs, the wizard header and
+     its step chips. `systemId` stays the route target and the React key;
+     `consignmentNumber` is what anyone reads, and it does NOT fall back to the
+     id.
+   - **`reference_label()`'s `IMP-{id}` fallback deleted** — but replaced by
+     the **consignment number**, not by a blank. The premise recorded below,
+     that the reference column could simply go blank, **did not survive
+     checking the callers**: not one of them is an imports screen. They are the
+     dashboard drill-downs, the notification payloads, the activity log and the
+     reports `ref` column, each rendering ONE string with no field beside it,
+     and the two screens that now show the number never called it. Its
+     signature changed to the three numbering values so a missed caller raises
+     rather than passing the id back in.
+   - **`ServiceJobsTab.tsx` and `TruckingStatusList.tsx` brought in**, not left
+     a second time. `cross_module.py` publishes `payment_reference` on the
+     trucking queue and `consignment_number` + `payment_reference` on the
+     import-FOB list. `ServiceJobsTab` held a front-end copy of the display
+     rule including its own `IMP-${consignment_id}`, which would otherwise have
+     been the last place in the app printing `IMP-`.
+   - **Country of origin: a `SearchableSelect` over ISO 3166** (`lib/countries.ts`,
+     249 entries). Stored non-ISO values are DISPLAYED, SURVIVE an untouched
+     save and are FLAGGED; **nothing is mapped**, because `SA` — the third
+     commonest value in the column, 11 rows — is ambiguous between Saudi Arabia
+     and South Africa on a database holding both. Full table in revision 13.
+   - **Works: a rename, not a new control.** Step 1's Branch select already
+     writes `branch_id` → the order's `works_branch_id`, so it IS the dropdown
+     the requirements ask for and is now labelled **"Works / Branch"**. The
+     Finance step's free-text "Works" input reached no column at all and is
+     deleted, with `works` removed from the draft and the payload.
+
+   **DELIBERATELY NOT BUILT — the per-item price-basis checkbox.** It is
+   backend work first. `recompute_derived` never reads `price_basis` (nor does
+   any other valuation in the app), the three columns are absent from
+   `ConsignmentItemSchema` so a payload cannot even carry the choice, and all
+   455 order lines sit at the server default with both weight columns empty. A
+   control that stores a choice nothing acts on tells an operator the value is
+   calculated a way it is not. Revision 13 records the order the backend work
+   has to happen in.
+
+   **STILL TO DO — the second half, the batching UI:**
+   - **backend first, both from §3.7b:** a `batch_group_id` filter on
+     `GET /consignments/` (today the param is silently dropped and returns a
+     full unfiltered page, which looks like it worked), and a
+     pending-allocation boolean computed in SQL on the list query — not the
+     `allocation` block, which is detail-only because it reads
+     `group.order_items`;
+   - the **Step 3 allocation screen**, which must send `order_item_id` on every
+     line allocating against something the order already bought, and must offer
+     "add a new item to the order" as a visibly different action;
+   - **batch creation from the UI**, with the A1 renumbering warning built from
+     the `numbering` block `POST /{id}/batches` returns
+     (`siblings_renumbered`, `previous_consignment_number`);
+   - **the blue pending-allocation highlight** on list rows, once the flag
+     above exists;
+   - **the locked-above shipping and clearance sections** on a later batch,
+     once the siblings can be fetched;
+   - **the expanded per-item view.**
 
    > **DONE — the payment reference reaches the screen (revision 11).**
    > Step 1 unified ten BACKEND sites and no screen used any of them: the list
