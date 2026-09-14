@@ -171,7 +171,14 @@ def derive_open_requests(db):
         .where(Consignment.sent_to_trucking_at.is_not(None))
         .where(_not_taken("from-import-fob", Consignment.id))
         .options(
-            selectinload(Consignment.items),
+            # THE ORDER LINE TOO, and for the same reason the supplier note
+            # below gives. `_import_snapshot` reads `line_item_name` and
+            # `line_specification`, which walk `item.order_item` - so loading
+            # the lines alone warmed half of what the snapshot reads and left
+            # the other half to lazy-load once per LINE. The identical mistake,
+            # one level down, in the same options block.
+            selectinload(Consignment.items)
+                .selectinload(ConsignmentItem.order_item),
             # THE ORDER'S SUPPLIER, because that is what the rows below read.
             #
             # This eager-loaded `Consignment.supplier` — the HEADER relationship

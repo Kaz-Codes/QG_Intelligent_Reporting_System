@@ -86,9 +86,20 @@ def filter_options(request: Request):
             ).all()
         ]
 
+        # THE SAME MISSING JOIN AS THE TWO IN fetch_consignments_page, in its
+        # mildest form. Without it this was `FROM consignment_order_items,
+        # consignment_items` with no condition, so the `is_deleted` filter
+        # applied to no particular line and the dropdown listed every
+        # requisition type in the table - including ones only deleted lines
+        # carry - as long as a single live line existed anywhere.
+        #
+        # The dropdown has to offer exactly the values the LIST FILTER can
+        # return rows for, or a user picks an option and gets nothing back.
         requisition_types = sorted(
             r for (r,) in db.execute(
                 select(ConsignmentOrderItem.requisition_type)
+                .join(ConsignmentItem,
+                      ConsignmentItem.order_item_id == ConsignmentOrderItem.id)
                 .where(ConsignmentItem.is_deleted == False)  # noqa: E712
                 .distinct()
             ).all() if r
