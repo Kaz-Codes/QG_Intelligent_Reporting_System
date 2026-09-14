@@ -31,6 +31,250 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 14 (the origin migration, and where price basis multiplies)
+
+Answers to revision 13's open items, plus the design question price basis turns
+on. **Price basis is still NOT built** — the question below was the thing to
+settle first, and it is settled here rather than in code.
+
+### Origin is corrected in the DATA — Alembic `f3a91c60d28b`
+
+Decided by the project owner: the abbreviations map to their ISO names rather
+than being left or blanked, and the correction goes in a migration so it
+happens once instead of on every render.
+
+**`SA` → Saudi Arabia is that decision, not an inference.** Revision 13
+reported it as genuinely ambiguous — 11 consignments, the third commonest value
+in the column, on a database holding both candidate countries under other names
+(`South Africa` 7, `KSA` 1) — and declined to resolve it. It is recorded in the
+revision's own docstring as well as here, because the revision is what a later
+reader will open when they wonder why eleven consignments changed country.
+
+**Eleven spellings mapped, not the four named.** The four that were put to me
+(`UAE`, `KSA`, `SA`, `Korea`) plus `Turkey`, and then the other six that are
+equally unambiguous — mapping some and not others would leave the column
+looking clean while the rest of the mess stayed invisible, which is the same
+argument revision 13 used against a partial normalisation:
+
+| | rows | → |
+|---|---|---|
+| Turkey | 16 | Türkiye |
+| UAE | 12 | United Arab Emirates |
+| **SA** | **11** | **Saudi Arabia** ← the business call |
+| USA | 6 | United States of America |
+| South Korea 4 · Korea 3 | 7 | Korea, Republic of |
+| Taiwan 2 · Tanzania 2 | 4 | Taiwan, Province of China · Tanzania, United Republic of |
+| KSA | 1 | Saudi Arabia |
+| Phillpines 1 · Philipine 1 | 2 | Philippines |
+
+**Nothing was left unmapped.** The revision prints any value that is still not
+ISO after it runs; on this data that report is empty. 21 distinct spellings
+became **18**, all ISO, and the field's non-ISO warning no longer fires on any
+record.
+
+**The text fallback stays regardless.** `SearchableSelect` still displays and
+preserves a value the list does not contain — that is a property of the
+control, not of the data, and it is what protects the next workbook that
+invents a spelling. After this migration it simply has nothing to show.
+
+#### It updates BOTH copies of the column, and that is not belt and braces
+
+`origin` lives on `consignment_batch_groups` (live) **and** on `consignments`
+(the pre-batching copy left in place until Revision B, §4.5/§4.7). The loaders
+deliberately write both.
+
+**`v_import_shafts` reads `consignments.origin`** — one of the two semantic
+views that belong to `chatbot_backend`, are absent from `Base.metadata`, and
+are invisible to `create_all`, to autogenerate and to `configure_mappers()`
+(§4.6). Confirmed by asking the database rather than by reading the view:
+
+```sql
+SELECT viewname FROM pg_views
+ WHERE schemaname = 'public' AND definition ILIKE '%origin%';
+-- v_import_shafts
+```
+
+Normalising only the group would have left the ERP saying `United Arab
+Emirates` and the chatbot saying `UAE` for the same consignment, with nothing
+anywhere to explain the difference. 58 rows on the group, 59 on the batch — the
+two differ by exactly the split fixture's second batch, which is the next
+entry.
+
+#### A gap the migration surfaced, NOT one it caused
+
+After the run, exactly one row has a batch copy that disagrees with its group:
+**consignment 186, the batch the test fixture created through
+`POST /{id}/batches`, whose `consignments.origin` is NULL.** The ORM stopped
+mapping that column in part 4, so only the LOADER still writes it.
+
+The consequence is live and is not about origin: **every consignment created by
+the application rather than by the loader is invisible to `v_import_shafts`'s
+origin, supplier and item columns**, and since step 7 every new batch is
+app-created. The untouched dev database shows zero such rows because it has no
+app-created consignments; a database people are using will accumulate them.
+
+Not fixed here — the column disappears at Revision B and the view is
+`chatbot_backend`'s to change (§4.6 already says Revision B cannot be written
+by this project alone). Recorded so it is a known consequence of the gap rather
+than a surprise when somebody asks why the chatbot cannot see a new shipment.
+
+#### The migration alone would NOT have held — the loader had to change too
+
+`load_05_consignments` writes `origin` verbatim from the workbook's `Country`
+column, at two sites. The next `reload_changed` or `load_all` would have put
+`UAE` and `Turkey` straight back, and nothing would have said so.
+
+`map_country` now normalises on the way in, exactly as `map_currency` and
+`map_mode_of_shipment` already do for their columns — CLAUDE.md's rule that a
+loader writing a constrained column must normalise onto it, applied to a column
+that is constrained by a UI list rather than by an enum. The table is
+**duplicated** in the Alembic revision rather than imported from the loader, on
+purpose: a revision is a snapshot of what was true when it ran and must not
+change meaning because a constant elsewhere was edited later.
+
+**An unrecognised country is kept and reported, never dropped.** `map_country`
+passes an unknown spelling through and collects it for the end-of-load report
+that already names unmapped modes, instruments and units — nulling it would cut
+the row out of every origin breakdown. It is checked against
+`KNOWN_ISO_ORIGINS`, an 18-name allow-list of what this data actually contains,
+**deliberately not a second copy of all 249**: the loader only needs to tell "a
+spelling somebody should look at" from "a spelling that is fine", and a full
+ISO list in Python would be a second thing to keep in step with
+`countries.ts` for no gain. A genuinely new country is reported once, checked,
+and added.
+
+#### Reversibility — the downgrade is a deliberate no-op
+
+The mapping is many-to-one: `SA` and `KSA` both become Saudi Arabia, `Korea`
+and `South Korea` both become Korea, Republic of, `Phillpines` and `Philipine`
+both become Philippines. A downgrade could only pick one representative per ISO
+name and would write a spelling onto records that never carried it. So it does
+nothing and says so; the upgrade is a data correction, nothing downstream
+depends on the old spellings, and the values are in any backup taken before it
+ran.
+
+Verified on a scratch clone: **upgrade → 58/59 rows, 18 distinct ISO values, no
+leftovers; downgrade → version rolls back, data stays corrected; re-upgrade →
+0 rows touched**, so it is idempotent. Then the app served off the migrated
+database: consignment 164 reads `United Arab Emirates` and 174 reads `Türkiye`
+in the wizard, with the non-ISO warning gone from both.
+
+### Where the price-basis multiplication happens — the design answer
+
+The question was whether the value can be computed at all, given that
+`price_basis` and `weight_unit_price` live on the ORDER line while the value
+being computed is per BATCH.
+
+**It can, and the multiplication does not move.** The model comments already
+settle it, and they were written for this:
+
+- `ConsignmentOrderItem.unit_weight` is *"Kilograms PER UNIT — deliberately not
+  the line's total"*;
+- `ConsignmentItem.net_weight` is *"the line's total for its whole quantity
+  (not a per-unit figure)"*.
+
+So the weight formula composes exactly like the quantity one — a **per-batch
+quantity** times an **order-level per-unit rate**:
+
+```
+quantity basis   value = ConsignmentItem.quantity × ConsignmentOrderItem.unit_price
+weight   basis   value = ConsignmentItem.quantity × ConsignmentOrderItem.unit_weight
+                                                  × ConsignmentOrderItem.weight_unit_price
+```
+
+Both are `quantity × (something per unit)`. **The basis selects the rate; the
+per-batch quantity keeps doing the multiplying.** Nothing needs to know about
+batches that does not already, two batches of one order still sum to the
+order's value, and `recompute_derived` stays where and what it is.
+
+**The alternative, which is the wrong one, is worth naming** so nobody proposes
+it later: valuing on `ConsignmentItem.net_weight × weight_unit_price` — the
+batch's *measured* total weight. It looks more accurate and is not. `net_weight`
+is entered after arrival and is NULL on nearly every line, so a line would
+value at nothing until somebody weighed it, and an order's value would drift as
+weights came in. It also double-counts if anyone later multiplies by quantity
+again, which is exactly what the model comment warns about.
+
+#### What that makes the build — measured, not estimated
+
+Seven sites multiply quantity by a unit price:
+
+| | where | shape |
+|---|---|---|
+| **4** | `imports/helpers.py:1483` (`recompute_derived`), `dashboard/imports/calculations.py:59`, `:518`, `reports/serializers.py:92` | Python, and **all four already call `line_unit_price(line)`** |
+| **3** | `dashboard/imports/helpers.py:128` (`LINE_VALUE_PKR`), `dashboard/whole/helpers.py:132`, `dashboard/whole/references.py:678` | **SQL** — they name `ConsignmentOrderItem.unit_price` directly |
+
+So the Python half is **one function**: `line_unit_price` branches on the basis
+and the other four sites inherit it for free.
+
+**The SQL half is the real cost, and it is one thing, not three.** A Python
+helper cannot be pushed into a SQL aggregate, so the rule has to exist a second
+time as a SQLAlchemy `case()` — defined once in `order_view.py` (which imports
+models and nothing else, so every caller can reach it) and used at all three.
+That is **two definitions of one rule**, which is the failure mode this
+document and `calculations.md` spend the most words on. It is unavoidable and
+it is testable: a check that evaluates both over every live line and requires
+them to agree.
+
+The rest is mechanical: three fields onto `ConsignmentItemSchema` and onto
+`ORDER_ITEM_LINE_FIELDS` (without the second, `apply_item_updates` will not
+write them to the order line and the checkbox saves nothing — the same shape as
+the `ordered_quantity` bug in revision 13); the serializer and the export
+already carry all three columns; then the front-end checkbox, the per-kg price
+and the unit-weight input, and both directions of the map.
+
+**No migration.** The columns exist and 455 of 455 rows already hold the
+`quantity` default.
+
+#### Two decisions the build needs, which are not mine
+
+1. **What the reports and export `unit_price` column shows under a weight
+   basis.** `reports/serializers.py:159` publishes `line_unit_price(ci)`. If
+   that becomes the *effective* per-unit price, the column stays summable and
+   comparable but no longer matches what anyone typed. If it stays the raw
+   `unit_price`, it is blank for every weight-priced line. `enums.py`'s own
+   comment is the warning: a column that silently mixes rupees-per-kg with
+   rupees-per-piece is arithmetic nobody can catch. A third column stating the
+   basis is the obvious answer, and it is an export shape change.
+2. **Whether ELC/ALC are affected.** Rule 11 says they are manual, per-item and
+   never calculated, so the basis should not touch them — worth confirming
+   rather than assuming, since they are the other per-line money figures.
+
+### Works — nothing further, and §9 step 8 listed a completed item
+
+Confirmed and recorded: the Works dropdown the requirements ask for is Step 1's
+branch select, which already wrote `branch_id` → the order's `works_branch_id`
+before step 8 began. §9 step 8 listed it as outstanding work when it was
+already done; §9 now says so, rather than leaving a future reader to wonder
+what was built.
+
+### Two dead country lists removed
+
+Both were hardcoded arrays that `lib/countries.ts` superseded, and both were
+exactly what somebody reaches for next:
+
+- `lib/mockData/imports.ts` held `['China', 'UAE', 'Germany', 'Turkey', 'South
+  Korea']` — **three of the five are the very spellings the migration above
+  corrects**. Nothing imports the module at all.
+- `lib/importsStatusData.ts` held a six-name `ORIGINS`, three of them non-ISO.
+  That module IS still imported, by the logistics and trucking mock generators.
+
+Both now derive their sample from `lib/countries.ts` by alpha-2 code, so even
+the fixtures sit on the one definition. **The whole `src/lib/mockData/` tree is
+unreferenced** — five files, reachable only from each other — which is a
+separate question from these lists and is left alone.
+
+### The `IMP-` sweep, re-run rather than trusted
+
+Revision 11's "two other modules render an instrument number raw" was checked
+again across every `.ts` and `.tsx` in `src/`, not just the two files it named.
+The figure holds: those two were the only ones, both are fixed, and **no live
+code constructs an `IMP-` label any more.** What remains are three comments
+describing the old behaviour, the unrelated `IMP-<hash>` item code the loader
+generates (`imports/item_codes.py`), and two mock-data modules nothing imports.
+
+---
+
 ## Changelog — revision 13 (step 8, FIRST HALF: the values reach the screen)
 
 Step 8's contained half — the things that render values the API already
@@ -4079,23 +4323,64 @@ Not a commitment — the sequence I would follow, so you can see the shape.
      been the last place in the app printing `IMP-`.
    - **Country of origin: a `SearchableSelect` over ISO 3166** (`lib/countries.ts`,
      249 entries). Stored non-ISO values are DISPLAYED, SURVIVE an untouched
-     save and are FLAGGED; **nothing is mapped**, because `SA` — the third
-     commonest value in the column, 11 rows — is ambiguous between Saudi Arabia
-     and South Africa on a database holding both. Full table in revision 13.
-   - **Works: a rename, not a new control.** Step 1's Branch select already
-     writes `branch_id` → the order's `works_branch_id`, so it IS the dropdown
-     the requirements ask for and is now labelled **"Works / Branch"**. The
-     Finance step's free-text "Works" input reached no column at all and is
-     deleted, with `works` removed from the draft and the payload.
+     save and are FLAGGED — that is a property of the control and it stays.
+     - **The DATA was then corrected too — Alembic `f3a91c60d28b`** (revision
+       14), on the project owner's decision, including `SA` → Saudi Arabia,
+       which revision 13 had referred rather than resolved. Eleven spellings
+       across 59 rows, on **both** copies of the column, because
+       `v_import_shafts` reads the orphaned `consignments.origin`. 21 distinct
+       values became 18, all ISO, none left over.
+     - `load_05_consignments.map_country` applies the same mapping at load
+       time. Without it the next reload would have put `UAE` and `Turkey`
+       straight back, and nothing would have said so.
+   - **Works — THIS STEP LISTED AN ALREADY-COMPLETED ITEM.** Step 1's Branch
+     select has written `branch_id` → the order's `works_branch_id` since part
+     4, so the dropdown the requirements ask for existed before step 8 began;
+     the bullet below was written from the requirements rather than from the
+     screen. All that was left was the label (**"Works / Branch"**) and
+     deleting the Finance step's free-text "Works" input, which reached no
+     column at all — `works` is out of the draft and the payload with it.
+     Recorded as a completed item rather than silently dropped, so a later
+     reader is not left looking for work that was never outstanding.
 
-   **DELIBERATELY NOT BUILT — the per-item price-basis checkbox.** It is
-   backend work first. `recompute_derived` never reads `price_basis` (nor does
-   any other valuation in the app), the three columns are absent from
+   **NOT BUILT — the per-item price-basis checkbox. Backend first, and the
+   design question is now SETTLED (revision 14) so the build can start.**
+
+   Nothing acts on `price_basis` today: `recompute_derived` never reads it, nor
+   does any other valuation, the three columns are absent from
    `ConsignmentItemSchema` so a payload cannot even carry the choice, and all
    455 order lines sit at the server default with both weight columns empty. A
    control that stores a choice nothing acts on tells an operator the value is
-   calculated a way it is not. Revision 13 records the order the backend work
-   has to happen in.
+   calculated a way it is not.
+
+   **Where the multiplication happens — the thing that had to be worked out
+   first.** `price_basis` and `weight_unit_price` are ORDER-level facts while
+   the value is per BATCH, and the answer is that this changes nothing:
+   `unit_weight` is kilograms PER UNIT (the model says so explicitly, against
+   `ConsignmentItem.net_weight`, which is the batch's total), so
+
+   ```
+   quantity basis   quantity × unit_price
+   weight   basis   quantity × unit_weight × weight_unit_price
+   ```
+
+   are both `quantity × (something per unit)`. **The basis selects the rate;
+   the per-batch quantity keeps doing the multiplying**, `recompute_derived`
+   stays where it is, and two batches still sum to the order's value.
+
+   **Size, measured:** seven sites multiply quantity by a unit price. The four
+   Python ones all already call `line_unit_price(line)`, so they are ONE
+   function change. The three SQL ones name `ConsignmentOrderItem.unit_price`
+   directly and need the rule a second time as a SQLAlchemy `case()` — two
+   definitions of one rule, which is unavoidable and must be pinned by a check
+   that evaluates both over every live line. Plus three fields onto
+   `ConsignmentItemSchema` **and onto `ORDER_ITEM_LINE_FIELDS`** (without the
+   second the checkbox saves nothing — the same shape as revision 13's
+   `ordered_quantity` bug), then the front-end controls. No migration.
+
+   **Two decisions the build needs first**, both in revision 14: what the
+   reports/export `unit_price` column shows under a weight basis, and
+   confirmation that ELC/ALC are untouched by it.
 
    **STILL TO DO — the second half, the batching UI:**
    - **backend first, both from §3.7b:** a `batch_group_id` filter on

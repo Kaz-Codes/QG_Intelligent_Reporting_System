@@ -180,6 +180,73 @@ def map_currency(value):
     return CURRENCY_MAP.get(s, s)
 
 
+# The sheet's Country column -> the ISO 3166-1 English short name.
+#
+# WHY THE LOADER AND NOT ONLY THE MIGRATION. Alembic revision `f3a91c60d28b`
+# corrects the 59 stored rows once; this is what stops the next reload putting
+# `UAE` and `Turkey` straight back, because `origin` is written verbatim from
+# the workbook. Same shape as `map_currency` and `map_mode_of_shipment` above
+# and below - the loaders normalise on the way in, so a screen never has to.
+#
+# `SA` -> Saudi Arabia is the project owner's decision, not an inference: the
+# sheet also carries `South Africa` and `KSA`, so the abbreviation is genuinely
+# ambiguous and was referred rather than guessed. Recorded here as well as in
+# the revision, because this is the copy that keeps applying.
+#
+# AN UNKNOWN SPELLING IS KEPT, NOT DROPPED. A country nobody has seen before
+# is data, and nulling it would cut the row out of every origin breakdown; it
+# is collected and reported at the end of the load instead, the way
+# `map_mode_of_shipment` reports its own.
+COUNTRY_TO_ISO = {
+    "turkey":       "Türkiye",
+    "uae":          "United Arab Emirates",
+    "sa":           "Saudi Arabia",
+    "usa":          "United States of America",
+    "south korea":  "Korea, Republic of",
+    "korea":        "Korea, Republic of",
+    "taiwan":       "Taiwan, Province of China",
+    "tanzania":     "Tanzania, United Republic of",
+    "ksa":          "Saudi Arabia",
+    "phillpines":   "Philippines",
+    "philipine":    "Philippines",
+}
+
+# The ISO names this data is ALREADY known to use correctly, so the report
+# below does not cry wolf on every country in the sheet. Eighteen names: the
+# eight COUNTRY_TO_ISO produces plus the ten that were already right.
+#
+# DELIBERATELY NOT THE FULL 249. The frontend needs every country because a
+# person picks from it; the loader only needs to tell "a spelling somebody
+# should look at" from "a spelling that is fine", and an allow-list of what
+# this workbook actually contains does that with eighteen entries instead of a
+# second copy of ISO 3166 that has to be kept in step with `countries.ts`. A
+# genuinely new country is reported once, checked, and added here - the same
+# contract `_unmapped_mode_of_shipment` has had all along.
+KNOWN_ISO_ORIGINS = frozenset({
+    "Türkiye", "United Arab Emirates", "Saudi Arabia",
+    "United States of America", "Korea, Republic of",
+    "Taiwan, Province of China", "Tanzania, United Republic of", "Philippines",
+    "China", "South Africa", "Canada", "Hong Kong", "Italy", "Germany",
+    "Sweden", "Pakistan", "Malaysia", "Singapore",
+})
+
+_unmapped_country = set()
+
+
+def map_country(value):
+    s = clean_text(value)
+    if not s:
+        return None
+
+    key = " ".join(s.split()).lower()
+    if key in COUNTRY_TO_ISO:
+        return COUNTRY_TO_ISO[key]
+
+    if s not in KNOWN_ISO_ORIGINS:
+        _unmapped_country.add(s)
+    return s
+
+
 def map_consignment_type(value):
     """The sheet's EFS column -> EFS / Regular import / unknown.
 
@@ -331,7 +398,7 @@ def map_unit_of_measurement(value):
 
 
 def _report_unmapped():
-    """Print anything that matched no known spelling, for all three columns.
+    """Print anything that matched no known spelling, for all four columns.
 
     Called once at the end of a load. Nothing here BLOCKS the load — the
     values are already sitting in the row tuples, left as-is — this is only
@@ -342,6 +409,11 @@ def _report_unmapped():
         ("mode_of_shipment", _unmapped_mode_of_shipment),
         ("payment_instrument", _unmapped_payment_instrument),
         ("unit_of_measurement", _unmapped_unit_of_measurement),
+        # A country spelling COUNTRY_TO_ISO has never seen. Unlike the three
+        # above it cannot cause a 422 - `origin` is free text, not an enum -
+        # but an unreported one silently splits a country across two rows of
+        # every origin breakdown, which is the reason the field became a list.
+        ("origin", _unmapped_country),
     ]
     for label, values in reports:
         if values:
@@ -460,7 +532,7 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             _first(rows, "clearing_agent_id", clean_int),
             port_map.get(pol) if pol else None,            # loading_port_id
             port_map.get(pod) if pod else None,            # delivery_port_id
-            _first(rows, "Country", clean_text),           # origin
+            _first(rows, "Country", map_country),          # origin
             map_currency(_first(rows, "Currency", lambda v: v)),
             map_consignment_type(_first(rows, "EFS", lambda v: v)),
             map_mode_of_shipment(_first(rows, "Mode of Shipment", lambda v: v)),
@@ -496,7 +568,7 @@ def build_rows(df, port_map, item_map, created_by_id, branch_ids=None):
             consignment_id,                                # founding_consignment_id
             1,                                             # batches_ever
             _first(rows, "supplier_id", clean_int),
-            _first(rows, "Country", clean_text),           # origin
+            _first(rows, "Country", map_country),          # origin
             map_currency(_first(rows, "Currency", lambda v: v)),
             map_consignment_type(_first(rows, "EFS", lambda v: v)),
             None,                                          # incoterm: not in the sheet

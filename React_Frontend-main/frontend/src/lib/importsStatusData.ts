@@ -1,4 +1,5 @@
 import { STAGE_GROUPS, stageOf, type StageKey } from './importsStages'
+import { COUNTRIES } from './countries'
 import {
   CONSIGNMENT_STATUSES,
   CLOSED_STATUS,
@@ -44,7 +45,15 @@ export const SUPPLIERS = [
   'Siemens AG', 'Trelleborg Sealing Solutions', 'Bosch Rexroth AG',
   'Yaskawa Electric Corporation', 'Hyundai Steel Company',
 ] as const
-export const ORIGINS = ['China', 'Germany', 'Sweden', 'Japan', 'Korea, Republic of', 'United States'] as const
+// DRAWN FROM `lib/countries.ts`, NOT HARDCODED. This was a six-name array
+// written before the country field had a real list behind it, and three of its
+// six names were not ISO. A stale country list sitting in a mock-data module
+// is a list somebody copies; deriving the sample keeps even the fixtures on
+// the one definition.
+const SAMPLE_ORIGIN_CODES = ['CN', 'DE', 'SE', 'JP', 'KR', 'US']
+export const ORIGINS = SAMPLE_ORIGIN_CODES.map(
+  (code) => COUNTRIES.find((c) => c.code === code)!.name,
+)
 export const CURRENCIES = ['USD', 'EUR', 'JPY'] as const
 export const REQUISITION_LABELS = ['Store', 'Engineering', 'Others'] as const
 export const PAYMENT_INSTRUMENTS = ['LC', 'Adv', 'DP', 'CAD'] as const

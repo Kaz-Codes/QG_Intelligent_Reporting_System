@@ -2,8 +2,17 @@ import {
   mulberry32, randInt, choice, recentDate,
   BRANCHES, SUPPLIERS, CUSTOMERS, ITEM_CATEGORIES,
 } from './shared'
+import { COUNTRIES as ISO_COUNTRIES } from '@/lib/countries'
 
-export const COUNTRIES = ['China', 'UAE', 'Germany', 'Turkey', 'South Korea'] as const
+// WAS A HARDCODED FIVE: 'China', 'UAE', 'Germany', 'Turkey', 'South Korea' —
+// three of which are precisely the non-ISO spellings the origin migration
+// corrects in the database. Left alone it was a ready-made list for somebody
+// to copy back in. Drawn from `lib/countries.ts` now, like every other country
+// list in the app.
+const SAMPLE_COUNTRY_CODES = ['CN', 'AE', 'DE', 'TR', 'KR']
+const COUNTRIES = SAMPLE_COUNTRY_CODES.map(
+  (code) => ISO_COUNTRIES.find((c) => c.code === code)!.name,
+)
 export const SHIPPING_LINES = ['Maersk', 'MSC', 'CMA CGM', 'Hapag-Lloyd', 'COSCO'] as const
 export const MODES_OF_SHIPMENT = ['Sea', 'Air', 'Land'] as const
 export const BANKS = ['HBL', 'MCB', 'UBL', 'Meezan Bank'] as const

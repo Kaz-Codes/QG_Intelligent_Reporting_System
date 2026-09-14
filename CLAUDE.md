@@ -1449,10 +1449,27 @@ The imports module is wired end-to-end (the pattern to follow for the others):
   free text OFF.** It replaced an eight-option `<select>` that rendered BLANK
   for any stored value outside those eight — 76 of the 174 consignments that
   state an origin — while the value itself was intact. A non-ISO stored value
-  (`UAE`, `SA`, `USA`, `Turkey`, `KSA`, `Phillpines`…) is DISPLAYED, SURVIVES a
-  save it was not edited in, and is flagged beside the field. **Nothing maps it
-  onto an ISO name**: `SA` alone is ambiguous between Saudi Arabia and South
-  Africa on a database holding both.
+  is DISPLAYED, SURVIVES a save it was not edited in, and is flagged beside the
+  field. That behaviour stays whatever the data looks like; it is what protects
+  the next workbook that invents a spelling.
+
+  **The stored data is ISO too, and is corrected in TWO places.** Alembic
+  `f3a91c60d28b` mapped 11 spellings across 59 rows (`Turkey`→`Türkiye`,
+  `UAE`→`United Arab Emirates`, `SA`/`KSA`→`Saudi Arabia`, `USA`, `Korea`/
+  `South Korea`, `Taiwan`, `Tanzania`, two misspellings of the Philippines),
+  and `load_05_consignments.map_country` applies the same mapping at load time
+  so a reload cannot undo it. **`SA`→Saudi Arabia was a business decision**,
+  not an inference — the column also holds `South Africa` and `KSA`.
+  - **It updates BOTH `consignment_batch_groups.origin` and the orphaned
+    `consignments.origin`**, because the chatbot's `v_import_shafts` reads the
+    second one (see "Database migrations" — those views are invisible to
+    `create_all`, autogenerate and `configure_mappers()`). Updating one would
+    have split what the ERP says from what the chatbot says.
+  - **The downgrade is a documented no-op**: the mapping is many-to-one, so
+    reversing it would write a spelling onto records that never carried it.
+  - A country `map_country` does not recognise is **kept and reported**, never
+    dropped, against an 18-name allow-list of what this data holds —
+    deliberately not a second copy of all 249 names.
 - `lib/api/useImports.ts` — React Query hooks; mutations invalidate the list + record.
 - List/detail/wizard are wired; the wizard creates on first save then `PUT`s,
   and the final Submit calls `/submit`.
