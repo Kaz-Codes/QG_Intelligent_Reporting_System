@@ -8,6 +8,7 @@ follow-up questions in the same chat, generate a new one for a new chat.
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -18,6 +19,34 @@ from pydantic import BaseModel, Field
 
 from backend.graph.memory import get_checkpointer
 from backend.api.identity import current_user_id
+
+logger = logging.getLogger(__name__)
+
+
+def _user_facing_error(raw: str) -> str:
+    """
+    A raw internal error -> something a business user can act on.
+
+    Every error the graph can produce reaches here as a raw f"{stage} failed:
+    {exc}" string (planning_agent, response_agent, sql_agent, learn_agent) or,
+    for a total graph failure, a bare exception's own str(). None of that was
+    written for a business user to read - "Request timed out", a driver's own
+    wording, a stack frame fragment - it names an implementation detail, not
+    something they can do anything with. The full, unsanitised string is still
+    logged (logger.exception, at each call site) - this is only what reaches
+    the client.
+    """
+    if not raw:
+        return raw
+    if "timed out" in raw.lower() or "timeout" in raw.lower():
+        return (
+            "That took longer than expected to answer - this sometimes happens "
+            "during busy periods. Please try asking again."
+        )
+    return (
+        "Something went wrong while answering that. Please try rephrasing the "
+        "question, or ask again in a moment."
+    )
 
 #-------------------------------------------
 # NO ANONYMOUS CALLERS.
@@ -150,7 +179,26 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
             config={"configurable": {"thread_id": thread_id}},
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Chat failed: {exc}") from exc
+        # The raw exception is what a total graph failure looks like from here -
+        # a provider timeout, a connection error, anything a node's own
+        # try/except did not catch. Logged in full (below); a business user gets
+        # the sanitised version, same as a node-level failure does in
+        # _build_response - see _user_facing_error for why.
+        logger.exception("Chat graph invocation failed for thread %s", thread_id)
+        raise HTTPException(
+            status_code=500, detail=_user_facing_error(str(exc))
+        ) from exc
+
+    if result.get("error"):
+        # A node caught its own failure and the turn still produced an answer
+        # (see planning_agent/response_agent/sql_agent/learn_agent) - the raw
+        # reason stays server-side; _build_response sanitises what the client
+        # sees. Without this the only trace of a degraded turn is the LLM
+        # call log, which does not say a fallback was in play.
+        logger.warning(
+            "Chat turn for thread %s completed with error: %s",
+            thread_id, result["error"],
+        )
 
     _maybe_persist_learned(result)
     _maybe_cache_query(result)
@@ -196,7 +244,7 @@ def _build_response(thread_id: str, result: Dict[str, Any]) -> ChatResponse:
         computation_code=result.get("computation_code", ""),
         computation_explanation=result.get("computation_explanation", ""),
         computation_result=result.get("computation_result"),
-        error=result.get("error", ""),
+        error=_user_facing_error(result.get("error", "")),
     )
 
 

@@ -278,10 +278,25 @@ def structured_llm(schema, effort: Optional[str] = None):
     return get_llm(effort).with_structured_output(schema, method="function_calling")
 
 
+# An EXPLICIT connect timeout, the same reason EMBEDDING_TIMEOUT_S exists (see
+# above): psycopg2's default is to wait on the OS's own TCP timeout, which is
+# unbounded from this app's point of view and, on some networks, can run to
+# many minutes rather than seconds. `live_schema()` (metadata/schema.py) opens
+# a connection during startup warm-up with no other guard around it - a slow
+# or unreachable database at that moment would otherwise hang the warm-up
+# thread for however long the OS takes to give up, not however long this app
+# considers reasonable.
+DB_CONNECT_TIMEOUT_S = int(_optional("DB_CONNECT_TIMEOUT_S", "10"))
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     """Shared SQLAlchemy engine built from the .env credentials."""
     from sqlalchemy import create_engine
 
     # pool_pre_ping avoids stale-connection errors after the DB idles.
-    return create_engine(DATABASE_URL, pool_pre_ping=True)
+    return create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": DB_CONNECT_TIMEOUT_S},
+    )

@@ -29,6 +29,26 @@ from backend.state import fresh_turn
 
 HISTORY_TURNS = 6  # enough for follow-ups, short enough to stay cheap
 
+# A bare greeting/pleasantry with NOTHING else in the message - matched on the
+# WHOLE trimmed message, never a substring, so "hi, what's the stock of resin"
+# still goes through the real planner. Kept deliberately short: the risk of a
+# false positive (skipping planning on something that needed it) matters more
+# than catching every possible greeting spelling, and route="smalltalk" itself
+# already covers anything this list misses - the LLM still classifies those,
+# just paying the LLM_TIMEOUT_S risk this list exists to avoid for the most
+# common, cheapest case.
+_BARE_GREETINGS = {
+    "hi", "hey", "hello", "hiya", "yo", "hey there", "hi there",
+    "thanks", "thank you", "ty", "cheers",
+    "bye", "goodbye", "see ya", "ok", "okay", "cool", "great",
+}
+
+
+def _bare_greeting(text: str) -> bool:
+    """True for a message that is ONLY a greeting/pleasantry, nothing else."""
+    normalised = text.strip().lower().rstrip("!.? ")
+    return normalised in _BARE_GREETINGS
+
 
 class Subtask(BaseModel):
     description: str = Field(
@@ -145,6 +165,31 @@ def planning_agent(state: dict) -> dict:
         (name for name in prior_items if _we_asked_this(state, name)), None
     )
     answering_item_clarify = bool(asked_item and state.get("route") == "clarify")
+
+    # SKIP THE LLM ENTIRELY for a bare greeting. Every message otherwise makes
+    # the SAME call below regardless of content - "hey" and a real question
+    # measured 14.4s and 2.8s in one run and 2.1s and 20.0s in the next, the
+    # provider's own tail latency (documented on get_llm() in config.py: an
+    # "identical trivial call" has measured 1.6s, 1.6s, 12.6s and once 62s),
+    # not anything about what was asked. A bare greeting needs no rewrite, no
+    # routing decision and no subtask list, so there is nothing this call
+    # would have told us that is worth exposing it to LLM_TIMEOUT_S for.
+    # `answering_item_clarify` is checked first and wins if both are somehow
+    # true, though a real clarify answer will never match _bare_greeting.
+    if not answering_item_clarify and _bare_greeting(user_query):
+        log_plan(user_query, "smalltalk", [])
+        return {
+            **fresh_turn(),
+            "turn_query": user_query,
+            "rewritten_query": user_query,
+            "route": "smalltalk",
+            "intent": "greeting",
+            "domain": "General",
+            "entities": {},
+            "subtasks": [],
+            "clarification_question": "",
+            "clarification_options": [],
+        }
 
     try:
         llm = structured_llm(PlanningResult, effort=EFFORT_FAST)
