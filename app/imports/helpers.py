@@ -223,7 +223,12 @@ def fetch_consignment(db, consignment_id):
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),
 
-        selectinload(Consignment.items),
+        # THE ORDER LINE BEHIND EVERY SHIPMENT LINE. `serialize_items` reads
+        # through `item.order_item` for the thirteen columns that moved there
+        # in part 4, so without this chain every line lazy-loads its order line
+        # one query at a time - an N+1 on every detail fetch, introduced by
+        # repointing the reads without repointing the load beside them.
+        selectinload(Consignment.items).selectinload(ConsignmentItem.order_item),
         selectinload(Consignment.payments),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
@@ -309,11 +314,28 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         ))
 
     if requisition_type:
+        # THE JOIN IS THE WHOLE FILTER. `requisition_type` moved to the order
+        # line in part 4; the column name here was repointed onto
+        # ConsignmentOrderItem and the join was not added, which does not error
+        # - SQLAlchemy puts the second table in the FROM clause with no
+        # condition and emits a CARTESIAN PRODUCT:
+        #
+        #     FROM consignment_items, consignment_order_items
+        #    WHERE consignment_order_items.requisition_type IN (...)
+        #
+        # That subquery returns every consignment_id that has any line at all,
+        # whenever ANY order item in the table carries the requested type.
+        # Measured through the route, against a clone of production: BOTH of
+        # the two types in use returned all 179 live consignments. The correct
+        # answers are 1 for "Others" and 0 for "Store" - so the filter reported
+        # the whole book under a type NOTHING live actually carries.
         conditions.append(
             Consignment.id.in_(
-                select(ConsignmentItem.consignment_id).where(
-                    ConsignmentOrderItem.requisition_type.in_(requisition_type)
-                )
+                select(ConsignmentItem.consignment_id)
+                .join(ConsignmentOrderItem,
+                      ConsignmentOrderItem.id == ConsignmentItem.order_item_id)
+                .where(ConsignmentItem.is_deleted == False)  # noqa: E712
+                .where(ConsignmentOrderItem.requisition_type.in_(requisition_type))
             )
         )
 
@@ -368,12 +390,33 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
                 ConsignmentBatchGroup.supplier.has(Supplier.name.ilike(pattern)),
                 ConsignmentBatchGroup.works_branch.has(Branch.name.ilike(pattern)),
             )),
+            # THE ITEM FIELDS ARE REACHED THROUGH `.has()`, NOT NAMED BARE.
+            #
+            # These three columns live on the ORDER line since part 4. Naming
+            # ConsignmentOrderItem directly inside `.any()` compiled to
+            #
+            #     EXISTS (SELECT 1 FROM consignment_items, consignment_order_items
+            #              WHERE consignments.id = consignment_items.consignment_id
+            #                AND consignment_items.is_deleted = false
+            #                AND consignment_order_items.item_name ILIKE ...)
+            #
+            # - a cartesian product, true for every consignment that has a live
+            # line as soon as ANY order item anywhere matched. Searching for an
+            # item name returned the whole list (179 of 179 live rows), which
+            # reads as "search is broken" in the good case and as a trustworthy
+            # filtered set in the bad one.
+            #
+            # `order_item.has(...)` nests a second correlated EXISTS carrying
+            # the join condition, so the match is against THIS line's order
+            # line. `.join()` is not available inside `.any()`.
             Consignment.items.any(
                 (ConsignmentItem.is_deleted == False) &  # noqa: E712
-                or_(
-                    ConsignmentOrderItem.item_name.ilike(pattern),
-                    ConsignmentOrderItem.item_code.ilike(pattern),
-                    ConsignmentOrderItem.reference_number.ilike(pattern),
+                ConsignmentItem.order_item.has(
+                    or_(
+                        ConsignmentOrderItem.item_name.ilike(pattern),
+                        ConsignmentOrderItem.item_code.ilike(pattern),
+                        ConsignmentOrderItem.reference_number.ilike(pattern),
+                    )
                 )
             ),
         ]
@@ -397,7 +440,9 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),
 
-        selectinload(Consignment.items),
+        # As in fetch_consignment: the list serializes every line through
+        # `item.order_item`, so one query per LINE per PAGE without this.
+        selectinload(Consignment.items).selectinload(ConsignmentItem.order_item),
         selectinload(Consignment.payments),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
