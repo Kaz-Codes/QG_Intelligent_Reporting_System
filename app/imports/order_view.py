@@ -214,20 +214,149 @@ def line_category(line):
     return getattr(master, "category", None) if master is not None else None
 
 
-def order_reference(consignment):
-    """How a consignment is NAMED in a message, a report or a list.
+#===========================================================================
+# DISPLAY IDENTITY - build-order step 1, design section 3.4
+#
+# TWO VALUES, NOT ONE, and that is the whole point. The requirements table in
+# section 0.4:
+#
+#     situation    consignment number     payment reference
+#     one batch    177                    lc6222
+#     two batches  177-1, 177-2           lc6222 on BOTH
+#
+# `177` and `lc6222` are different facts. The number identifies the SHIPMENT;
+# the payment reference identifies the ORDER it was bought under, and every
+# batch of one LC shares it. Collapsing them - which `consignment_reference()`
+# did - means two batches render as two rows carrying one identical label,
+# which reads as a duplicate rather than as a split. Harmless while every
+# order holds one batch; wrong the moment step 7 creates a second. That is why
+# this is a hard prerequisite of step 7 rather than tidy-up.
+#
+# WHY VALUE-LEVEL PRIMITIVES WITH ORM WRAPPERS OVER THEM, rather than one
+# function taking a Consignment. Of the ten call sites this replaces, SEVEN
+# are SQL rows - `whole/references.py` x3, `scanner.py` x3,
+# `imports/calculations.py` line_reference - that never build an ORM object.
+# An ORM-only function would force each of them to either load objects (an
+# N+1 across a reference list) or spell the rule out again. Spelling it out
+# again is exactly how there came to be seven copies of a one-line rule.
+#
+# So the rule lives once, in the `*_from` functions, over plain values. The
+# wrappers are three lines each and exist for readability at the ORM sites.
+#
+# WHERE THIS LIVES, and a deliberate divergence: section 3.4 says helpers.py.
+# It is here instead because `order_view` imports NOTHING - the dashboards,
+# the scanner and cross_module can all reach it with no risk of a cycle,
+# whereas `imports/helpers.py` already has to be imported inside functions by
+# `serializers.py` to dodge one. A shared definition that half its callers
+# cannot import is not shared.
+#===========================================================================
 
-    The payment instrument number, falling back to IMP-{id} for a record that
-    has not been given one. One definition, because a notification naming a
-    consignment differently from the screen the reader then opens is a
-    notification they cannot act on.
 
-    A NOTE ON WHAT THIS CANNOT YET DO. The instrument number is a fact about the
-    ORDER, so every batch of one LC returns the SAME reference here — two
-    batches render as two rows carrying one label, which reads as a duplicate
-    rather than as a split. Fixing that is `consignment_number()` /
-    `payment_reference()` (design section 3.4, build-order step 1), which is a
-    hard prerequisite of step 7: it is harmless while every order holds one
-    batch and wrong the moment one holds two.
+def payment_reference_from(payment_instrument, instrument_number):
+    """The ORDER's payment reference: mode + number, concatenated, lower case.
+
+    `LC` + `6222` -> `lc6222`. No separator - section 0.4's `lc-78889` was a
+    note about how the list renders it today, not a second format.
+
+    RETURNS EMPTY when there is no instrument number, rather than falling back
+    to anything. A consignment with no LC number has no payment reference; that
+    is a fact about it, not a gap to paper over. `reference_label_from` below
+    is where the fallback lives, once.
     """
-    return order_instrument_number(consignment) or f"IMP-{consignment.id}"
+    number = (str(instrument_number).strip() if instrument_number is not None else "")
+    if not number:
+        return ""
+
+    mode = (str(payment_instrument).strip().lower() if payment_instrument else "")
+    if not mode:
+        return number
+
+    # DO NOT PRINT THE MODE TWICE. If the number already begins with it, the
+    # operator has typed the instrument type into the number field - measured:
+    # one order holds mode `CAD` and number `CAD`, which concatenates to
+    # `cadCAD`. Prepending regardless would also turn a number keyed as
+    # "LC6222" into `lclc6222`, and that is the likelier data-entry habit of
+    # the two. This does not clean the data; it declines to make it worse.
+    if number.lower().startswith(mode):
+        return number.lower()
+
+    return f"{mode}{number}"
+
+
+def consignment_number_from(founding_consignment_id, batches_ever, batch_sequence):
+    """The SHIPMENT's number: `177`, or `177-2` once an order has split.
+
+    READS THE FOUNDING BATCH'S ID, NEVER THE ROW'S OWN. On batch 2 those are
+    different integers, and the row's own id belongs to no number anyone can
+    look up (section 0.4). This is the distinction the whole function exists
+    for - a display number derived from `consignment.id` is correct today and
+    silently wrong on the first split.
+
+    THE SUFFIX IS STEP 7'S and is deliberately live here already, driven by
+    `batches_ever`: an order that has EVER held two batches suffixes both,
+    permanently, even if one is later deleted (section 3.5). Today
+    `batches_ever` is 1 everywhere, so every number renders bare and nothing
+    changes on screen - which is the point. Step 7 sets the column; it does
+    not come back here.
+    """
+    if founding_consignment_id is None:
+        return ""
+
+    number = str(founding_consignment_id)
+    if (batches_ever or 1) > 1 and batch_sequence is not None:
+        return f"{number}-{batch_sequence}"
+    return number
+
+
+def reference_label_from(payment_instrument, instrument_number, consignment_id):
+    """What a list row, a notification or an export cell actually prints.
+
+    The payment reference, falling back to `IMP-{id}` when the order carries no
+    instrument number - which is what all ten replaced call sites did, spelled
+    out ten times.
+
+    THE FALLBACK IS SCHEDULED TO GO, AT STEP 8. It exists only because the
+    consignment number is not on screen anywhere yet: with nothing else to
+    show, a row with no LC number needed *something*. Once step 8 puts
+    `consignment_number()` beside the payment reference, this becomes
+    `payment_reference()` alone and an order with no instrument number simply
+    shows a blank in that column. Changing it before then would alter what
+    appears in notifications and in the queues other modules read, for records
+    that would then display nothing at all.
+    """
+    return payment_reference_from(payment_instrument, instrument_number) \
+        or f"IMP-{consignment_id}"
+
+
+#---------------------------------------------------------------------------
+# THE ORM WRAPPERS. Same rule, for callers that already hold a Consignment.
+#---------------------------------------------------------------------------
+
+def payment_reference(consignment):
+    """`payment_reference_from` over a Consignment. Empty when there is none."""
+    return payment_reference_from(
+        order_payment_instrument(consignment),
+        order_instrument_number(consignment),
+    )
+
+
+def consignment_number(consignment):
+    """`consignment_number_from` over a Consignment."""
+    order = order_of(consignment)
+    if order is None:
+        return ""
+
+    return consignment_number_from(
+        getattr(order, "founding_consignment_id", None),
+        getattr(order, "batches_ever", 1),
+        getattr(consignment, "batch_sequence", None),
+    )
+
+
+def reference_label(consignment):
+    """`reference_label_from` over a Consignment - the IMP-{id} fallback included."""
+    return reference_label_from(
+        order_payment_instrument(consignment),
+        order_instrument_number(consignment),
+        consignment.id,
+    )

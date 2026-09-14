@@ -1376,11 +1376,78 @@ def stamp_landed_cost_audit(item, user, stamp_elc, stamp_alc):
 # reader then opens is a notification they cannot act on.
 #---------------------------------------
 
-def consignment_reference(consignment):
-    # The ORDER's payment reference. Every batch of one LC shares it - which is
-    # exactly why section 3.4's `consignment_number()` is a prerequisite of step
-    # 7: once an order holds two batches these two rows carry one label.
-    return order_instrument_number(consignment) or f"IMP-{consignment.id}"
+#---------------------------------------------------------------------------
+# NOTHING IS SAVED UNTIL THERE IS SOMETHING TO SAVE - requirements line 161,
+# finding 11, build-order step 2.
+#
+#   "If a user opens a new consignment and leaves it empty, no draft should be
+#    created."
+#
+# Until now `POST /consignments/` created a row whatever it was given, so
+# opening the wizard and closing it left a numbered draft behind. Those rows
+# are indistinguishable from real work in progress: they sit in the list, they
+# count towards the drafts filter, and nobody can tell which are abandoned.
+#
+# WHAT COUNTS AS SOMETHING, and why these three. They are the three ways an
+# operator actually starts a consignment: they know who it is from, or they
+# have the LC/TT number in front of them, or they are keying the items. Any one
+# is a real beginning.
+#
+# WHAT DELIBERATELY DOES NOT COUNT: a status, a date, a mode of shipment. The
+# wizard pre-fills or defaults those, so accepting "any field at all" would let
+# an untouched form through and this guard would do nothing - which is worse
+# than not having it, because it would look like it worked.
+#
+# WHERE IT SITS, AND WHY ONLY HERE. On CREATE only. The wizard POSTs once and
+# PUTs from then on (ImportsStatusWizard, "POST the first time, PUT after"), so
+# guarding the PUT as well would block an operator clearing a field on a record
+# that already exists - an edit, not an empty draft. A record can still be
+# emptied after creation, deliberately: that is a decision someone made about a
+# real row, and the delete route is how it goes away.
+#---------------------------------------------------------------------------
+
+EMPTY_DRAFT_MESSAGE = (
+    "Nothing to save yet. Enter at least a supplier, a payment instrument "
+    "number, or one item with a name or code."
+)
+
+
+def _has_text(value):
+    return value is not None and str(value).strip() != ""
+
+
+def has_something_to_save(payload):
+    """True if this create payload is a real beginning rather than a blank form.
+
+    Takes the FLAT payload as posted, before it is split across the three
+    tables, because the check is about what the operator typed and not about
+    where each value ends up.
+    """
+    if _has_text(payload.get("supplier_id")) or _has_text(payload.get("instrument_number")):
+        return True
+
+    for item in (payload.get("items") or []):
+        # A line counts only if it IDENTIFIES something. The wizard adds an
+        # empty row as soon as the items step is opened, so "items is
+        # non-empty" would wave the blank form straight through.
+        if (_has_text(item.get("item_name"))
+                or _has_text(item.get("item_code"))
+                or _has_text(item.get("placeholder_name"))
+                or _has_text(item.get("item_id"))):
+            return True
+
+    return False
+
+
+# `consignment_reference()` IS GONE - build-order step 1, design section 3.4.
+#
+# It returned `instrument_number or IMP-{id}`, which conflated two different
+# facts: the ORDER's payment reference (shared by every batch of one LC) and
+# the SHIPMENT's own number. Two batches therefore rendered as two rows under
+# one identical label. Replaced by `order_view.reference_label()` for what a
+# row prints, `payment_reference()` for the order's reference alone, and
+# `consignment_number()` for the shipment's number - all one definition each,
+# over plain values, so the seven SQL-row call sites can reach them too.
 
 
 

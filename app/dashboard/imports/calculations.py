@@ -8,7 +8,8 @@ from app.imports.demand_dates import earliest_required_date
 from app.imports.order_view import (
     line_category, line_item_master, line_item_name,
     line_unit_price, order_branch_name, order_exchange_rate, order_origin,
-    order_reference, order_supplier_id, order_supplier_name,
+    order_supplier_id, order_supplier_name, reference_label,
+    reference_label_from,
     order_type,
 )
 
@@ -363,7 +364,7 @@ def consignment_reference(consignment):
 
     return {
         "id": consignment.id,
-        "reference": order_reference(consignment),
+        "reference": reference_label(consignment),
         "detail": detail or None,
         "meta": meta or None,
         "badge": consignment.current_status,
@@ -855,7 +856,11 @@ def line_reference(row):
         # The LINE's id, so two identical rows on one consignment stay distinct.
         "id": f"line-{row.id}",
         # The number it is looked up by is still the consignment's.
-        "reference": row.instrument_number or f"IMP-{row.consignment_id}",
+        # One rule, over the row's own values - see order_view, "DISPLAY
+        # IDENTITY". The query selects payment_instrument alongside the
+        # number so the mode can be concatenated here as it is everywhere else.
+        "reference": reference_label_from(
+            row.payment_instrument, row.instrument_number, row.consignment_id),
         "detail": row.item_name,
         "meta": " · ".join(part for part in (
             f"{measure} {unit}".strip() or None,

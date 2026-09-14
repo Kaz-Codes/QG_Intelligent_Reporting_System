@@ -20,6 +20,29 @@ behaviour and §3.9's freeze is what constrains it — see revision 8.
 
 ---
 
+## Changelog — revision 10 (steps 1 and 2 BUILT)
+
+Step 6 is deployed and staff are using it. §9 steps 1 and 2 are now built.
+
+| What | Detail |
+|---|---|
+| **§3.4 / step 1 — BUILT.** `consignment_number()`, `payment_reference()` and `reference_label()`, over plain values, with ORM wrappers | Ten call sites collapsed onto them, not the seven the survey expected: three take a `Consignment` (`helpers.consignment_reference`, `order_view.order_reference`, `imports/calculations.py`), and **seven are SQL rows** (`whole/references.py` x3, `scanner.py` x3, `calculations.py`'s `line_reference`). All seven already joined the group, so each needed three extra SELECT columns and no new join. |
+| **Where they live: `order_view.py`, not `helpers.py` as §3.4 said** | `order_view` imports NOTHING, so the dashboards, the scanner and cross_module can all reach it; `imports/helpers.py` already has to be imported *inside functions* by `serializers.py` to dodge a cycle. A shared definition half its callers cannot import is not shared. |
+| **The suffix is live now, driven by `batches_ever`** | Verified on the split fixture: batch **row id 184** renders as **`21-2`**, not `184` — the number comes from `group.founding_consignment_id`, never the row's own id, which is §0.4's whole point. Both batches return the same `lc67792`. Step 7 sets `batches_ever`; it does not come back here. |
+| **The display DOES change for staff: 156 of 183 orders** | `6222` becomes `lc6222`. That is §0.4 item 2, intended, and it is the visible half of this step. |
+| **A guard §3.4 did not anticipate: do not print the mode twice** | One order holds mode `CAD` and number `CAD`, which concatenated to `cadCAD`. It also protects the likelier habit — a number keyed as "LC6222" becoming `lclc6222`. Where the number already starts with the mode, the mode is not prepended. |
+| **The `IMP-{id}` fallback STAYS, until step 8** | `payment_reference()` returns empty when there is no instrument number; `reference_label()` carries the fallback, in one place instead of ten. Removing it now would blank the label in notifications and cross-module queues, because the consignment number is not on screen anywhere yet. Noted in the code as scheduled to go with step 8. |
+| **Finding 11 / step 2a — BUILT.** No empty draft | `POST /consignments/` now 422s with *"Nothing to save yet. Enter at least a supplier, a payment instrument number, or one item with a name or code."* Status, dates and mode deliberately do NOT count — the wizard pre-fills them, so accepting "any field" would pass the untouched form and the guard would look like it worked while doing nothing. CREATE only: the wizard POSTs once then PUTs, so clearing a field on an existing record stays an ordinary edit. |
+| **Finding 12 / step 2b — BUILT.** One item, one row, 81 columns | Was one row per consignment with the items folded into a summary string. Now one row per LIVE LINE, drawn from four tables — the order, the batch, the order line and the shipment line — each column tagged with its source in `COLUMNS`, header and extractor in the same tuple so they cannot drift. |
+| **A consignment with no live lines gets ONE row, item columns blank** | A LEFT JOIN in Python. A row that vanishes is worse than a row that looks odd: the sheet's count would disagree with the list with nothing to say why. Zero such rows today. |
+| **Payments are summarised, not folded in** | Two columns — count and total paid, live payments only. Joining the detail would multiply every item row by every payment and break one-item-one-row. |
+| **Rows are sorted by line id** | Relationship iteration order is not guaranteed, and an export people re-run weekly must not reshuffle for no reason — a diff between two runs should show what changed. |
+| **DELIBERATE DEFAULT CHANGE, needs confirmation: the export now defaults to `include_closed=True`** | Measured: 181 live consignments are 149 non-draft and 33 non-closed, but only **ONE** is both. Keeping the list's default produced a **1-row file out of 342**. The requirement names two exclusions, deleted and drafts; closed is neither, and a closed consignment is completed work — exactly what a record of imports should hold. **The cost, stated:** the export no longer matches the on-screen filter when "Include completed" is unticked, and "what you see is what you export" was this endpoint's founding property. One line to reverse. |
+| **`export_utils` now converts tz-aware datetimes** | Every timestamp is `DateTime(timezone=True)` and openpyxl *raises* on one, so the first export to carry `created_at` and the landed-cost audit times 500'd on the whole download. Converted to local time once, in the shared helper, rather than per route — and converted, not stripped: dropping the tzinfo off a UTC value shifts every timestamp silently. |
+| **Two relationships added to `ConsignmentItem`** | `elc_updated_by` / `alc_updated_by`. The FK columns have existed since rule 11; nothing could print the name. `foreign_keys=` is required — two FKs to `users` on one table — and its absence is a mapper error `configure_mappers()` catches and a bare import does not. No DDL. |
+
+---
+
 ## Changelog — revision 9 (deployment rehearsal)
 
 The whole deploy sequence, run on a developer machine against `supply_chain_erp`
@@ -3285,9 +3308,11 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    > **HARD ORDERING RULE, added in revision 7: STEP 1 MUST SHIP BEFORE STEP 7.
    > NOT STILL UNSHIPPED WHEN STEP 7 CREATES THE FIRST REAL SECOND BATCH.**
    >
-   > It is still unshipped. `consignment_reference()` (`imports/helpers.py`)
-   > remains the only implementation, alongside the two dashboard copies
-   > (`calculations.py:350`, `:842`) and `cross_module.py:182`.
+   > **BUILT — revision 10.** `consignment_number()`, `payment_reference()` and
+   > `reference_label()` live in `imports/order_view.py` (not `helpers.py`; see
+   > revision 10 for why), over plain values with ORM wrappers, and all TEN
+   > former call sites now call them. Verified on the split fixture: batch row
+   > id 184 renders as `21-2`. The ordering rule below is satisfied.
    >
    > **Why it is a sequencing constraint and not a tidy-up.** Every list that
    > names an import row labels it by `instrument_number` — the reference
@@ -3305,6 +3330,15 @@ Not a commitment — the sequence I would follow, so you can see the shape.
 2. **Fix finding 11** (no empty draft) and **finding 12** (export: one row per
    line, every field, drafts and deleted excluded). Both independent, and the
    export forces a full field inventory before the model moves.
+
+   > **BUILT — revision 10.** Finding 11 is a 422 on CREATE naming what is
+   > needed. Finding 12 is 81 columns over one row per live line, from four
+   > tables, asserted cell by cell against SQL: 341 rows x 33 columns row by
+   > row plus 48 columns checked for silent blanks. Two things decided while
+   > building and recorded in revision 10 rather than buried here: a
+   > consignment with no live lines still gets ONE row with blank item
+   > columns, and the export now defaults to `include_closed=True` because the
+   > list's default left it returning ONE row out of 342.
 2b. **Remove the submission rules and decouple closing from submitting** (§3.10).
    **DONE**, as its own PR, ahead of step 6 — it deletes `submission_errors()`
    outright, so repointing its `branch_id` / `supplier_id` rules onto the group

@@ -161,6 +161,11 @@ def _line_query(shafts_only=False):
             ConsignmentItem.id,
             Consignment.id.label("consignment_id"),
             ConsignmentBatchGroup.instrument_number,
+            # The mode too, because the payment reference is mode + number
+            # concatenated (order_view, "DISPLAY IDENTITY"). Selecting only the
+            # number is what let this row print a different label from the
+            # screen it links to.
+            ConsignmentBatchGroup.payment_instrument,
             ConsignmentOrderItem.item_name,
             ConsignmentItem.quantity,
             ConsignmentOrderItem.unit_of_measurement,

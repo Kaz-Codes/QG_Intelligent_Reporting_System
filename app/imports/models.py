@@ -1001,6 +1001,26 @@ class ConsignmentItem(Base, TimestampMixin):
         back_populates="lines"
     )
 
+    # WHO ENTERED EACH LANDED-COST FIGURE. The FK columns above have existed
+    # since rule 11; these are the relationships that let anything actually
+    # PRINT the name, added for the export (build-order step 2) - a sheet
+    # showing an ELC without who entered it is the wrong half of a rule that
+    # exists to make somebody accountable for the number.
+    #
+    # `foreign_keys` is required, not decorative: there are TWO FKs to `users`
+    # on this table and SQLAlchemy cannot choose between them. Without it,
+    # mapper configuration fails with an ambiguous-join error - which
+    # `configure_mappers()` catches and a bare import does not.
+    #
+    # No DDL: both columns are already in the database.
+    elc_updated_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[elc_updated_by_id]
+    )
+
+    alc_updated_by: Mapped[Optional["User"]] = relationship(
+        foreign_keys=[alc_updated_by_id]
+    )
+
 #--------------------------------
 # PAYMENTS TABLE
 #--------------------------------

@@ -1,6 +1,6 @@
 from app.imports.routes.router import router
 from app.notifications.lifecycle import notify_deleted, format_money
-from app.imports.helpers import consignment_reference
+from app.imports.order_view import reference_label
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
@@ -53,7 +53,7 @@ def delete_consignment(
         # look any of this up for themselves.
         notify_deleted(
             db, "imports", consignment.id,
-            reference=consignment_reference(consignment),
+            reference=reference_label(consignment),
             party=order_supplier_name(consignment) or "unknown supplier",
             value=format_money(consignment.pkr_total),
             deleted_by=user.username,

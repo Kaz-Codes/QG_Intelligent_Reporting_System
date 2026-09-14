@@ -13,6 +13,7 @@ from app.dashboard.inventory.helpers import issuance_windows, reorder_level_map
 from app.enums import ItemRank
 from app.imports.helpers import STAGE_GROUPS
 from app.imports.models import Consignment, ConsignmentBatchGroup, Payment
+from app.imports.order_view import reference_label_from
 from app.loading.schemas.stores_schemas import Stock
 from app.logistics.models import LogisticsConsignment, LogisticsItem
 from app.masters.models import Item
@@ -523,6 +524,8 @@ def check_clearance_aging(db, today):
         select(
             key.label("state_key"),
             Consignment.id, ConsignmentBatchGroup.instrument_number,
+            # mode too - the reference is mode + number (order_view).
+            ConsignmentBatchGroup.payment_instrument,
             Consignment.current_status, since.label("since"),
             NotificationState.state_value,
             entering.label("is_aging"),
@@ -554,7 +557,8 @@ def check_clearance_aging(db, today):
             entity_type="consignment",
             entity_id=r.id,
             payload={
-                "reference": r.instrument_number or f"IMP-{r.id}",
+                "reference": reference_label_from(
+                        r.payment_instrument, r.instrument_number, r.id),
                 "status": r.current_status,
                 "days_in_clearance": (today - r.since).days if r.since else "?",
                 "port": "port",
@@ -581,6 +585,7 @@ def check_demurrage_risk(db, today):
         select(
             key.label("state_key"),
             Consignment.id, ConsignmentBatchGroup.instrument_number,
+            ConsignmentBatchGroup.payment_instrument,
             Consignment.eta, Consignment.free_days_allowed,
             NotificationState.state_value,
             entering.label("at_risk"),
@@ -614,7 +619,8 @@ def check_demurrage_risk(db, today):
             entity_type="consignment",
             entity_id=r.id,
             payload={
-                "reference": r.instrument_number or f"IMP-{r.id}",
+                "reference": reference_label_from(
+                        r.payment_instrument, r.instrument_number, r.id),
                 "free_days_left": max((starts - today).days, 0),
                 "port": "port",
                 "arrived_on": r.eta.isoformat(),
@@ -669,7 +675,8 @@ def check_payment_overdue(db, today):
             payload={
                 "instrument": r.payment_instrument or "Payment",
                 "instrument_number": r.instrument_number or "",
-                "reference": r.instrument_number or f"IMP-{r.consignment_id}",
+                "reference": reference_label_from(
+                    r.payment_instrument, r.instrument_number, r.consignment_id),
                 "supplier": "the supplier",
                 "due_date": r.retirement_date.isoformat(),
                 "days_overdue": (today - r.retirement_date).days,

@@ -1,13 +1,13 @@
 from app.imports.routes.router import router
 from app.notifications.lifecycle import notify_created
-from app.imports.helpers import consignment_reference
+from app.imports.order_view import reference_label
 from app.imports.schemas import ConsignmentSchema
 from fastapi import Request, HTTPException
 from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS
-from app.imports.helpers import create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload
+from app.imports.helpers import has_something_to_save, EMPTY_DRAFT_MESSAGE, create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload
 
 from app.imports.serializers import serialize_consignment
 import logging
@@ -31,6 +31,19 @@ def create_consignment(
         # Authorize user (Check whether user is allowed for this 
         # action)
         user = authorize(user_payload, CAN_ADD_IMPORTS, db)
+
+        # NOTHING IS SAVED UNTIL THERE IS SOMETHING TO SAVE (requirements line
+        # 161). Checked on the payload as posted, before anything is written -
+        # a 422 that names what is needed, not a silent no-op, because a save
+        # that quietly does nothing is indistinguishable from one that failed.
+        #
+        # CREATE ONLY. The wizard POSTs once and PUTs after, so the update
+        # route is untouched and clearing a field on an existing record stays
+        # an ordinary edit.
+        if not has_something_to_save(
+            consignment_data.model_dump(exclude_none=True)
+        ):
+            raise HTTPException(status_code=422, detail=EMPTY_DRAFT_MESSAGE)
 
         # ONE FLAT PAYLOAD, THREE TABLES. The wizard posts a consignment the way
         # an operator thinks of one; splitting it is the server's job now that a
@@ -110,7 +123,7 @@ def create_consignment(
         # record starting.
         notify_created(
             db, "imports", consignment.id,
-            reference=consignment_reference(consignment),
+            reference=reference_label(consignment),
             party=order_supplier_name(consignment) or "unknown supplier",
             branch=order_branch_name(consignment),
         )

@@ -8,7 +8,7 @@ from app.accounts.permissions import CAN_EDIT_IMPORTS
 from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates
 
 from app.imports.helpers import (
-    fetch_consignment, consignment_reference, is_closed, CLOSED_STATUS_VALUE,
+    fetch_consignment, is_closed, CLOSED_STATUS_VALUE,
     item_current_values,
 )
 from app.imports.models import ConsignmentItem, Payment
@@ -17,7 +17,9 @@ from app.notifications.emit import emit
 from app.notifications.lifecycle import notify_status_changed, notify_completed
 from datetime import date
 import logging
-from app.imports.order_view import order_branch_name, order_reference, order_supplier_name
+from app.imports.order_view import (
+    order_branch_name, order_supplier_name, reference_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,7 @@ def _notify_major_eta_slip(db, updation_dict, consignment):
             "imports.eta_slipped_major",
             payload={
                 # Same reference the reports and list screens show.
-                "consignment_no": order_reference(consignment),
+                "consignment_no": reference_label(consignment),
                 "supplier": order_supplier_name(consignment) or "unknown supplier",
                 "old_eta": old_eta.isoformat(),
                 "new_eta": new_eta.isoformat(),
@@ -141,7 +143,7 @@ def _notify_status_lifecycle(db, updation_dict, consignment):
         if not new_status or old_status == new_status:
             return
 
-        reference = consignment_reference(consignment)
+        reference = reference_label(consignment)
         branch = order_branch_name(consignment)
 
         if new_status == CLOSED_STATUS_VALUE:

@@ -25,6 +25,7 @@ from app.imports.models import (
     Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
 )
 from app.imports.demand_dates import EARLIEST_REQUIRED_DATE
+from app.imports.order_view import reference_label_from
 from app.logistics.models import LogisticsConsignment
 from app.trucking.models import TruckingConsignment
 from app.loading.schemas.stores_schemas import Stock, Issuance, PurchasesData
@@ -82,6 +83,11 @@ def _consignment_query():
         select(
             Consignment.id,
             ConsignmentBatchGroup.instrument_number,
+            # The payment MODE as well as the number: the reference is the two
+            # concatenated (order_view, "DISPLAY IDENTITY"), and selecting only
+            # the number is what let a drill-down row print a different label
+            # from the screen it links to.
+            ConsignmentBatchGroup.payment_instrument,
             Consignment.current_status,
             Supplier.name,
             Branch.name,
@@ -106,12 +112,12 @@ def _consignment_rows(db, query, total, page, page_size, badge_value=True):
     return _set(total, [
         {
             "id": cid,
-            "reference": instrument or f"IMP-{cid}",
+            "reference": reference_label_from(mode, instrument, cid),
             "detail": status,
             "meta": _joined(supplier, branch),
             "badge": _money(value) if badge_value else status,
         }
-        for cid, instrument, status, supplier, branch, value in rows
+        for cid, instrument, mode, status, supplier, branch, value in rows
     ], page, size)
 
 
@@ -543,6 +549,7 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     rows = db.execute(
         select(
             Consignment.id, ConsignmentBatchGroup.instrument_number,
+            ConsignmentBatchGroup.payment_instrument,
             Supplier.name, Branch.name, days_late.label("days"),
         )
         .select_from(Consignment)
@@ -558,12 +565,12 @@ def imports_delayed_references(db, date_from=None, date_to=None, date_field=None
     return _set(total, [
         {
             "id": cid,
-            "reference": instrument or f"IMP-{cid}",
+            "reference": reference_label_from(mode, instrument, cid),
             "detail": f"{days} days late",
             "meta": _joined(supplier, branch),
             "badge": f"{days} days late",
         }
-        for cid, instrument, supplier, branch, days in rows
+        for cid, instrument, mode, supplier, branch, days in rows
     ], page, size, unit="consignment")
 
 
@@ -633,6 +640,7 @@ def _line_query(conditions):
             ConsignmentItem.id,
             Consignment.id.label("consignment_id"),
             ConsignmentBatchGroup.instrument_number,
+            ConsignmentBatchGroup.payment_instrument,
             ConsignmentOrderItem.item_name,
             ConsignmentItem.quantity,
             ConsignmentOrderItem.unit_of_measurement,
@@ -698,7 +706,7 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
     items = [
         {
             "id": f"line-{line_id}",
-            "reference": instrument or f"IMP-{cid}",
+            "reference": reference_label_from(mode, instrument, cid),
             "detail": name,
             "meta": " · ".join(part for part in (
                 measure(quantity, unit),
@@ -707,7 +715,7 @@ def consignment_line_rows(db, conditions, page, page_size, search=None):
             ) if part),
             "badge": _money(value),
         }
-        for line_id, cid, instrument, name, quantity, unit, eta, supplier, branch, value in rows
+        for line_id, cid, instrument, mode, name, quantity, unit, eta, supplier, branch, value in rows
     ]
 
     return paginate(items, page, size, total=total or 0,

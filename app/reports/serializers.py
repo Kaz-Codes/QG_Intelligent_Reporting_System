@@ -13,7 +13,7 @@ from app.imports.order_view import (
     line_mo_number, line_reference_number, line_requisition_type,
     line_unit_price, line_uom, order_branch_name,
     order_currency, order_exchange_rate, order_incoterm,
-    order_origin, order_payment_instrument, order_reference,
+    order_origin, order_payment_instrument, reference_label,
     order_supplier_name, order_type,
 )
 
@@ -131,7 +131,7 @@ def _serialize_import(ci):
     row.update({
         # No dedicated human reference exists on the consignment; the bank
         # instrument number is the natural one, falling back to the id.
-        "ref": order_reference(c),
+        "ref": reference_label(c),
         "item": line_item_name(ci),
         "item_code": line_item_code(ci),
         "supplier": order_supplier_name(c),
