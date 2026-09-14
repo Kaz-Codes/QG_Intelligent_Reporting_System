@@ -7,7 +7,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS
-from app.imports.helpers import has_something_to_save, EMPTY_DRAFT_MESSAGE, create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload
+from app.imports.helpers import has_something_to_save, EMPTY_DRAFT_MESSAGE, create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload, reconcile_allocation, AllocationError
 
 from app.imports.serializers import serialize_consignment
 import logging
@@ -107,6 +107,16 @@ def create_consignment(
         # straight to the order line now, so there is nothing left to re-mirror
         # and the second sync is gone.
 
+        # THE ALLOCATION INVARIANT, on the create path too.
+        #
+        # A brand-new order has one batch and no contention, so this can never
+        # refuse here today - every line is the whole of its own order line.
+        # It runs anyway, because `allocated_quantity` has ONE writer and this
+        # is it: leaving create to set it some other way would put a second
+        # spelling of the sum in the codebase, and the two would agree right up
+        # until one of them changed.
+        reconcile_allocation(db, consignment.batch_group_id)
+
         # Store the derived money totals + per-line variance.
         recompute_derived(consignment)
 
@@ -133,6 +143,14 @@ def create_consignment(
             "detail":"Consignment created",
             "data":serialize_consignment(consignment, db)
         }
+
+    except AllocationError as e:
+        # A readable 422 naming the item and the overage, not a 500. It cannot
+        # fire on a brand-new order (see the call site) but the handler is here
+        # because the call is, and a refusal that reaches the client as
+        # "Internal server error" is a refusal nobody can act on.
+        db.rollback()
+        raise HTTPException(status_code=e.status_code, detail=str(e))
 
     except HTTPException:
         db.rollback()

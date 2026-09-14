@@ -2,7 +2,7 @@ from app.imports.models import (
     Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory,
     ConsignmentBatchGroup, ConsignmentOrderItem,
 )
-from sqlalchemy import select, func, or_, and_, not_
+from sqlalchemy import select, func, or_, and_, not_, update
 from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
@@ -16,6 +16,15 @@ from decimal import Decimal
 from app.imports.order_view import (
     line_item_code, line_item_name, line_specification,
     line_unit_price, order_exchange_rate, order_instrument_number,
+)
+# THE ALLOCATION INVARIANT lives in its own module for the same reason
+# order_view does - it imports models and nothing else, so every caller can
+# reach it. Re-exported here because the routes already import their write-path
+# helpers from this module and splitting that across two imports for one
+# concern would only make the call sites longer.
+from app.imports.allocation import (  # noqa: F401
+    AllocationError, OrderLineHasNoQuantity, OverAllocation, UnknownOrderLine,
+    allocation_totals, allocation_view, lock_order_lines, reconcile_allocation,
 )
 
 #-------------------------------------
@@ -219,6 +228,14 @@ def fetch_consignment(db, consignment_id):
     ).options(
         joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.supplier),
         joinedload(Consignment.batch_group).joinedload(ConsignmentBatchGroup.works_branch),
+        # THE ORDER'S LINES - what was bought, against which this batch's lines
+        # are allocations. `serialize_consignment` publishes the allocation
+        # panel from these on the DETAIL payload; without the chain it is a
+        # query per order line every time a consignment is opened.
+        # `selectinload`, not `joinedload`: this is a collection hanging off a
+        # collection's parent, and joining it would multiply the rows.
+        joinedload(Consignment.batch_group)
+            .selectinload(ConsignmentBatchGroup.order_items),
         joinedload(Consignment.loading_port),
         joinedload(Consignment.delivery_port),
         joinedload(Consignment.clearing_agent),
@@ -638,6 +655,11 @@ def new_payments_to_add(update_consignment_data):
 #--------------------------------------
 
 def delete_missing(consignment, present_ids, id_column,db, model):
+    # SCOPED TO THIS CONSIGNMENT, which is what makes it safe on a split order:
+    # a save of batch 2 can only ever soft-delete batch 2's own lines, so a line
+    # absent from batch 2's payload cannot take a sibling's line with it. The
+    # ORDER line above them survives either way - `reconcile_allocation` retires
+    # one only when the last live line across the whole order goes.
     query = select(model).where(
             model.consignment_id == consignment.id
     ).where(
@@ -680,12 +702,21 @@ def item_current_values(item):
             # exist on both rows and the line's are the ones the payload means.
             values.setdefault(column.key, getattr(order_item, column.key))
 
-    # NOT the order line's own quantity columns. `ordered_quantity` and
-    # `allocated_quantity` are the ORDER's business (what was bought, and how
-    # much of it is spoken for); the payload's `quantity` is this batch's
-    # allocation and comes off the line. Leaking them here would put three
-    # quantity fields in front of a client that has one input for it.
-    for internal in ("ordered_quantity", "allocated_quantity", "batch_group_id"):
+    # `ordered_quantity` IS PUBLISHED AND IS DIFFED. It used to be stripped
+    # here, along with `allocated_quantity`, on the reasoning that a client with
+    # one quantity input should not be shown three. That was right while the
+    # two were always equal; it is wrong now that they can differ, and leaving
+    # it stripped would have been a quiet trap: `ordered_quantity` is a schema
+    # field, so a client can send it, and a field the diff cannot see is a field
+    # that is silently never saved - the exact shape of the bug that took
+    # twelve group fields out of the write path for a week.
+    #
+    # `allocated_quantity` IS STILL STRIPPED, and for a different reason: it is
+    # derived. Nobody types it, `reconcile_allocation` owns it, and putting it
+    # in the diff would let a client post a value that the very next line of the
+    # save overwrites. It reaches the client through the `allocation` panel on
+    # the detail payload instead, where it is plainly a computed figure.
+    for internal in ("allocated_quantity", "batch_group_id"):
         values.pop(internal, None)
 
     return values
@@ -799,6 +830,18 @@ def apply_item_updates(updation_dict, item):
     the write path and this share ONE destination map - two maps that agree
     today are two maps that can disagree later, and they would disagree
     silently, because create and update are exercised by different tests.
+
+    WHAT THIS DOES ON A SPLIT ORDER, checked when step 7 made one possible: the
+    order-line half of the diff writes a row every batch of the order shares,
+    so editing an item on batch 2 changes what batch 1 shows for it. That is
+    correct and is the point of the table - the item's name, code, price and
+    demand dates are facts about the ORDER and there is one of each. The change
+    history records the edit against the batch it was made on, which is also
+    right: somebody did it, from there, and that is who can undo it.
+
+    The one key in that half that can break an invariant is
+    `ordered_quantity` - lowering it can leave a sum that was legal too large.
+    Both routes that reach here end at `reconcile_allocation`, which refuses.
     """
     changes = {
         field: change["new_value"]
@@ -1342,11 +1385,28 @@ def apply_item_master_values(consignment, db):
         # writing through one would hide that this function MUTATES; the
         # assignment is left explicit so the write is visible.
         #
-        # STILL RUNS PER BATCH, deliberately. Section 3.7 observes it could take
-        # a group and run once per group instead of re-running its query on
-        # every batch save — that is a real behaviour change and belongs with
-        # step 7's allocation work, not inside the write-path inversion. Today a
-        # group holds one batch, so per-batch and per-group are the same thing.
+        # STILL RUNS PER BATCH, AND THAT IS SAFE RATHER THAN MERELY UNCHANGED.
+        #
+        # Section 3.7 observes this could take a group and run once per group.
+        # It is left per-batch, and with a second batch now possible the
+        # question is no longer academic - saving batch 2 writes an order line
+        # batch 1 also reads. Three reasons that is correct:
+        #
+        #   * THE VALUE IS THE SAME EITHER WAY. Both batches' lines point at
+        #     the same order line, which carries ONE item_code, which resolves
+        #     to ONE master row. Whichever batch saves, it writes the value the
+        #     other would have written. There is nothing to drift.
+        #   * IT ONLY EVER WRITES THE MASTER'S OWN CURRENT VALUE, so it cannot
+        #     carry a batch-specific edit across to a sibling.
+        #   * IT DOES NOT TOUCH A LOCKED SIBLING'S ROW. The lock is on the
+        #     `consignments` row and its lines; this writes the ORDER line,
+        #     which is shared by construction and is not what `is_locked`
+        #     protects.
+        #
+        # What it costs is a repeated query on a split order - once per batch
+        # save instead of once per order. Two or three batches is not a
+        # performance problem, and moving it would change WHEN the correction
+        # runs relative to the rest of the save for no gain in correctness.
         order_item = item.order_item
         if order_item is None:
             continue
@@ -1608,6 +1668,26 @@ PAYLOAD_TO_GROUP["branch_id"] = "works_branch_id"
 # step 8 offers a per-item branch, "restore the header branch" and "restore each
 # line's own branch" become different operations and this map needs splitting.
 # See section 3.3.
+#
+# WHAT A SECOND BATCH DOES TO THIS FAN-OUT - checked when step 7 made a second
+# batch possible, and the answer is that it is SAFE, for a reason worth writing
+# down rather than rediscovering.
+#
+# These three are facts about what was ORDERED, so one order line holds one
+# value and every batch carrying that line reads the same one. Saving batch 2
+# therefore writes a value batch 1 can see. That is not drift - it is the two
+# batches agreeing about the order, which is the whole reason the column lives
+# on the order line. And the fan-out reaches only the order lines THIS batch
+# carries, so a save of batch 2 leaves an order line only batch 1 carries
+# untouched.
+#
+# The revert paths inherit the same property for the same reason: reverting a
+# demand date on batch 2 restores the order's date, which is the one fact there
+# was to restore.
+#
+# The hazard is unchanged and is the one already named above - ONE header value
+# fanned across lines that may legitimately differ - and it becomes real when
+# step 8 offers a per-item control, not when an order splits.
 PAYLOAD_TO_ORDER_ITEM = {
     "requisition_date": "requisition_date",
     "required_date": "required_date",
@@ -1662,6 +1742,219 @@ def new_batch_group(consignment, user, db, group_fields=None):
     db.flush()
 
     return group
+
+
+#===========================================================================
+# ADDING A BATCH TO AN ORDER THAT ALREADY EXISTS
+#
+# `new_batch_group` above founds an order. This is the other half: a second,
+# third, nth arrival against an order already in the system.
+#
+# NUMBERING - THE THREE DECISIONS, IN THE CODE BECAUSE THE CODE IS WHERE THEY
+# WILL BE READ (design sections 3.5 and 0.4, decisions A1/A2/A3):
+#
+# A1. A SINGLE BATCH KEEPS THE PLAIN NUMBER. `177` while an order holds one
+#     batch; `177-1` and `177-2` the moment it splits. This overrides the
+#     earlier design's universal suffix: the requirements asked for it, and
+#     with most orders arriving once a suffix on everything would mean nothing.
+#
+#     THE COST IS REAL AND IS NOT HIDDEN. Creating a second batch RENUMBERS THE
+#     FIRST, from `177` to `177-1` - a visible change to a number somebody may
+#     have written down. It happens once, at a deliberate action, and the route
+#     states it in its response rather than leaving the client to notice by
+#     diffing two fetches. No row is written to do it: the number is derived
+#     from `founding_consignment_id` + `batches_ever` + `batch_sequence`
+#     (order_view.consignment_number_from), so the only column that moves is
+#     `batches_ever` on the group. That matters more than it looks - 142 of 179
+#     live consignments are LOCKED, and a stored suffix would have needed an
+#     UPDATE against a locked sibling to renumber it.
+#
+# A2. THE NEXT BATCH EXISTS WHEN SOMEBODY CREATES IT, not before. The
+#     requirements' "unallocated items are automatically placed into 177-2"
+#     describes the SCREEN - a pending-allocation area - not a row in
+#     `consignments`. A batch with no route, no ETA and no status is not a
+#     shipment; it is a list of things not yet shipped, and creating one early
+#     would put a phantom consignment into every list, count and dashboard in
+#     the app. Unallocated quantity lives on the order line as
+#     `ordered_quantity - allocated_quantity`, which is what it is for.
+#
+# A3. NUMBERS ARE PERMANENT, GAPS AND ALL. `batch_sequence` is assigned once
+#     and never reused, so deleting `177-2` leaves `177-1` and `177-3` with a
+#     gap between them. The gap is the point: a number that has been on an
+#     invoice must not later mean a different shipment. RENUMBERING RUNS
+#     FORWARD ONLY - an order that splits to two and then loses one keeps
+#     `177-1` and does NOT revert to `177`, because `batches_ever` never
+#     decrements.
+#===========================================================================
+
+def claim_batch_sequence(db, group_id):
+    """Take the next sequence number for this order, atomically.
+
+    `batches_ever` is both the count and the source of the next number, which
+    works precisely because it never decrements and a sequence is never reused:
+    after the increment, the new `batches_ever` IS the sequence to assign.
+
+    DONE IN SQL, NOT IN PYTHON. Reading the column, adding one and writing it
+    back is a read-modify-write, and two operators splitting one order at the
+    same moment would both read 1 and both write 2 - two batches claiming
+    sequence 2, and `batches_ever` stuck at 2 having counted three batches.
+    `SET batches_ever = batches_ever + 1 ... RETURNING` is atomic and takes the
+    group's row lock as a side effect.
+
+    `uq_consignments_group_sequence` stays as the backstop underneath this. It
+    should never fire; if it ever does, that is a bug report about this
+    function, not something for the caller to retry around.
+    """
+    new_sequence = db.execute(
+        update(ConsignmentBatchGroup)
+        .where(ConsignmentBatchGroup.id == group_id)
+        .values(batches_ever=ConsignmentBatchGroup.batches_ever + 1)
+        .returning(ConsignmentBatchGroup.batches_ever)
+    ).scalar_one()
+
+    # The in-session copy is now stale, and `consignment_number()` reads it to
+    # decide whether to suffix. Expiring it makes the very next read fetch the
+    # committed value instead of reporting the pre-split number.
+    group = db.get(ConsignmentBatchGroup, group_id)
+    if group is not None:
+        db.expire(group, ["batches_ever"])
+
+    return new_sequence
+
+
+def add_batch(db, group, allocations, user):
+    """Create one more batch of an existing order, carrying `allocations`.
+
+    `allocations` is [{order_item_id, quantity}] - which items this arrival
+    brings, and how much of each.
+
+    WHAT IT DELIBERATELY DOES NOT COPY FROM THE FOUNDING BATCH: the route, the
+    schedule, the ports, the mode, the clearance and the status. The
+    requirements are explicit that a later batch's shipping section starts
+    EMPTY and editable, with the earlier batches' shown locked above it, so
+    those are entered afterwards through the ordinary edit. The commercial half
+    - supplier, currency, incoterm, the booked rate - is not copied either
+    because it never lived on the batch: it is on the order, and the new batch
+    reads the same row the first one does.
+
+    THE ALLOCATION CHECK IS NOT HERE. It is `reconcile_allocation`, which the
+    caller runs after this - the same function an ordinary edit runs, so a
+    batch created through this route and a line re-quantified through `PUT`
+    cannot be governed by two different rules.
+    """
+    sequence = claim_batch_sequence(db, group.id)
+
+    batch = Consignment(
+        batch_group_id=group.id,
+        batch_sequence=sequence,
+        created_by_id=user.id,
+        # The first status in the pipeline. A new arrival has not shipped yet,
+        # and inheriting the founding batch's status would announce that goods
+        # nobody has dispatched are already in transit.
+        current_status=Status.TT_LC_IN_PROCESS.value,
+        record_state="draft",
+        is_locked=False,
+        is_deleted=False,
+    )
+
+    db.add(batch)
+    db.flush()
+
+    for allocation in allocations:
+        line = ConsignmentItem(
+            consignment_id=batch.id,
+            order_item_id=allocation["order_item_id"],
+            quantity=allocation["quantity"],
+        )
+        db.add(line)
+
+    db.flush()
+
+    return batch
+
+
+def sync_group_deleted_state(db, group_id):
+    """An order is deleted exactly when it has no live batch left.
+
+    THIS FLAG HAD NO WRITER AT ALL, and the gap was found by driving the batch
+    route rather than by reading the code. `consignment_batch_groups.is_deleted`
+    was set once, by revision A's back-fill, copying it off the consignment
+    each group was built from. Nothing in the application has written it since:
+    the delete route sets the flag on the CONSIGNMENT and stops there.
+
+    That was invisible while every order held one batch and nothing consulted
+    the group's flag. It stops being invisible here - undo-deleting one of the
+    four soft-deleted consignments produced a LIVE batch under a DELETED order,
+    and the batch route correctly refused to add anything to an order that says
+    it does not exist.
+
+    Both directions, because either alone is worse than neither:
+
+      * deleting the last live batch retires the order;
+      * restoring any batch brings it back.
+
+    Derived from the batches rather than tracked alongside them, for the reason
+    this design keeps reaching for: a flag maintained in two places is a flag
+    that disagrees with itself, and the batches are the fact.
+    """
+    live_batches = db.execute(
+        select(func.count(Consignment.id))
+        .where(Consignment.batch_group_id == group_id)
+        .where(Consignment.is_deleted == False)  # noqa: E712
+    ).scalar()
+
+    group = db.get(ConsignmentBatchGroup, group_id)
+    if group is None:
+        return
+
+    should_be_deleted = not live_batches
+    if should_be_deleted != group.is_deleted:
+        group.is_deleted = should_be_deleted
+        group.deleted_at = datetime.now(timezone.utc) if should_be_deleted else None
+        if not should_be_deleted:
+            group.deleted_by_id = None
+
+
+def renumbering_note(group, batches):
+    """What this order's batches are numbered, now that one has been added.
+
+    Published by the batch-create route because A1's renumbering is a change to
+    rows the request did not name: creating `177-2` silently turns `177` into
+    `177-1` everywhere it is rendered. The client is told rather than left to
+    work it out by fetching the list again and noticing.
+    """
+    from app.imports.order_view import consignment_number_from
+
+    return {
+        "order_number": str(group.founding_consignment_id),
+        "batches_ever": group.batches_ever,
+        # True exactly when this creation was the split - the point at which
+        # every sibling gained a suffix it did not have a moment ago.
+        "siblings_renumbered": group.batches_ever == 2,
+        "batches": [
+            {
+                "consignment_id": b.id,
+                "batch_sequence": b.batch_sequence,
+                "consignment_number": consignment_number_from(
+                    group.founding_consignment_id, group.batches_ever,
+                    b.batch_sequence,
+                ),
+                # NULL on the batch that was just created - it had no number a
+                # moment ago, and reporting one would invite a client to render
+                # "177 is now 177-2" for a shipment that did not exist. On every
+                # sibling it is the number that was on screen before this
+                # request, which is the only one worth telling anybody about.
+                "previous_consignment_number": (
+                    None if b.batch_sequence == group.batches_ever
+                    else consignment_number_from(
+                        group.founding_consignment_id, group.batches_ever - 1,
+                        b.batch_sequence,
+                    )
+                ),
+            }
+            for b in sorted(batches, key=lambda x: x.batch_sequence)
+        ],
+    }
 
 
 #---------------------------------------
@@ -1746,12 +2039,92 @@ ORDER_ITEM_HEADER_FIELDS = {
 }
 
 
-def sync_order_item_from_line(item, consignment, line_payload=None,
-                              header_fields=None):
-    """Build or update the order line above a shipment line.
+#---------------------------------------------------------------------------
+# WHAT WAS ORDERED, AND WHEN IT STOPS FOLLOWING WHAT SHIPPED
+#
+# While an order holds ONE batch the two are the same quantity. There is
+# nothing to tell apart, no screen that asks for both, and every one of the 179
+# existing records is in that state - so an ordinary edit to the line quantity
+# moves `ordered_quantity` with it, exactly as it always has, and the wizard
+# needs no change before step 8.
+#
+# The moment an order SPLITS they stop being one fact. Batch 2 carrying 150 of
+# an order for 250 must not restate the order as 150 - and it would, on every
+# save, because the wizard posts the whole draft back. From the split onwards
+# the order quantity is set explicitly (the payload's own `ordered_quantity`)
+# or left alone.
+#
+# `batches_ever` is the test rather than a live count of batches, because it
+# never decrements: an order that split and then lost a batch has still been
+# split, and its order quantity is a fact of its own from then on. It does not
+# quietly start following the survivor again.
+#---------------------------------------------------------------------------
 
-    Creates the order item if the line has none, which is the case for every
-    line on a create and every line added by an update.
+def resolve_ordered_quantity(order_item, line, line_payload, group):
+    """What `ordered_quantity` should become on this save. None means leave it.
+
+    Four cases, in order:
+
+      1. the payload states it                -> that value, always
+      2. the order line is brand new          -> the line's quantity
+      3. the order has only ever held 1 batch -> the line's quantity
+      4. otherwise                            -> None: do not touch it
+    """
+    if line_payload is not None and line_payload.get("ordered_quantity") is not None:
+        return line_payload["ordered_quantity"]
+
+    # NOT NULL, and a line can legitimately carry no quantity at draft. A line
+    # that orders nothing orders zero - the same COALESCE the migration and the
+    # loader apply, for the same reason.
+    line_quantity = line.quantity if line.quantity is not None else Decimal("0")
+
+    if order_item.ordered_quantity is None:
+        return line_quantity
+
+    if (getattr(group, "batches_ever", 1) or 1) <= 1:
+        return line_quantity
+
+    return None
+
+
+def resolve_order_line(db, item, consignment, line_payload):
+    """The order line this shipment line is an allocation against.
+
+    Three ways a line gets one:
+
+      * `order_item_id` in the payload - a later batch allocating against an
+        order line that already exists. VALIDATED AGAINST THE GROUP: without
+        that check a client could point a line at another order's line and
+        allocate across orders, which no screen offers and nothing else in the
+        write path would catch.
+      * already attached - an ordinary edit to a line that has one.
+      * neither - a new item, which gets a new order line.
+    """
+    # ONE TEST, COVERING EVERY WRITER. `order_item_id` is a `ConsignmentItem`
+    # column, so it can arrive three ways: in this payload, through
+    # `ConsignmentItem(**line_fields)` on a line an update adds, or through
+    # `apply_item_updates` on one it edits. Reading the COLUMN rather than the
+    # relationship catches all three - on a pending row the relationship is
+    # still None while the foreign key is already set, so a guard written
+    # against `item.order_item` would silently mint a duplicate order line for
+    # exactly the case it was there to check.
+    named_id = (line_payload or {}).get("order_item_id") or item.order_item_id
+
+    if named_id is not None:
+        order_item = db.get(ConsignmentOrderItem, named_id)
+        if order_item is None or order_item.batch_group_id != consignment.batch_group_id:
+            raise UnknownOrderLine(named_id)
+        return order_item
+
+    if item.order_item is not None:
+        return item.order_item
+
+    return ConsignmentOrderItem(batch_group_id=consignment.batch_group_id)
+
+
+def sync_order_item_from_line(order_item, item, line_payload=None,
+                              header_fields=None, group=None):
+    """Update the order line above a shipment line.
 
     IT NO LONGER COPIES FROM THE LINE, because the line no longer has the
     thirteen columns to copy. `line_payload` is what the client posted for this
@@ -1763,13 +2136,18 @@ def sync_order_item_from_line(item, consignment, line_payload=None,
     on the ConsignmentItem and be mirrored UP, and they now arrive from the
     payload and are written DOWN. A line that is re-saved with no payload (a
     quantity-only edit) keeps whatever its order line already holds.
+
+    TWO THINGS IT USED TO WRITE AND DELIBERATELY NO LONGER DOES, both because
+    they are facts about the ORDER while this function only ever sees one batch:
+
+      * `allocated_quantity` - the sum across every batch of the order. Written
+        by `reconcile_allocation` and by nothing else. Set from one line, it
+        became whichever batch happened to save last.
+      * `is_deleted` - an order line outlives any one batch's line and is
+        retired only when the last of them goes. Same function, same reason:
+        mirroring it from the line meant deleting batch 2's line soft-deleted
+        the order line batch 1 also points at.
     """
-    order_item = item.order_item
-
-    if order_item is None:
-        order_item = ConsignmentOrderItem(batch_group_id=consignment.batch_group_id)
-        item.order_item = order_item
-
     for field in ORDER_ITEM_LINE_FIELDS:
         if line_payload is not None and field in line_payload:
             setattr(order_item, field, line_payload[field])
@@ -1778,18 +2156,9 @@ def sync_order_item_from_line(item, consignment, line_payload=None,
         if header_fields is not None and target in header_fields:
             setattr(order_item, target, header_fields[target])
 
-    # NOT NULL, and a line can legitimately carry no quantity at draft. A line
-    # that orders nothing orders zero - the same COALESCE the migration and the
-    # loader apply, for the same reason.
-    quantity = item.quantity if item.quantity is not None else Decimal("0")
-    order_item.ordered_quantity = quantity
-    order_item.allocated_quantity = quantity
-
-    # The pair is one thing while a group holds one batch, so it is deleted as
-    # one. Without this the order item outlives its line and
-    # `allocated_quantity` stops matching the lines it is the sum of.
-    order_item.is_deleted = item.is_deleted
-    order_item.deleted_at = item.deleted_at
+    ordered = resolve_ordered_quantity(order_item, item, line_payload, group)
+    if ordered is not None:
+        order_item.ordered_quantity = ordered
 
     return order_item
 
@@ -1829,10 +2198,19 @@ def sync_order_items(consignment, db, payloads=None, header_fields=None):
     cannot forget it. It is the helper that creates the transient state, so it
     is the helper that has to hold it off the database.
     """
+    group = consignment.batch_group
+
     with db.no_autoflush:
         for item in consignment.items:
+            line_payload = (payloads or {}).get(item)
+
+            order_item = resolve_order_line(db, item, consignment, line_payload)
+            if item.order_item is not order_item:
+                item.order_item = order_item
+
             sync_order_item_from_line(
-                item, consignment,
-                line_payload=(payloads or {}).get(item),
+                order_item, item,
+                line_payload=line_payload,
                 header_fields=header_fields,
+                group=group,
             )

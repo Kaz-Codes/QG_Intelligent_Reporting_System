@@ -326,11 +326,90 @@ read-only string from the ETA-revision + status history at serialize time
 separately (`elc_updated_by_id`/`_at`, `alc_updated_by_id`/`_at`);
 `stamp_landed_cost_audit` stamps only the figure that actually changed.
 
-**Endpoints:** `POST /`, `GET /` (paged + filtered), `GET /export` (xlsx of the
-filtered set), `GET /{id}`, `GET /{id}/trucking-jobs`, `PUT /{id}`,
-`POST /{id}/submit`, `POST /{id}/reopen`, `DELETE /{id}`,
-`POST /undo-delete/{id}`, `GET /change-history/{id}`,
-`GET /change-history/{id}/{hid}`, `PUT /revert-update/{id}/{hid}`.
+**Endpoints:** `POST /`, **`POST /{id}/batches`**, `GET /` (paged + filtered),
+`GET /export` (xlsx of the filtered set), `GET /{id}`,
+`GET /{id}/trucking-jobs`, `PUT /{id}`, `POST /{id}/submit`,
+`POST /{id}/reopen`, `DELETE /{id}`, `POST /undo-delete/{id}`,
+`GET /change-history/{id}`, `GET /change-history/{id}/{hid}`,
+`PUT /revert-update/{id}/{hid}`.
+
+### A consignment is a BATCH of an order
+
+One LC arriving in two shipments is **two consignments sharing one order**.
+`ConsignmentBatchGroup` is the order (supplier, origin, currency, type,
+incoterm, payment instrument + number, exchange rate + booking + source,
+`works_branch_id`); `ConsignmentOrderItem` is what the order BOUGHT, and each
+batch's `ConsignmentItem` rows are **allocations against it**. Full design in
+`docs/imports-batching-design.md`.
+
+**`POST /consignments/{id}/batches`** adds an arrival to an existing order —
+`{"allocations": [{"order_item_id", "quantity"}]}` and nothing else. Route,
+schedule, clearance and status start EMPTY and are entered afterwards through
+the ordinary `PUT`. **There is deliberately no `is_locked` guard on it:** a
+closed batch means one shipment arrived, which says nothing about the rest of
+the order, and requiring an admin reopen before the next arrival can be
+recorded would make the normal case the exceptional one.
+
+**Allocation (`app/imports/allocation.py`) — the invariant and its one writer.**
+
+```
+allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
+                     of this order, per order line;  never > ordered_quantity
+```
+
+- **`reconcile_allocation` is the ONLY writer** of `allocated_quantity` and of
+  an order line's `is_deleted`. **Six write paths end at it** — create, update,
+  batch creation, delete, undo-delete and **revert**. A route that enforces the
+  rule while an ordinary edit walks round it is worth nothing.
+- **A CHECK cannot express this** (the sum spans rows of another table under
+  other consignments), so enforcement is the server, with
+  `SELECT ... FOR UPDATE` on the order's lines. **Flush → lock → read the sum
+  from SQL**, in that order: locking first matched nothing on a create, because
+  the rows did not exist yet, and left `allocated_quantity` at 0 on every new
+  order. Never read the sum from `consignment.items` — that is one batch's
+  lines and can never see a sibling's.
+- **Lock order is fixed: the group row, then the order lines** (ascending id).
+  Every path that touches the group row — `claim_batch_sequence`,
+  `apply_group_updates` — does so before calling this, so the flush inside it
+  lands their UPDATE first. Reversing that deadlocks two concurrent saves.
+- `ck_allocation_within_order` + the two lower bounds
+  (`ordered_quantity >= 0`, `allocated_quantity >= 0`, revision `c7b210d4e9f3`)
+  are the **backstop**, not the enforcement. The lower bounds exist because the
+  upper one bounds a SUM, and a negative term satisfies it while the
+  quantities do not.
+- **Deleting a batch RELEASES its allocation; undoing the delete re-claims it
+  and can be REFUSED** if the quantity has since gone to a replacement batch.
+- `ordered_quantity` **follows the line while an order holds ONE batch** (which
+  is every existing record, and is what lets the wizard work unchanged) and
+  **stops following once it splits** — `helpers.resolve_ordered_quantity`.
+
+**Numbering — `177` and `177-2`, and neither is the primary key.**
+
+- A single-batch order shows the **plain** number; a split suffixes **every**
+  batch. So **creating a second batch renumbers the first**, `177` → `177-1`.
+  No row is written to do it (the number is derived from
+  `founding_consignment_id` + `batches_ever` + `batch_sequence`), which matters
+  because 142 of 179 consignments are locked. The route's response states the
+  renumbering; the user-facing warning is the front end's.
+- **Numbers are permanent. Nothing ever renumbers backwards.** Delete `177-2`
+  and `177-3` stays `177-3`; an order that splits and then loses a batch keeps
+  `177-1` and does **not** revert to `177`. `batches_ever` is incremented and
+  never decremented, which is what implements this.
+- `claim_batch_sequence` takes the next number with
+  `UPDATE ... batches_ever = batches_ever + 1 ... RETURNING` — atomically, not
+  read-modify-write. `uq_consignments_group_sequence` is the backstop; a fire
+  is a bug report, not something to retry around.
+- **Never derive a display number from `consignment.id`.** On batch 2 they are
+  different integers and the id belongs to no number anyone can look up. Use
+  `order_view.consignment_number()`; the serializer publishes it.
+
+**`consignment_batch_groups.is_deleted` is derived from the live batches**
+(`helpers.sync_group_deleted_state`, called by delete and undo-delete). It had
+no writer at all before step 7, which is how undo-delete could produce a live
+batch under a deleted order.
+
+**NOT BUILT: the group freeze** (design §3.9) — a closed batch does not yet
+stop anyone editing the ORDER's fields. Nothing is stubbed for it.
 
 ## logistics — `/logistics`
 
@@ -1389,15 +1468,41 @@ What it covers, chosen for consequence rather than coverage percentage:
   not an error message, it is a flood.
 - `test_packing_costs.py` — `packing_cost_kpis`, where a missing cost must
   not read as a zero cost.
+- `test_batch_numbering.py` — the A1/A3 numbering rules,
+  `resolve_ordered_quantity` and the allocation refusal messages. A numbering
+  error renames 179 live records at once, or makes a number that has been on
+  an invoice resolve to a **different** shipment.
+- `test_list_filter_joins.py` — every query naming two tables must say how they
+  join. It reads the **compiled SQL** for a FROM clause listing two tables with
+  no `ON`, because a cartesian product returns 200 with a full page of real
+  rows in it and no assertion on the response body can see it. Its own detector
+  is tested both ways: each of the three historical broken statements is
+  reconstructed and must be caught.
 
-`tests/check_dashboard_consistency.py` is a different thing and is NOT part of
-the pytest run: it is an integration script that needs a live app, a real
-database and a login, and it asserts that the same metric reads the same on
-every screen. Run it by hand after changing any dashboard calculation:
+**The integration scripts are NOT part of the pytest run.** Each needs a live
+app, a real database and a login, and each **mutates**, so all three are
+guarded to scratch databases (`tests/batch_fixture._require_scratch`, which has
+no override). Run them by hand:
 
 ```
-python tests/check_dashboard_consistency.py
+DB_NAME=scratch_x python -m uvicorn app.main:app --port 8011
+DB_NAME=scratch_x python tests/check_dashboard_consistency.py   # after any dashboard change
+DB_NAME=scratch_x python tests/check_batch_allocation.py        # after any allocation change
+DB_NAME=scratch_x python tests/check_allocation_concurrency.py  # after touching the lock
 ```
+
+- **`check_dashboard_consistency.py`** asserts the same metric reads the same
+  on every screen. Its batches-vs-orders section needs a **split order** to say
+  anything — with one batch per group, rows and orders are the same number and
+  every assertion passes whichever unit the code uses. Build one first with
+  `DB_NAME=scratch_x python -m tests.batch_fixture`, which splits through the
+  real routes.
+- **`check_allocation_concurrency.py` reproduces the race against unlocked
+  code before testing the lock.** Part 1 reconstructs the pre-lock shape
+  locally and must end with 300 allocated against an order for 250, both saves
+  committed and nothing raised; if it stops reproducing that, the script stops
+  rather than reporting a pass. **There is no `use_lock=False` flag** — a
+  parameter that exists only for a test is one production code can pass.
 
 ## Test scripts never touch the live database
 

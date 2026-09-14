@@ -7,8 +7,8 @@ from app.logistics.models import LogisticsConsignment
 from app.imports.models import Consignment, ConsignmentBatchGroup, ConsignmentItem
 from app.trucking.models import TruckingConsignment
 from app.imports.order_view import (
-    line_item_name, line_specification, order_instrument_number,
-    order_origin, order_supplier_name,
+    consignment_number, line_item_name, line_specification,
+    order_instrument_number, order_origin, order_supplier_name,
 )
 
 #-----------------------------------------------------
@@ -108,6 +108,23 @@ def _logistics_snapshot(order):
 
 
 def _import_snapshot(consignment):
+    # `quantity` HERE IS WHAT THIS BATCH CARRIES, NOT WHAT THE ORDER BOUGHT.
+    #
+    # It always read `item.quantity` off the shipment line, and that line's
+    # quantity is now an ALLOCATION - so on a split order this hands trucking
+    # the quantity of the arrival being sent rather than the whole order's. For
+    # trucking that is strictly MORE correct: a truck carries what turned up in
+    # that shipment, and before batching existed it was handed the whole order
+    # regardless.
+    #
+    # THE RISK IS IN THE STORED SNAPSHOTS, not here. A trucking job freezes this
+    # JSON at hand-off, and the 1,370 existing jobs hold snapshots written when
+    # a consignment could only be a whole order. Those do not change
+    # retroactively and nothing breaks; but a job created from now on means
+    # something subtly different from one created before, with nothing in the
+    # data saying which. Recorded rather than papered over - there is no
+    # migration that could tell the two apart, since for an unsplit order the
+    # two meanings coincide, which is every existing job.
     snapshot = []
     for item in consignment.items:
         if item.is_deleted:
@@ -195,12 +212,22 @@ def derive_open_requests(db):
     ).scalars().all()
 
     for consignment in imports_sent:
+        # `source_ref` IS THE PRIMARY KEY AND STAYS ONE - it is the link a
+        # trucking job is keyed on, not something anybody reads.
         ref = str(consignment.id)
+
+        # THE LABEL IS THE CONSIGNMENT NUMBER, WHICH IS NOT THE PRIMARY KEY.
+        # On a second batch those are different integers: batch 2 of order 21
+        # has id 184 and is called `21-2`, and "Import 184" names a
+        # consignment nobody can look up (design section 0.4). Harmless while
+        # every order held one batch; wrong from the first split, which this
+        # change is what makes possible.
+        number = consignment_number(consignment) or ref
         requests.append({
             "source": "from-import-fob",
             "source_ref": ref,
             "movement_type": "Inbound",
-            "label": f"Import {ref} — {order_supplier_name(consignment) or order_origin(consignment) or ''}".strip(" —"),
+            "label": f"Import {number} — {order_supplier_name(consignment) or order_origin(consignment) or ''}".strip(" —"),
             "supplier": order_supplier_name(consignment),
             "instrument_number": order_instrument_number(consignment),
             "snapshot": _import_snapshot(consignment),

@@ -18,6 +18,9 @@ from app.imports.routes import get_consignment
 from app.imports.routes import get_trucking_jobs
 from app.imports.routes import get_consignments_list
 from app.imports.routes import update_consignment
+# POST /{consignment_id}/batches - a literal segment under a param path, so it
+# cannot be shadowed by anything above; listed beside the other writes.
+from app.imports.routes import create_batch
 from app.imports.routes import submit_consignment
 from app.imports.routes import reopen_consignment
 from app.imports.routes import send_consignment
