@@ -1,9 +1,16 @@
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from app.database import SessionLocal
 from app.dashboard.whole import calculations as calc
 from app.dashboard.whole import helpers
 from app.dashboard.whole import references as refs
 from app.dashboard.logistics import helpers as logistics_helpers
 from app.dashboard.data_quality import coverage_note, note, collect, WARNING
 from app.dashboard.period import serialize_period, resolve_period
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------
 # THE OVERVIEW PAYLOAD
@@ -98,10 +105,11 @@ def serialize_imports(db, date_from, date_to, date_field, period_kind,
 
 
 def serialize_procurement(db, date_from, date_to, date_field, period_kind):
-    total, orders, quantity = helpers.procurement_period_totals(db, date_from, date_to, date_field)
-    late, comparable = helpers.procurement_delay(db, date_from, date_to, date_field)
-    store_days, store_rows, po_days, po_rows = helpers.procurement_cycle_times(
-        db, date_from, date_to, date_field
+    metrics = helpers.procurement_overview_metrics(db, date_from, date_to, date_field)
+    total, orders, quantity = metrics["total"], metrics["orders"], metrics["quantity"]
+    late, comparable = metrics["late"], metrics["comparable"]
+    store_days, store_rows, po_days, po_rows = (
+        metrics["store_days"], metrics["store_rows"], metrics["po_days"], metrics["po_rows"]
     )
 
     # Both candidate columns are populated on every row, so there is nothing to
@@ -223,6 +231,8 @@ def serialize_stores(db, dead_stock_days, issuance_from=None, issuance_to=None):
     consumption, window_days = helpers.consumption_by_branch(db)
     dead_items, dead_value, history_days = helpers.dead_stock(db, dead_stock_days)
 
+    issuance_metrics = helpers.issuance_overview_metrics(db, issuance_from, issuance_to)
+
     dead = calc.stores_dead_stock(
         dead_items, dead_value, dead_stock_days, items, total_value, history_days
     )
@@ -245,13 +255,13 @@ def serialize_stores(db, dead_stock_days, issuance_from=None, issuance_to=None):
     return {
         "period": serialize_period(issuance_from, issuance_to, issuance_kind),
         "date_field": "issuance_date",
-        "coverage": helpers.issuance_coverage(db, issuance_from, issuance_to),
+        "coverage": issuance_metrics["coverage"],
         "data_notes": notes,
         # Replaces the "Stores holding stock" tile — a count of branches, which
         # changes about once a year and said nothing about how the stores run.
         # Items are counted BY ITEM CODE, folded across branches, exactly as
         # Inventory counts them.
-        "issuance": helpers.issuance_period(db, issuance_from, issuance_to),
+        "issuance": issuance_metrics["period"],
         "stock_value": calc.stores_stock_value(total_value, available_value, items),
         "value_by_store": calc.stores_value_by_store(by_branch),
         "stock_days": calc.stores_stock_days(by_branch, consumption, window_days),
@@ -264,26 +274,71 @@ def serialize_stores(db, dead_stock_days, issuance_from=None, issuance_to=None):
     }
 
 
+def _run_with_own_session(name, fn, *args, **kwargs):
+    """Open a private session for one section, run it, close it, time it.
+
+    Never share a session across threads — SQLAlchemy Session is not
+    thread-safe, and this is the one rule this function exists to enforce.
+    The timing log is diagnostic only (which section is the bottleneck once
+    sections run in parallel) and never affects the returned payload.
+    """
+    db = SessionLocal()
+    started = time.perf_counter()
+    try:
+        return fn(db, *args, **kwargs)
+    finally:
+        db.close()
+        logger.debug(
+            "overview section %s took %.3fs", name, time.perf_counter() - started
+        )
+
+
 def serialize_overview(db, sections, dead_stock_days, shafts_only=False):
-    """`sections` carries each area's resolved window and chosen date field."""
+    """`sections` carries each area's resolved window and chosen date field.
+
+    `db` (the route's own session) is unused below — each section opens its
+    own via _run_with_own_session and the four run concurrently. Kept as a
+    parameter so the route doesn't need to change, and because it's still
+    used there for authorize() before this is called.
+    """
     imports = sections["imports"]
     procurement = sections["procurement"]
     logistics = sections["logistics"]
     stores = sections.get("stores", {})
 
-    return {
-        "imports": serialize_imports(
-            db, imports["from"], imports["to"], imports["field"], imports["kind"],
-            shafts_only,
+    jobs = {
+        "imports": (
+            serialize_imports,
+            (imports["from"], imports["to"], imports["field"], imports["kind"], shafts_only),
         ),
-        "procurement": serialize_procurement(
-            db, procurement["from"], procurement["to"],
-            procurement["field"], procurement["kind"]
+        "procurement": (
+            serialize_procurement,
+            (procurement["from"], procurement["to"], procurement["field"], procurement["kind"]),
         ),
-        "logistics": serialize_logistics(
-            db, logistics["from"], logistics["to"], logistics["field"], logistics["kind"]
+        "logistics": (
+            serialize_logistics,
+            (logistics["from"], logistics["to"], logistics["field"], logistics["kind"]),
         ),
-        "stores": serialize_stores(
-            db, dead_stock_days, stores.get("from"), stores.get("to")
+        "stores": (
+            serialize_stores,
+            (dead_stock_days, stores.get("from"), stores.get("to")),
         ),
     }
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_run_with_own_session, name, fn, *args): name
+            for name, (fn, args) in jobs.items()
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            # .result() re-raises whatever the worker raised, in THIS thread —
+            # the route's existing except Exception still catches it and
+            # still does db.rollback() / returns 500, unchanged behavior. Every
+            # future is awaited, including ones that finished without error, so
+            # no exception is ever swallowed by skipping a .result() call.
+            results[name] = future.result()
+
+    # Preserve original key order for anything downstream that relies on it.
+    return {k: results[k] for k in ("imports", "procurement", "logistics", "stores")}

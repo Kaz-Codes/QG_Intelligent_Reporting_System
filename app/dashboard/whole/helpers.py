@@ -563,6 +563,51 @@ def procurement_cycle_times(db, date_from, date_to, date_field=None):
     return to_days(store_days), store_rows, to_days(po_days), po_rows
 
 
+def procurement_overview_metrics(db, date_from, date_to, date_field=None):
+    """One-query version of procurement_period_totals + procurement_delay +
+    procurement_cycle_times. Same base scope (purchases_date_column window,
+    bare PurchasesData, no join) as all three — FILTERed aggregates per
+    figure instead of four separate round trips.
+
+    procurement_category_totals is NOT folded in here — it's a GROUP BY over
+    an outer join to Item, structurally different from a flat aggregate row,
+    same reasoning as imports_in_process_by_stage staying its own query.
+
+    Returns a dict, not a tuple.
+    """
+    in_window = purchases_date_column(date_field).between(date_from, date_to)
+    has_required = PurchasesData.required_d.isnot(None)
+    is_late = has_required & (PurchasesData.required_d < PurchasesData.purchase)
+    store_ok = (PurchasesData.ppc_store.isnot(None)
+                & (PurchasesData.ppc_store <= PurchasesData.purchase))
+    po_ok = (PurchasesData.po_date.isnot(None)
+             & (PurchasesData.po_date <= PurchasesData.purchase))
+
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(PurchasesData.amount), 0),
+            func.count(func.distinct(PurchasesData.po_number)),
+            func.coalesce(func.sum(PurchasesData.qty), 0),
+            func.count(func.distinct(PurchasesData.po_number)).filter(has_required),
+            func.count(func.distinct(PurchasesData.po_number)).filter(is_late),
+            func.avg(PurchasesData.purchase - PurchasesData.ppc_store).filter(store_ok),
+            func.count(func.distinct(PurchasesData.po_number)).filter(store_ok),
+            func.avg(PurchasesData.purchase - PurchasesData.po_date).filter(po_ok),
+            func.count(func.distinct(PurchasesData.po_number)).filter(po_ok),
+        )
+        .where(in_window)
+    ).one()
+
+    to_days = lambda v: round(float(v), 1) if v is not None else None
+
+    return {
+        "total": row[0], "orders": row[1], "quantity": row[2],
+        "comparable": row[3], "late": row[4],
+        "store_days": to_days(row[5]), "store_rows": row[6],
+        "po_days": to_days(row[7]), "po_rows": row[8],
+    }
+
+
 #-------------------------------------
 # LOGISTICS
 #-------------------------------------
@@ -1030,6 +1075,39 @@ def issuance_coverage(db, date_from, date_to):
     ).scalar_one()
 
     return coverage(earliest, latest, in_period, total, "issuance date")
+
+
+def issuance_overview_metrics(db, date_from, date_to):
+    """Drops the one genuinely redundant round trip between issuance_period
+    and issuance_coverage: issuance_coverage's own `in_period` count and
+    issuance_period's `lines` count are the SAME aggregate — count(id) WHERE
+    from_date BETWEEN the same window — computed twice. This reuses
+    issuance_period's value instead of re-querying it.
+
+    Deliberately NOT a single FILTER-based query merging the windowed and
+    all-time aggregates — that was tried and reverted. Merging drops the
+    WHERE clause issuance_period relies on (needed here for the unwindowed
+    min/max/total too), and `count(DISTINCT item_code) FILTER (WHERE window)`
+    with no outer WHERE forces Postgres to sort ALL 245k issuance rows before
+    the filter can apply, instead of the ~8k an indexed range scan touches for
+    one month — confirmed via EXPLAIN ANALYZE: 66ms (indexed bitmap scan +
+    in-memory quicksort) became 1.25s (sequential scan + external merge sort
+    spilling to disk). Keeping the two queries separate keeps
+    issuance_period's own indexed WHERE intact; only the duplicate is removed.
+
+    Returns a dict, not a tuple.
+    """
+    period = issuance_period(db, date_from, date_to)
+
+    earliest, latest, total = db.execute(
+        select(func.min(Issuance.from_date), func.max(Issuance.from_date),
+               func.count(Issuance.id))
+    ).one()
+
+    return {
+        "period": period,
+        "coverage": coverage(earliest, latest, period["lines"], total, "issuance date"),
+    }
 
 
 #-----------------------------------------------------
