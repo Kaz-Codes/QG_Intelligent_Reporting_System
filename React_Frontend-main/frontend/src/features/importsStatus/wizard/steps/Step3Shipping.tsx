@@ -6,6 +6,7 @@ import type { PortOption } from '@/lib/api/masters'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { toOptions } from '@/lib/api/useMasterOptions'
 import { AllocationPanel } from './AllocationPanel'
+import { EarlierBatches, SHIPPING_COLUMNS } from './EarlierBatches'
 import { useBatchContext } from '../BatchContext'
 
 /** Which master port_type a shipment mode's ports are filtered to. Land and
@@ -59,29 +60,9 @@ export function Step3Shipping() {
       <AllocationPanel />
 
       {/* EARLIER BATCHES, LOCKED. A later batch's own route is blank and
-          editable below; what the earlier ones did is context, not a field. */}
-      {batchCtx.isSplit && (
-        <section className="rounded-xl border border-line bg-canvas-alt">
-          <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
-            Earlier batches — route &amp; schedule (read-only)
-          </h3>
-          <div className="divide-y divide-line">
-            {batchCtx.batches
-              .filter((b) => (b.batch_sequence ?? 0) < (batchCtx.batchSequence ?? 0))
-              .map((b) => (
-                <div key={b.id} className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-4">
-                  <div><div className="text-[11px] text-muted">Batch</div><div className="font-semibold tabular-nums">{b.consignment_number}</div></div>
-                  <div><div className="text-[11px] text-muted">Route</div><div>{[b.loading_port?.name, b.delivery_port?.name].filter(Boolean).join(' → ') || '—'}</div></div>
-                  <div><div className="text-[11px] text-muted">ETD / ETA</div><div className="tabular-nums">{[b.etd, b.eta].filter(Boolean).join(' → ') || '—'}</div></div>
-                  <div><div className="text-[11px] text-muted">Status</div><div>{b.current_status || '—'}</div></div>
-                </div>
-              ))}
-            {batchCtx.batches.filter((b) => (b.batch_sequence ?? 0) < (batchCtx.batchSequence ?? 0)).length === 0 && (
-              <div className="px-4 py-3 text-sm text-muted">This is the first batch of the order.</div>
-            )}
-          </div>
-        </section>
-      )}
+          editable below; what the earlier ones did is context, not a field.
+          Shared with Step 6's clearance panel — same shape, different columns. */}
+      <EarlierBatches title="Earlier batches — route & schedule" columns={SHIPPING_COLUMNS} />
 
       <section className="rounded-xl border border-line bg-surface">
         <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">

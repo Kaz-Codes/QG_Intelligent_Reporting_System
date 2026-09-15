@@ -34,6 +34,7 @@ from app.reports.helpers import SHAFT_ITEMS
 
 from app.dashboard.references import clamp, paginate, sql_search_clause
 from app.enums import Status
+from app.dashboard.imports.helpers import LINE_EFFECTIVE_UNIT_PRICE
 from app.dashboard.whole.helpers import (
     CONSIGNMENT_VALUE, TERMINAL_STATUSES, shaft_consignment_ids,
     purchases_date_column,
@@ -675,7 +676,7 @@ def _line_query(conditions):
             func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works).label("line_eta"),
             Supplier.name,
             Branch.name,
-            (ConsignmentItem.quantity * ConsignmentOrderItem.unit_price
+            (ConsignmentItem.quantity * LINE_EFFECTIVE_UNIT_PRICE
              * ConsignmentBatchGroup.exchange_rate).label("value"),
         )
         .select_from(ConsignmentItem)

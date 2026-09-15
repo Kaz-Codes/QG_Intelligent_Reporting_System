@@ -24,7 +24,14 @@ export interface ApiConsignmentItem {
   specification: string | null
   hs_code: string | null
   quantity: string | number | null
+  /** How the line is priced — `quantity` or `weight` (enums.PriceBasis).
+   *  NOT NULL server-side with a `quantity` default. */
+  price_basis: string | null
   unit_price: string | number | null
+  /** Per kilogram; read only under the weight basis. */
+  weight_unit_price: string | number | null
+  /** Kilograms PER UNIT — not the line's total, which is `net_weight`. */
+  unit_weight: string | number | null
   unit_of_measurement: string | null
   batch_no: string | null
   /** THE DEMAND THIS LINE CAME FROM. Both live on the order line above this
@@ -378,6 +385,9 @@ export interface ConsignmentItemPayload {
   batch_no?: string | null
   requisition_type?: string | null
   unit_price?: number | null
+  price_basis?: string | null
+  weight_unit_price?: number | null
+  unit_weight?: number | null
   net_weight?: number | null
   gross_weight?: number | null
   length?: number | null
@@ -526,12 +536,42 @@ export async function getConsignmentChangeHistory(
 /** PUT /consignments/revert-update/{id}/{historyId} — undoes one change.
  *  400s unless it is the newest not-yet-reverted entry (the backend's LIFO
  *  rule); the UI only ever offers the button on that entry. */
-export async function revertConsignmentUpdate(id: number | string, historyId: number | string) {
-  const res = await apiFetch<DetailEnvelope>(
+/** What a revert could NOT put back, and why — one entry per field.
+ *
+ *  Two kinds of skip share this channel because they are the same event to the
+ *  person reading it: a column that has since been RETIRED, and a group field a
+ *  closed batch has FROZEN. The reason travels with the key so the caller never
+ *  has to look one up. */
+export interface RevertOutcome {
+  consignment: ApiConsignment
+  /** The server's sentence, already naming what it could not restore. */
+  detail: string
+  skippedFields: string[]
+  skippedDetail: Record<string, string>
+}
+
+/** PUT /consignments/revert-update/{id}/{historyId}
+ *
+ *  IT RETURNS THE SKIPS, AND THAT IS THE POINT. This used to return `res.data`
+ *  alone, so `skipped_fields` — served by the API since part 4 — reached
+ *  nobody: an operator whose revert restored four fields and refused a fifth
+ *  was told "Consignment reverted" and had no way to find out which. */
+export async function revertConsignmentUpdate(
+  id: number | string, historyId: number | string,
+): Promise<RevertOutcome> {
+  const res = await apiFetch<DetailEnvelope & {
+    skipped_fields?: string[]
+    skipped_detail?: Record<string, string>
+  }>(
     `/consignments/revert-update/${id}/${historyId}`,
     { method: 'PUT' },
   )
-  return res.data
+  return {
+    consignment: res.data,
+    detail: res.detail,
+    skippedFields: res.skipped_fields ?? [],
+    skippedDetail: res.skipped_detail ?? {},
+  }
 }
 
 /**

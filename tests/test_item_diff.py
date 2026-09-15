@@ -155,9 +155,23 @@ class TestAnAbsentORDINARYKeyStillClears:
 
 class TestTheSetIsDeclaredRatherThanInferred:
 
-    def test_it_names_both_columns_and_only_those(self):
-        """A NOT NULL column the server resolves belongs here; anything else
-        does not, or clearing that field stops working (above)."""
+    def test_it_names_exactly_the_columns_an_absent_key_must_not_clear(self):
+        """The membership rule is NOT NULL *and* resolved by the server.
+
+        `price_basis` joined when it joined `ConsignmentItemSchema`: it is NOT
+        NULL with a server default, so a payload omitting it would write NULL
+        and 500 on the constraint - the `ordered_quantity` bug one column
+        along. Its two companions, `weight_unit_price` and `unit_weight`, are
+        NULLABLE and are deliberately absent: an absent key clearing them is
+        the ordinary "the operator emptied the field" behaviour.
+
+        Pinned as an exact set rather than a subset, because the failure this
+        guards is the set growing by habit until clearing a field stops
+        working somewhere nobody tested."""
         assert set(helpers.SERVER_RESOLVED_ITEM_FIELDS) == {
-            "ordered_quantity", "order_item_id",
+            "ordered_quantity", "order_item_id", "price_basis",
         }
+
+    def test_the_nullable_weight_columns_are_NOT_in_it(self):
+        for nullable in ("weight_unit_price", "unit_weight"):
+            assert nullable not in helpers.SERVER_RESOLVED_ITEM_FIELDS

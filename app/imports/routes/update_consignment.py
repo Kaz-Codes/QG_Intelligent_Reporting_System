@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import assert_group_writable, GroupFrozenError, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
+from app.imports.helpers import assert_group_writable, GroupFrozenError, SERVER_RESOLVED_ITEM_FIELDS, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
 
 from app.imports.helpers import (
     fetch_consignment, is_closed, CLOSED_STATUS_VALUE,
@@ -183,6 +183,23 @@ def posted_item_payloads(consignment, consignment_data):
     Only items the client actually sent are included. A line absent from the
     payload keeps whatever its order line already holds, which is what a
     partial save should do.
+
+    A KEY THE CLIENT DID NOT SET IS DROPPED, for the fields in
+    `SERVER_RESOLVED_ITEM_FIELDS`. THIS IS THE SECOND WRITER OF THOSE COLUMNS
+    AND IT HAD TO LEARN THE SAME RULE.
+
+    `updated_items` already skips them in the DIFF, and that was not enough:
+    `sync_order_item_from_line` writes `ORDER_ITEM_LINE_FIELDS` straight from
+    this payload with `if field in line_payload`, and `model_dump()` includes
+    every schema field whether or not the client sent it. So a payload omitting
+    `price_basis` - which is NOT NULL - arrived here as an explicit None and
+    produced
+
+        UPDATE consignment_order_items SET price_basis = NULL
+        NotNullViolation
+
+    a 500 on an ordinary save, found by running `tests.batch_fixture` against a
+    tree where only the diff had been guarded. One rule, both writers.
     """
     by_id = {item.id: item for item in consignment.items if item.id is not None}
 
@@ -191,7 +208,12 @@ def posted_item_payloads(consignment, consignment_data):
         item = by_id.get(schema.id)
         if item is None:
             continue
-        _line_fields, order_item_fields = split_item_payload(schema.model_dump())
+        posted = schema.model_fields_set
+        dumped = {
+            key: value for key, value in schema.model_dump().items()
+            if key not in SERVER_RESOLVED_ITEM_FIELDS or key in posted
+        }
+        _line_fields, order_item_fields = split_item_payload(dumped)
         payloads[item] = order_item_fields
 
     return payloads

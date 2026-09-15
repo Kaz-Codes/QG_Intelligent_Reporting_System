@@ -15,7 +15,7 @@ from sqlalchemy.inspection import inspect
 from decimal import Decimal
 from app.imports.order_view import (
     consignment_number, line_item_code, line_item_name, line_specification,
-    line_unit_price, order_exchange_rate, order_instrument_number,
+    line_effective_unit_price, order_exchange_rate, order_instrument_number,
 )
 # THE ALLOCATION INVARIANT lives in its own module for the same reason
 # order_view does - it imports models and nothing else, so every caller can
@@ -822,7 +822,20 @@ def item_current_values(item):
 # otherwise be destroyed by it.
 #---------------------------------------------------------------------------
 
-SERVER_RESOLVED_ITEM_FIELDS = ("ordered_quantity", "order_item_id")
+SERVER_RESOLVED_ITEM_FIELDS = (
+    "ordered_quantity",
+    "order_item_id",
+    # `price_basis` IS NOT NULL WITH A SERVER DEFAULT, and it joined the diff
+    # the moment it joined ConsignmentItemSchema. A client that omits it would
+    # otherwise write NULL over it and 500 on the constraint - exactly the
+    # `ordered_quantity` bug from revision 13, one column along. Measured
+    # before it was added to this set: the three price columns survived a
+    # wizard round trip only BECAUSE they were absent from the schema.
+    #
+    # The other two weight columns are nullable, so an absent key clearing them
+    # is the ordinary "the operator emptied the field" behaviour and is right.
+    "price_basis",
+)
 
 
 def updated_items(consignment, update_consignment_data, db):
@@ -1853,8 +1866,12 @@ def recompute_derived(consignment):
 
     foreign_total = Decimal("0")
     for item in active_items:
-        if item.quantity is not None and line_unit_price(item) is not None:
-            foreign_total += item.quantity * line_unit_price(item)
+        # THE EFFECTIVE unit price, so a weight-priced line is valued by
+        # weight. `quantity x (something per unit)` either way - see
+        # order_view.line_effective_unit_price for why nothing else moves.
+        rate_per_unit = line_effective_unit_price(item)
+        if item.quantity is not None and rate_per_unit is not None:
+            foreign_total += item.quantity * rate_per_unit
 
     consignment.foreign_total = foreign_total
 
@@ -2433,6 +2450,12 @@ ORDER_ITEM_LINE_FIELDS = [
     "hs_code",
     "unit_of_measurement",
     "unit_price",
+    # The pricing basis and its own price live on the order line beside
+    # `unit_price`, because what a line costs per unit is a fact about what was
+    # ORDERED rather than about a particular arrival.
+    "price_basis",
+    "weight_unit_price",
+    "unit_weight",
     "requisition_type",
     "reference_number",
     "job_number",

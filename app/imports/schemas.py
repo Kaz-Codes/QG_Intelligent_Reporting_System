@@ -2,7 +2,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from app.enums import (
     ConsignmentType, Currency, Incoterm, ModeOfShipment, PaymentInstrument,
-    PaymentStatus, RateSource, RequisitionType, Status, UnitOfMeasurement,
+    PaymentStatus, PriceBasis, RateSource, RequisitionType, Status,
+    UnitOfMeasurement,
 )
 from datetime import date
 from decimal import Decimal
@@ -52,6 +53,24 @@ class ConsignmentItemSchema(BaseModel):
     batch_no : Optional[str] = Field(None, max_length=100)
     requisition_type : Optional[RequisitionType] = None
     unit_price : Optional[Decimal] = Field(None, gt=0)
+
+    # HOW THIS LINE IS PRICED - enums.PriceBasis, design revision 14.
+    #
+    # `quantity` -> quantity x unit_price
+    # `weight`   -> quantity x unit_weight x weight_unit_price
+    #
+    # The two prices are separate columns rather than one meaning two things,
+    # so summing a column of unit prices never mixes rupees-per-kg with
+    # rupees-per-piece (enums.py). WHICHEVER BASIS IS CHOSEN, THE OTHER PRICE
+    # IS NOT READ - a stored value in the unused field is inert, which is why
+    # the wizard hides it rather than leaving a number nothing multiplies.
+    price_basis : Optional[PriceBasis] = None
+    # Per KILOGRAM. `gt=0` like unit_price: a zero price is not a price.
+    weight_unit_price : Optional[Decimal] = Field(None, gt=0)
+    # Kilograms PER UNIT - deliberately not the line's total, which is
+    # ConsignmentItem.net_weight. Multiplying quantity by a total would count
+    # the quantity twice.
+    unit_weight : Optional[Decimal] = Field(None, gt=0)
     # Weight & dimensions — optional at draft (see model comment).
     net_weight : Optional[Decimal] = Field(None, ge=0)
     gross_weight : Optional[Decimal] = Field(None, ge=0)

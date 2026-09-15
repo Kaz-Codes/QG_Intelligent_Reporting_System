@@ -31,6 +31,135 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 18 (step 8b-2 BUILT: skipped fields, per-batch sections, price basis)
+
+The second half of step 8, plus price basis, which had dropped out of 8a twice.
+
+### `skipped_fields` reaches a human
+
+Served by the API since part 4 and rendered nowhere: `revertConsignmentUpdate`
+returned `res.data` and dropped everything else, so an operator whose revert
+restored four fields and refused a fifth was told *"Consignment reverted"* and
+had no way to learn which. Since the group freeze there are TWO reasons a field
+can be refused, both of which they can act on.
+
+The call now returns a `RevertOutcome`, and the change-history screen renders an
+amber notice — amber because the revert SUCCEEDED; this is the part that could
+not. Driven:
+
+> **Reverted, except 1 field. Everything else was restored.**
+> Exchange rate — the exchange rate is settled (batch 21-1 has arrived at
+> works) - money has moved against it and nobody, including an admin, can
+> restate it
+
+The field is named the way the history rows beside it name it (`fieldLabel`,
+exported from the map that already owns those labels) rather than by its column,
+and the reason travels WITH the key, so nothing has to be looked up.
+
+### Per-batch sections, and the rule that is NOT the freeze
+
+`EarlierBatches` — one shell, two callers. Step 3 shows earlier batches' route
+and schedule, Step 6 their clearance; the shape is identical and only the
+columns differ, so the columns are a prop. Two copies of a read-only table drift
+in exactly the way that leaves one wrong and nobody looking.
+
+`EnteredOnBatchOne` implements the requirements' *"Entered once, on the first
+batch only"* for Step 2 (Finance) and Step 4 (Payments).
+
+**IT IS NOT THE FREEZE, and conflating them would be a mistake.** The freeze
+(§3.9) bites once a batch has CLOSED and is about money that has already moved;
+it applies to batch 1 as much as to batch 3. This rule bites the moment an order
+SPLITS and is about where a value is entered — batch 1 stays editable however
+many batches follow it. A record can be under both, one, or neither.
+
+Measured on screen: **Step 2 on batch 21-2 → banner shown, 9 of 9 controls
+`:disabled`; Step 2 on batch 21-1 → no banner, 0 of 13 disabled.**
+
+A `fieldset` rather than per-field read-only rendering, deliberately: the freeze
+shows a value and removes its input, which is right for the handful of fields it
+covers, but this is two entire steps including a priced item table. One attribute
+disables every control inside, including ones added later, and the banner carries
+the reason — which is the part that helps.
+
+**A measurement trap worth recording**, because it nearly produced a false
+"this does not work": `element.disabled` reflects only the element's OWN
+attribute and reads `false` inside a disabled fieldset. `:disabled` and actual
+interactivity account for the ancestor. The first count said 0 of 9 disabled
+while `fill()` was already being refused.
+
+### Price basis, end to end
+
+    quantity basis   quantity x unit_price
+    weight   basis   quantity x unit_weight x weight_unit_price
+
+`order_view.line_effective_unit_price` is the one Python definition and all four
+Python valuation sites call it;
+`dashboard/imports/helpers.LINE_EFFECTIVE_UNIT_PRICE` is its SQL twin and the
+three aggregates import it rather than restating it. **The rule exists twice and
+cannot exist once** — a Python helper cannot be pushed into a SQL aggregate — so
+`tests/test_price_basis.py` evaluates the two against each other, reading the
+COMPILED SQL rather than running it.
+
+**An incomplete weight line is NOTHING, never zero.** A weight-priced line
+missing either input yields `None` in Python and `NULL` in SQL, so it drops out
+of the displayed total exactly as it drops out of the stored one. A 0 would value
+it at nothing and make a consignment look complete.
+
+**One field is authoritative and the other is not read**, and the form says so by
+SWAPPING the input rather than showing both: under the weight basis the per-unit
+price box is replaced by `kg/unit × per-kg`. Leaving a number on screen that
+nothing multiplies is what the requirements asked to make visible.
+
+Driven, on consignment 178:
+
+```
+total on the quantity basis             JPY  98,795.82
+switch one line to weight, inputs empty JPY  89,766.90   <- the line drops out
+enter 3.2 kg/unit x 12.5 per kg         JPY 105,846.90
+save, reload                            basis=weight, 3.2, 12.5 persisted
+```
+
+and the STORED total agrees to the rupee: `foreign_total = 105846.9000`. That
+line's `unit_price` of 22.46 is still stored and is **not read** — 402 × 3.2 ×
+12.5 = 16,080, where 402 × 22.46 would have been 9,028.92.
+
+### The NOT-NULL trap, caught a second time, by a second writer
+
+Revision 14 predicted that putting `price_basis` on `ConsignmentItemSchema` would
+let an omitted key write NULL over a NOT NULL column — the `ordered_quantity` bug
+from revision 13. It was guarded in `updated_items` (the DIFF) and **that was not
+enough**:
+
+```
+UPDATE consignment_order_items SET price_basis = NULL
+NotNullViolation
+```
+
+a 500 on an ordinary save, from `posted_item_payloads` →
+`sync_order_item_from_line`, which writes `ORDER_ITEM_LINE_FIELDS` straight from
+`model_dump()` — and `model_dump()` includes every schema field whether the
+client sent it or not. **There are two writers of those columns and only one had
+learned the rule.** Both now test `model_fields_set`.
+
+Found by running `tests.batch_fixture`, which failed at *"halving batch 1 failed:
+500"* — the fixture earning its keep as a check rather than as a fixture. Nothing
+in the pytest suite could have caught it: it needs a real PUT.
+
+### Verified
+
+`configure_mappers()` clean · **pytest 214** (was 195; +19 in
+`tests/test_price_basis.py`) · `check_dashboard_consistency.py` 94/0 ·
+`check_batch_allocation.py` 50/0 · `check_group_freeze.py` 32/0 · `tsc -b` clean.
+Browser: the price-basis toggle and its totals, the partial-revert notice, Step
+6's earlier-batches panel, and Steps 2/4 read-only on a later batch and editable
+on the founding one.
+
+**NOT driven:** Step 4's fieldset with actual controls in it — the fixture
+consignment has no payment rows, so the banner rendered over an empty step. The
+mechanism is the one Step 2 exercised with 9 controls.
+
+---
+
 ## Changelog — revision 17 (the allocation screen could not split anything)
 
 Two problems reported from the browser after revision 16 shipped. **They were
@@ -4894,17 +5023,13 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    batch, Step 3's allocation table, batch creation, the renumbering warning
    with the numbers in it, the pending-allocation highlight — and the freeze
    RENDERING, pulled forward from 8b-2 because the state was already served.
-8b-2. **Still to do — rendering state the API already returns.** `skipped_fields`
-   reaching a human; the locked-above pattern on Step 6 (clearance), which only
-   Step 3 has; and the read-only treatment of shared fields on a later batch,
-   which is a DIFFERENT rule from the freeze — the requirements say
-   entered-once-on-batch-1, while the freeze only bites once a batch has closed.
-8b-3. **Still to do — price basis**, end to end. Independent of batching; the
-   design is settled in revision 14 and the measured trap is that adding the
-   three columns to `ConsignmentItemSchema` puts them in the item diff, where an
-   omitted `price_basis` writes NULL over a NOT NULL column — the same shape as
-   revision 13's `ordered_quantity` bug, so `SERVER_RESOLVED_ITEM_FIELDS` grows
-   in the same change.
+8b-2. **BUILT, revision 18.** `skipped_fields` reaching a human; the
+   earlier-batches panel shared by Step 3 (route) and Step 6 (clearance); and
+   `EnteredOnBatchOne` for Steps 2 and 4 — a DIFFERENT rule from the freeze,
+   which the code and the doc both say out loud.
+8b-3. **BUILT, revision 18 — price basis**, end to end. One Python definition,
+   one SQL twin, and a test that evaluates them against each other. The
+   predicted NOT-NULL trap fired, from a SECOND writer the guard did not cover.
 8c. **The group freeze (§3.9) — BUILT, revision 15.** Deferred from step 7 and
    taken before 8b, because 8b puts the allocation screen in front of operators
    and makes splitting reachable; the hole it closes was already live through

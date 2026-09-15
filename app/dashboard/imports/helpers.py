@@ -1,4 +1,4 @@
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, case
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.imports.models import (
@@ -7,7 +7,7 @@ from app.imports.models import (
 from app.imports.demand_dates import EARLIEST_REQUIRED_DATE, earliest_required_date
 from app.imports.order_view import line_category
 from app.masters.models import Supplier, Item, Branch
-from app.enums import Status
+from app.enums import PriceBasis, Status
 from app.dashboard.period import coverage
 from app.reports.helpers import SHAFT_ITEMS
 
@@ -115,6 +115,28 @@ def source_coverage(db, date_from, date_to, date_field=None):
 # from quietly dropping rows the sheet did not date.
 #-----------------------------------------------------
 
+#---------------------------------------------------------------------------
+# THE PRICING RULE, IN SQL - and there is no way to have only one copy.
+#
+# `order_view.line_effective_unit_price` is the Python definition; three
+# aggregates value lines in the database and cannot call it. So the rule exists
+# TWICE, which is the duplication this project warns about most loudly. The
+# mitigation is that each copy lives in exactly one place, and a test evaluates
+# them against each other over every live line (tests/test_price_basis.py).
+#
+# NO COALESCE ON THE WEIGHT INPUTS, deliberately. A weight-priced line missing
+# either input yields NULL and SUM skips it - which matches the Python helper
+# returning None and every caller skipping that. Defaulting to 0 would value an
+# unfinished line at nothing and make a total look complete.
+#---------------------------------------------------------------------------
+
+LINE_EFFECTIVE_UNIT_PRICE = case(
+    (ConsignmentOrderItem.price_basis == PriceBasis.WEIGHT.value,
+     ConsignmentOrderItem.unit_weight * ConsignmentOrderItem.weight_unit_price),
+    else_=ConsignmentOrderItem.unit_price,
+)
+
+
 LINE_ETA = func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 
 # The line's value in PKR, at the consignment's own booked rate — never a live
@@ -125,7 +147,7 @@ LINE_ETA = func.coalesce(ConsignmentItem.eta_works, Consignment.eta_works)
 # QUANTITY is the shipment line's (how much of it came in this batch). That
 # split is the whole point of the two tables - see section 3.7.
 LINE_VALUE_PKR = (
-    ConsignmentItem.quantity * ConsignmentOrderItem.unit_price
+    ConsignmentItem.quantity * LINE_EFFECTIVE_UNIT_PRICE
     * ConsignmentBatchGroup.exchange_rate
 )
 

@@ -167,7 +167,17 @@ export const consignmentItemSchema = z.object({
   hsCode: optionalText,
 
   // step 2 — pricing is per item
+  /** HOW THIS LINE IS PRICED. `quantity` (the default) multiplies by
+   *  `foreignUnitPrice`; `weight` multiplies by `unitWeight × weightUnitPrice`.
+   *  Whichever is chosen, the other price is NOT READ — which is why the form
+   *  hides it rather than leaving a number nothing multiplies. */
+  priceBasis: z.enum(['quantity', 'weight']).default('quantity'),
   foreignUnitPrice: optionalNumber,
+  /** Per kilogram, used only under the weight basis. */
+  weightUnitPrice: optionalNumber,
+  /** Kilograms PER UNIT — not the line's total, which is `netWeight`.
+   *  Multiplying quantity by a total would count the quantity twice. */
+  unitWeight: optionalNumber,
 
   // Weight & dimensions — optional at draft, but the imports team is expected
   // to fill these before an FOB consignment is handed to trucking, since the
@@ -411,6 +421,7 @@ export const emptyItem = (id: string): ConsignmentItem => ({
   orderedQuantity: undefined,
   requisitionType: undefined,
   referenceNo: '', jobNo: '', moNo: '', othersDescription: '',
+  priceBasis: 'quantity', weightUnitPrice: undefined, unitWeight: undefined,
   itemId: '', itemName: '', placeholderName: '', itemCode: '', specification: '',
   quantity: undefined, uom: '', batchNo: '', hsCode: '',
   netWeight: undefined, grossWeight: undefined, length: undefined, width: undefined, height: undefined,
@@ -487,10 +498,27 @@ export const stepByNumber = (n: number) => WIZARD_STEPS.find((s) => s.step === n
 const days = (from?: string, to?: string) =>
   from && to ? Math.round((+new Date(to) - +new Date(from)) / 86_400_000) : undefined
 
-export const lineTotal = (item: ConsignmentItem) =>
-  item.quantity !== undefined && item.foreignUnitPrice !== undefined
-    ? item.quantity * item.foreignUnitPrice
+/** What one unit of this line costs, whichever basis it is priced on.
+ *
+ *  MIRRORS `order_view.line_effective_unit_price`. It is a display aid — the
+ *  stored total is the server's — but it has to agree, or Step 2 shows a total
+ *  the save then contradicts. Returns undefined rather than 0 when a
+ *  weight-priced line is missing an input, so the line drops out of the
+ *  displayed total exactly as it drops out of the stored one. */
+export const effectiveUnitPrice = (item: ConsignmentItem) => {
+  if (item.priceBasis === 'weight') {
+    if (item.unitWeight === undefined || item.weightUnitPrice === undefined) return undefined
+    return item.unitWeight * item.weightUnitPrice
+  }
+  return item.foreignUnitPrice
+}
+
+export const lineTotal = (item: ConsignmentItem) => {
+  const rate = effectiveUnitPrice(item)
+  return item.quantity !== undefined && rate !== undefined
+    ? item.quantity * rate
     : undefined
+}
 
 export const foreignTotal = (d: Pick<ConsignmentDraft, 'items'>) =>
   d.items.reduce((sum, i) => sum + (lineTotal(i) ?? 0), 0)

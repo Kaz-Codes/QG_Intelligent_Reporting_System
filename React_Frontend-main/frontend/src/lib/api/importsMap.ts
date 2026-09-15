@@ -478,7 +478,16 @@ function itemToPayload(item: DraftItem): ConsignmentItemPayload {
     unit_of_measurement: strOrUndef(item.uom),
     batch_no: strOrUndef(item.batchNo),
     requisition_type: item.requisitionType ? REQ_TYPE_TO_API[item.requisitionType] : undefined,
+    // THE BASIS AND BOTH PRICES. `price_basis` is NOT NULL server-side and is
+    // in SERVER_RESOLVED_ITEM_FIELDS, so omitting it would leave it alone
+    // rather than clearing it - but the form always knows it, so it always
+    // goes. The unused basis's price is sent as whatever the line still holds;
+    // the server does not read it, and clearing it would throw away a value
+    // the operator may want back when they switch the toggle again.
+    price_basis: item.priceBasis ?? 'quantity',
     unit_price: numGt0(item.foreignUnitPrice),
+    weight_unit_price: numGt0(item.weightUnitPrice),
+    unit_weight: numGt0(item.unitWeight),
     net_weight: numGe0(item.netWeight),
     gross_weight: numGe0(item.grossWeight),
     length: numGe0(item.length),
@@ -648,6 +657,9 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
       // a line that loses its order line on the way through the wizard becomes
       // a new item on the order the next time it is saved.
       orderItemId: item.order_item_id ?? undefined,
+      priceBasis: (item.price_basis === 'weight' ? 'weight' : 'quantity'),
+      weightUnitPrice: toNumber(item.weight_unit_price) ?? undefined,
+      unitWeight: toNumber(item.unit_weight) ?? undefined,
       // `orderedQuantity` IS DELIBERATELY NOT READ IN.
       //
       // Loading it made every save carry a pinned order quantity, and that

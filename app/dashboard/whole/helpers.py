@@ -15,6 +15,8 @@ from app.loading.schemas.stores_schemas import (
 )
 from app.masters.models import Item
 from app.enums import Status, JobKind
+# ONE DEFINITION OF THE PRICING RULE IN SQL, imported rather than restated.
+from app.dashboard.imports.helpers import LINE_EFFECTIVE_UNIT_PRICE
 from app.reports.helpers import SHAFT_ITEMS
 from app.dashboard.stock_runway import RUNWAY_WINDOW_DAYS, runway_window
 from app.dashboard.period import (
@@ -129,7 +131,7 @@ def imports_date_column(field):
 # Where a booked total exists the wrong figure is simply never reached, which is
 # how a bug this large hides in a passing test.
 _LINE_VALUE = (
-    select(func.sum(ConsignmentItem.quantity * ConsignmentOrderItem.unit_price))
+    select(func.sum(ConsignmentItem.quantity * LINE_EFFECTIVE_UNIT_PRICE))
     .select_from(ConsignmentItem)
     .join(ConsignmentOrderItem,
           ConsignmentOrderItem.id == ConsignmentItem.order_item_id)

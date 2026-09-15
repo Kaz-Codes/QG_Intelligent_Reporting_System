@@ -4,6 +4,7 @@ import {
 } from '../../schema'
 import { Field, Input, Callout, CarriedContext, PendingBanner } from './fields'
 import { useMasters } from '../MastersContext'
+import { EarlierBatches, CLEARANCE_COLUMNS } from './EarlierBatches'
 
 /**
  * Step 6 — Clearance.
@@ -39,6 +40,11 @@ export function Step6Clearance() {
         { label: 'Status', value: watch('status') || '—' },
         { label: 'Clearance measured from', value: basis.date ? `${basis.date} (${basis.kind === 'arrival' ? 'actual arrival' : 'ETA — no arrival logged yet'})` : 'Not yet arrived' },
       ]} />
+
+      {/* Clearance is per batch, and a later batch's own section starts empty
+          (requirements). What the earlier arrivals cleared against is context
+          the operator needs and must not retype. */}
+      <EarlierBatches title="Earlier batches — clearance" columns={CLEARANCE_COLUMNS} />
 
       <section className="rounded-xl border border-line bg-surface">
         <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
