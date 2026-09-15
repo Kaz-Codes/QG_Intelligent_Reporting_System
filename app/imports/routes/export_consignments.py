@@ -89,14 +89,40 @@ def _line_value_pkr(line, order_line, consignment):
     return foreign * float(rate)
 
 
+def _order_payments(consignment):
+    """The ORDER's live payments. Step 9 moved them off the batch."""
+    group = consignment.batch_group
+    return [p for p in (group.payments if group else []) if not p.is_deleted]
+
+
 def _payment_count(consignment):
-    return len([p for p in (consignment.payments or []) if not p.is_deleted])
+    if not _is_first_batch(consignment):
+        return None
+    return len(_order_payments(consignment))
 
 
 def _payment_total(consignment):
-    paid = [p.value for p in (consignment.payments or [])
-            if not p.is_deleted and p.value is not None]
+    if not _is_first_batch(consignment):
+        return None
+    paid = [p.value for p in _order_payments(consignment) if p.value is not None]
     return float(sum(paid)) if paid else None
+
+
+def _is_first_batch(consignment):
+    """BLANK THE ORDER'S PAYMENT FIGURES ON EVERY BATCH AFTER THE FIRST.
+
+    Payments belong to the order now, so repeating them on each batch's rows
+    would put the same total on screen two or three times. This sheet is read
+    in Excel, where a column gets summed and a note does not get read:
+    repeating gives a wrong total silently, and blanking cannot. A reader who
+    wonders where the figure went finds it on batch 1, which is where the
+    payments were entered.
+
+    `batch_sequence` is NULL on nothing - it is assigned at creation - but the
+    fallback treats an unknown sequence as the first batch rather than hiding
+    a figure that does exist.
+    """
+    return (consignment.batch_sequence or 1) == 1
 
 
 #---------------------------------------------------------------------------
@@ -218,6 +244,11 @@ COLUMNS = [
     # so joining them would multiply every item row by every payment and break
     # "one item = one row". Two order-level facts an operator reading the sheet
     # will want; the payment DETAIL stays where it is entered.
+    #
+    # AND SINCE STEP 9 THEY ARE THE ORDER'S, so they are printed on the FIRST
+    # batch only and left blank after it - see `_is_first_batch`. Repeating an
+    # order's total on each of its batches would be summed by whoever opens the
+    # sheet, and there is no note that survives a spreadsheet.
     ("Payments recorded",      lambda c, l, o: _payment_count(c)),
     ("Total paid",             lambda c, l, o: _payment_total(c)),
     ("Consignment foreign total", lambda c, l, o: _money(c.foreign_total)),

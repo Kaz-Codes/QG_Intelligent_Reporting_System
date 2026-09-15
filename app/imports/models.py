@@ -229,6 +229,15 @@ class ConsignmentBatchGroup(Base, TimestampMixin):
         foreign_keys=[founding_consignment_id]
     )
 
+    # ONE LC, ONE PAYMENT HISTORY. Moved off the batch in step 9 (section 4.4):
+    # the requirements put payments once per consignment, and while they hung
+    # off a batch two arrivals of one LC could each carry a full history.
+    payments: Mapped[list["Payment"]] = relationship(
+        back_populates="batch_group",
+        cascade="all, delete-orphan",
+        foreign_keys="Payment.batch_group_id",
+    )
+
     order_items: Mapped[list["ConsignmentOrderItem"]] = relationship(
         back_populates="batch_group",
         cascade="all, delete-orphan"
@@ -840,10 +849,20 @@ class Consignment(Base, TimestampMixin):
         cascade="all, delete-orphan"
     )
 
-    payments: Mapped[list["Payment"]] = relationship(
-        back_populates="consignment",
-        cascade="all, delete-orphan"
-    )
+    # `payments` IS GONE FROM THE BATCH - step 9, design section 4.4. Payments
+    # are made against the ORDER (one LC, one payment history), so they hang
+    # off `ConsignmentBatchGroup.payments`.
+    #
+    # REMOVED RATHER THAN LEFT AS A CONVENIENCE, and that is the whole point.
+    # `payments.consignment_id` is still populated until Revision B, so this
+    # relationship would GO ON WORKING: the serializer would keep reading it,
+    # every test would pass, and the omission would surface only when Revision
+    # B drops the column - weeks later, in a different change, with nothing
+    # connecting it to this one. A relationship that works today and is
+    # scheduled for deletion is precisely what makes Revision B dangerous.
+    #
+    # Anything that genuinely needs an order's payments from a batch goes
+    # through `consignment.batch_group.payments`, explicitly.
 
     # `branch` and `supplier` are GONE from the batch. They had no columns left
     # to join on once branch_id and supplier_id moved to the order, so they die
@@ -1074,6 +1093,32 @@ class Payment(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
+    # THE ORDER THIS PAYMENT IS AGAINST. The real link since step 9.
+    batch_group_id: Mapped[int] = mapped_column(
+        ForeignKey("consignment_batch_groups.id"),
+        nullable=False,
+        index=True,
+    )
+
+    # THE OLD LINK, ORPHANED BUT STILL NOT NULL UNTIL REVISION B.
+    #
+    # Expand-and-contract leaves the column in place, and it is `nullable=False`
+    # - so every payment inserted from now on must still put something here,
+    # including one entered while batch 2 is on screen. Section 4.4 does not say
+    # what, and getting it wrong is an insert failure on the first payment
+    # anybody records rather than a cleanup item.
+    #
+    # WHAT GOES IN IT: `group.founding_consignment_id`. That is the row the
+    # order's identity already derives from everywhere else - the consignment
+    # NUMBER is built from it (`order_view.consignment_number_from`) and
+    # `reference_label_from` falls back to it - so a payment written from any
+    # batch points at the consignment the order is NAMED after, rather than at
+    # whichever arrival happened to be on screen. Writing the batch the operator
+    # was looking at would make the orphaned column disagree between two
+    # payments on one order, for a reason nobody could reconstruct later.
+    #
+    # REVISION B DROPS THIS COLUMN and the question disappears with it. Until
+    # then `helpers.legacy_payment_consignment_id` is its only writer.
     consignment_id: Mapped[int] = mapped_column(
         ForeignKey("consignments.id", ondelete="CASCADE"),
         nullable=False
@@ -1122,8 +1167,12 @@ class Payment(Base, TimestampMixin):
         nullable=True
     )
 
-    consignment: Mapped["Consignment"] = relationship(
-        back_populates="payments"
+    # THE ORDER, not the batch. `foreign_keys` is required because this table
+    # now has two FKs that could plausibly be the parent link and the orphaned
+    # one still resolves - without it SQLAlchemy cannot tell which is meant.
+    batch_group: Mapped["ConsignmentBatchGroup"] = relationship(
+        back_populates="payments",
+        foreign_keys=[batch_group_id],
     )
 
 

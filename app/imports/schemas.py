@@ -124,6 +124,10 @@ class ConsignmentSchema(BaseModel):
     exchange_rate : Optional[Decimal] = Field(None, ge = 0)
     rate_booked_on : Optional[date] = None
     rate_source : Optional[RateSource] = None
+    # LC-level, entered on Step 4 beside the payments. `ge=0` rather than `gt=0`
+    # - an order can genuinely carry no insurance, and 0 says so where NULL says
+    # "nobody has looked".
+    insurance_amount : Optional[Decimal] = Field(None, ge=0)
     #---shipping---
     mode_of_shipment : Optional[ModeOfShipment] = None
     loading_port_id : Optional[int] = None

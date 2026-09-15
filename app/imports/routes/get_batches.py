@@ -79,7 +79,8 @@ def get_batches(request: Request, consignment_id: int):
                 # is one query per line per batch.
                 selectinload(Consignment.items)
                 .selectinload(ConsignmentItem.order_item),
-                selectinload(Consignment.payments),
+                joinedload(Consignment.batch_group)
+                .selectinload(ConsignmentBatchGroup.payments),
                 selectinload(Consignment.status_updates),
                 selectinload(Consignment.eta_revisions),
                 joinedload(Consignment.created_by),

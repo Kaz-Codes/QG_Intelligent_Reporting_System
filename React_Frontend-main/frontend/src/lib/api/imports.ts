@@ -149,6 +149,9 @@ export interface ApiConsignment {
   exchange_rate: string | number | null
   rate_booked_on: string | null
   rate_source: string | null
+  /** LC-LEVEL, on the order. Insurance is taken out once per consignment, not
+   *  per shipment, so every batch of an order reports the same figure. */
+  insurance_amount: string | number | null
   foreign_total: string | number | null
   pkr_total: string | number | null
   current_status: string | null
@@ -429,6 +432,7 @@ export interface ConsignmentPayload {
   exchange_rate?: number | null
   rate_booked_on?: string | null
   rate_source?: string | null
+  insurance_amount?: number | null
 
   mode_of_shipment?: string | null
   loading_port_id?: number | null
