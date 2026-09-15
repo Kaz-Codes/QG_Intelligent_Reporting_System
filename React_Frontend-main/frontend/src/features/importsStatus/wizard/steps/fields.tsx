@@ -8,6 +8,45 @@ import { Input } from '@/components/ui/input'
  * and the `text-risk` token their scaffold already uses for errors.
  */
 
+/**
+ * A group field a closed batch has settled — design §3.9.
+ *
+ * IT SHOWS THE VALUE AND REMOVES THE INPUT, rather than disabling one. A
+ * disabled input still looks like a field somebody could enable; a value with a
+ * reason beside it reads as a fact about the order. The operator has not typed
+ * anything yet, which is the whole reason this is rendered up front instead of
+ * waiting for the 423.
+ *
+ * THE REASON IS PASSED IN, NEVER DERIVED HERE. Which tier a field is in comes
+ * from `group_frozen.hard` / `.admin` on the payload (BatchContext.frozenReason).
+ * Restating the tier lists in the browser would be a second copy of a rule the
+ * server already publishes.
+ */
+export function FrozenField({
+  label, value, reason, span,
+}: {
+  label: string
+  value: ReactNode
+  reason: string
+  span?: boolean
+}) {
+  return (
+    <div className={`flex flex-col gap-1.5 ${span ? 'sm:col-span-2 lg:col-span-4' : ''}`}>
+      <Label>
+        {label}
+        <span className="ml-1.5 rounded bg-canvas-alt px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+          Settled
+        </span>
+      </Label>
+      <div className="rounded-lg border border-line bg-canvas-alt px-3 py-2 text-sm text-ink">
+        {value || <span className="text-muted">Not recorded</span>}
+      </div>
+      <p className="text-xs text-muted">{reason}</p>
+    </div>
+  )
+}
+
+
 export function Field({
   label, htmlFor, error, hint, required, span, children,
 }: {

@@ -1,0 +1,350 @@
+"""Numbering and ordered-quantity: the rules that need no database.
+
+WHY THESE FOUR RULES AND NOT COVERAGE OF THE MODULE
+
+Each one is a decision that is expensive to get wrong and cheap to get wrong
+QUIETLY - no error, just a different number on a screen nobody is comparing:
+
+  * A1 - a single batch keeps the plain number, and a split gives every batch a
+    suffix. Getting this wrong renames 179 live records at once.
+  * A3 - numbers never move and are never reused. Getting this wrong makes a
+    number that has been on an invoice resolve to a DIFFERENT shipment, which
+    is worse than one that resolves to nothing, because both parties believe
+    they agree.
+  * `resolve_ordered_quantity` - when the order quantity stops following the
+    line. Getting this wrong lets a save of batch 2 restate what the whole
+    order bought, on every save, silently.
+  * `renumbering_note` - what the API tells a client about the renumbering it
+    just caused. It is the only warning a user will get before a number they
+    may have written down changes.
+
+The locked allocation invariant is NOT here: it is about two transactions and
+a row lock, which cannot be expressed without a database.
+`tests/check_allocation_concurrency.py` reproduces it, and
+`tests/check_batch_allocation.py` drives the refusals through the real routes.
+"""
+
+from decimal import Decimal
+
+import pytest
+
+from app.imports.allocation import (
+    OrderLineHasNoQuantity, OverAllocation, UnknownOrderLine, plain,
+)
+from app.imports.helpers import NewItemOnLaterBatch
+from app.imports.order_view import consignment_number_from, reference_label_from
+
+from conftest import Obj
+
+
+def d(value):
+    return Decimal(str(value))
+
+
+#---------------------------------------------------------------------------
+# A1 and A3 - the suffix rule
+#---------------------------------------------------------------------------
+
+class TestTheSuffixRule:
+
+    def test_a_single_batch_has_no_suffix(self):
+        """A1. 179 live records are in this state; a suffix here renames them all."""
+        assert consignment_number_from(177, 1, 1) == "177"
+
+    def test_a_split_order_suffixes_every_batch(self):
+        """A1. Including the FOUNDING one, which is the renumbering."""
+        assert consignment_number_from(177, 2, 1) == "177-1"
+        assert consignment_number_from(177, 2, 2) == "177-2"
+
+    def test_the_number_is_the_FOUNDING_batch_id_not_the_row_s_own(self):
+        """The distinction the whole function exists for.
+
+        Batch 2 of order 177 has its own primary key - 184, say - and that
+        integer belongs to no number anyone can look up. A display number
+        derived from `consignment.id` is correct on every record that exists
+        today and silently wrong on the first split.
+        """
+        assert consignment_number_from(177, 2, 2) == "177-2"
+        assert "184" not in consignment_number_from(177, 2, 2)
+
+    @pytest.mark.parametrize("sequence,expected", [(1, "177-1"), (3, "177-3")])
+    def test_a_deleted_batch_leaves_a_GAP(self, sequence, expected):
+        """A3. 177-2 deleted: 177-1 and 177-3 remain, and nothing slides down.
+
+        `batches_ever` is 3 and stays 3 - it counts every batch the order has
+        EVER held, so the surviving numbers do not move.
+        """
+        assert consignment_number_from(177, 3, sequence) == expected
+
+    def test_dropping_back_to_one_batch_does_NOT_restore_the_plain_number(self):
+        """A3, the half that is easy to miss. Renumbering runs FORWARD ONLY.
+
+        An order that split to two and then lost one keeps `177-1`. Reverting
+        to a bare `177` would make a number that has been on paperwork mean
+        something new - the same failure as reusing one, reached from the
+        other direction.
+        """
+        assert consignment_number_from(177, 2, 1) == "177-1"
+
+    def test_no_founding_id_renders_nothing_rather_than_guessing(self):
+        assert consignment_number_from(None, 2, 1) == ""
+
+    def test_a_missing_batches_ever_is_read_as_one(self):
+        """Defensive, because the column is NOT NULL but old in-session copies
+        can be expired: a missing count must never invent a suffix."""
+        assert consignment_number_from(177, None, 1) == "177"
+
+
+#---------------------------------------------------------------------------
+# What a row PRINTS when the order has no payment reference
+#
+# `reference_label_from` used to fall back to `IMP-{consignment_id}`. Step 8
+# replaced that with the consignment number, because the fallback's ten
+# callers are notification payloads, drill-down rows, log lines and the
+# reports `ref` column - each rendering ONE string, none of them a screen that
+# shows the number beside it. Pinned here because the failure is silent: a
+# label is not something any route asserts on, and the only way anyone would
+# notice it going wrong is by reading a notification about a consignment they
+# cannot find.
+#---------------------------------------------------------------------------
+
+class TestTheReferenceLabelFallback:
+
+    def test_the_payment_reference_wins_when_there_is_one(self):
+        assert reference_label_from("LC", "6222", 177, 1, 1) == "lc6222"
+
+    def test_it_wins_on_a_later_batch_too_because_it_is_the_ORDER_S(self):
+        """Both batches of one LC print the same reference - that is what makes
+        the consignment NUMBER the thing that tells them apart."""
+        assert reference_label_from("LC", "6222", 177, 2, 2) == "lc6222"
+
+    def test_no_instrument_number_falls_back_to_the_consignment_number(self):
+        assert reference_label_from(None, None, 177, 1, 1) == "177"
+
+    def test_the_fallback_SUFFIXES_on_a_split(self):
+        """The half `IMP-{id}` got wrong. Batch 2 of order 177 is row 184, so
+        the old fallback printed `IMP-184` beside a sibling printing `IMP-177`
+        - two labels for one order, neither of which was the number."""
+        assert reference_label_from(None, None, 177, 2, 2) == "177-2"
+
+    def test_a_blank_instrument_number_is_not_a_reference(self):
+        assert reference_label_from("LC", "   ", 177, 1, 1) == "177"
+
+    def test_IMP_IS_GONE(self):
+        """The token itself, so a revert to the old fallback fails here rather
+        than only showing up in somebody's inbox."""
+        assert "IMP-" not in reference_label_from(None, None, 177, 1, 1)
+
+
+#---------------------------------------------------------------------------
+# When the order quantity stops following the line
+#---------------------------------------------------------------------------
+
+class TestResolveOrderedQuantity:
+
+    def resolve(self, ordered, line_quantity, payload, batches_ever):
+        from app.imports.helpers import resolve_ordered_quantity
+
+        return resolve_ordered_quantity(
+            Obj(ordered_quantity=ordered),
+            Obj(quantity=line_quantity),
+            payload,
+            Obj(batches_ever=batches_ever),
+        )
+
+    def test_the_payload_wins_whenever_it_states_one(self):
+        assert self.resolve(d(250), d(100), {"ordered_quantity": d(300)}, 2) == d(300)
+
+    def test_the_payload_wins_even_on_a_single_batch_order(self):
+        """Otherwise "the order is for 300, this batch brings 100" would be
+        unsayable on an order that has not split yet."""
+        assert self.resolve(d(250), d(100), {"ordered_quantity": d(300)}, 1) == d(300)
+
+    def test_a_brand_new_order_line_takes_the_line_s_quantity(self):
+        assert self.resolve(None, d(250), None, 1) == d(250)
+
+    def test_a_single_batch_order_FOLLOWS_its_line(self):
+        """The case every one of the 179 existing records is in.
+
+        With one shipment, "what was ordered" and "what this carries" are the
+        same quantity. This is what lets the current wizard keep working with
+        no change: it posts `quantity` and no `ordered_quantity`, and an
+        ordinary edit moves both.
+        """
+        assert self.resolve(d(250), d(300), None, 1) == d(300)
+
+    def test_A_SPLIT_ORDER_DOES_NOT_FOLLOW_ITS_LINE(self):
+        """The rule the whole function exists for.
+
+        The wizard posts the whole draft back on every save. Without this,
+        saving batch 2 - which carries 150 of an order for 250 - would restate
+        the order as 150, silently, on every save.
+        """
+        assert self.resolve(d(250), d(150), None, 2) is None
+
+    def test_nor_after_a_split_that_lost_a_batch(self):
+        """`batches_ever` never decrements, so an order that has been split
+        stays split for this purpose. It does not quietly start following the
+        survivor again."""
+        assert self.resolve(d(250), d(100), None, 2) is None
+
+    def test_a_line_with_no_quantity_orders_zero_rather_than_NULL(self):
+        """`ordered_quantity` is NOT NULL and a draft line can carry nothing -
+        the same COALESCE the migration and the loader apply."""
+        assert self.resolve(None, None, None, 1) == d(0)
+
+    def test_an_explicit_zero_in_the_payload_is_honoured(self):
+        """Not treated as absent. `0 or default` is the bug this guards: it is
+        how a deliberate zero becomes whatever the fallback happened to be."""
+        assert self.resolve(d(250), d(100), {"ordered_quantity": d(0)}, 2) == d(0)
+
+
+#---------------------------------------------------------------------------
+# What the API says about the renumbering it caused
+#---------------------------------------------------------------------------
+
+class TestRenumberingNote:
+
+    def note(self, batches_ever, sequences):
+        from app.imports.helpers import renumbering_note
+
+        return renumbering_note(
+            Obj(founding_consignment_id=177, batches_ever=batches_ever),
+            [Obj(id=100 + s, batch_sequence=s) for s in sequences],
+        )
+
+    def test_the_split_reports_the_founding_batch_s_old_and_new_numbers(self):
+        result = self.note(2, [1, 2])
+        founding = next(b for b in result["batches"] if b["batch_sequence"] == 1)
+        assert founding["previous_consignment_number"] == "177"
+        assert founding["consignment_number"] == "177-1"
+
+    def test_the_split_is_flagged(self):
+        assert self.note(2, [1, 2])["siblings_renumbered"] is True
+
+    def test_a_THIRD_batch_renumbers_nobody(self):
+        result = self.note(3, [1, 2, 3])
+        assert result["siblings_renumbered"] is False
+        for batch in result["batches"]:
+            if batch["batch_sequence"] < 3:
+                assert batch["previous_consignment_number"] == batch["consignment_number"]
+
+    def test_the_NEW_batch_reports_no_previous_number(self):
+        """It had none. Reporting one would invite a client to render
+        "177 is now 177-2" for a shipment that did not exist a moment ago."""
+        result = self.note(2, [1, 2])
+        new = next(b for b in result["batches"] if b["batch_sequence"] == 2)
+        assert new["previous_consignment_number"] is None
+
+    def test_a_gap_in_the_sequences_is_reported_as_it_stands(self):
+        """177-2 deleted, then 177-4 added. The note must not renumber around
+        the hole - see A3."""
+        result = self.note(4, [1, 3, 4])
+        assert [b["consignment_number"] for b in result["batches"]] == [
+            "177-1", "177-3", "177-4",
+        ]
+
+
+#---------------------------------------------------------------------------
+# The refusals a person has to read
+#---------------------------------------------------------------------------
+
+class TestTheRefusalMessages:
+    """Each of these is something the operator can fix, so each must say what.
+
+    Asserted because a refusal is the one output of this feature that a user
+    reads word for word, and because `OrderLineHasNoQuantity` exists ONLY to
+    carry its message - a bare rejection would leave somebody stuck in front
+    of a line they are perfectly able to correct.
+    """
+
+    def test_over_allocation_names_the_item_the_figures_and_the_overage(self):
+        message = str(OverAllocation([{
+            "order_item_id": 7, "item": "Forged Steel Round Bar",
+            "ordered": d(250), "allocated": d(300), "over": d(50),
+        }]))
+        assert "Forged Steel Round Bar" in message
+        assert "250" in message and "300" in message
+        assert "over by 50" in message
+
+    def test_over_allocation_falls_back_to_the_id_when_the_item_is_unnamed(self):
+        message = str(OverAllocation([{
+            "order_item_id": 7, "item": None,
+            "ordered": d(1), "allocated": d(2), "over": d(1),
+        }]))
+        assert "order line 7" in message
+
+    def test_over_allocation_lists_EVERY_line_that_is_over(self):
+        """Not just the first. A batch is saved whole, so an operator fixing
+        one item at a time because the message only mentioned one would be
+        made to submit as many times as they have bad lines."""
+        message = str(OverAllocation([
+            {"order_item_id": 1, "item": "A", "ordered": d(10),
+             "allocated": d(11), "over": d(1)},
+            {"order_item_id": 2, "item": "B", "ordered": d(20),
+             "allocated": d(25), "over": d(5)},
+        ]))
+        assert "A" in message and "B" in message and "over by 5" in message
+
+    def test_a_line_that_ordered_nothing_is_told_HOW_TO_FIX_IT(self):
+        message = str(OrderLineHasNoQuantity([(451, "Widget")]))
+        assert "Set the ordered quantity" in message
+
+    def test_a_foreign_order_line_says_why_it_was_refused(self):
+        message = str(UnknownOrderLine(99))
+        assert "99" in message and "does not belong to this order" in message
+
+    @pytest.mark.parametrize("value,expected", [
+        (Decimal("250.000"), "250"),
+        (Decimal("250.500"), "250.5"),
+        (Decimal("1000.000"), "1000"),
+        (Decimal("0.000"), "0"),
+        (None, "0"),
+    ])
+    def test_quantities_are_printed_as_a_person_writes_them(self, value, expected):
+        """`250.000` and `2.5E+2` are both what Decimal gives you and neither
+        is what anyone would type. The 1000 case is the one that matters:
+        `normalize()` turns it into `1E+3`."""
+        assert plain(value) == expected
+
+
+#---------------------------------------------------------------------------
+# A new item on a LATER batch - design section 3.7b, finding 3
+#
+# The trap this closes was measured, not imagined: a wizard-shaped PUT adding
+# one line to batch 2 returned 200, created a second order line, and took an
+# order from 33.523 ordered to 38.523. The over-allocation CHECK cannot see it
+# because each line sits inside its own order line - the sum grew, but so did
+# the limit.
+#---------------------------------------------------------------------------
+
+class TestNewItemOnLaterBatch:
+
+    def test_it_is_422_like_the_other_allocation_refusals(self):
+        """The client sent something the server cannot act on - a request
+        problem, not a permission or a lock."""
+        assert NewItemOnLaterBatch("Probe A", 2).status_code == 422
+
+    def test_the_message_names_the_item(self):
+        """An operator staring at a six-line form being told 'an item is
+        invalid' has been told nothing."""
+        assert '"Probe A"' in str(NewItemOnLaterBatch("Probe A", 2))
+
+    def test_an_unnamed_item_says_so_rather_than_printing_None(self):
+        message = str(NewItemOnLaterBatch(None, 2))
+        assert "unnamed item" in message
+        assert "None" not in message
+
+    def test_the_message_says_HOW_TO_FIX_IT(self):
+        """Naming `order_item_id` is the difference between a refusal somebody
+        can act on and one they raise a ticket about."""
+        assert "order_item_id" in str(NewItemOnLaterBatch("Probe A", 2))
+
+    def test_it_names_the_batch_when_it_knows_which(self):
+        assert "batch 2" in str(NewItemOnLaterBatch("Probe A", 2))
+
+    def test_it_omits_the_SEQUENCE_rather_than_printing_a_blank_one(self):
+        """The prose says "the order's first batch" either way; what must not
+        appear is the parenthesised sequence with nothing in it."""
+        assert "(batch" not in str(NewItemOnLaterBatch("Probe A", None))
+        assert "(batch 2)" in str(NewItemOnLaterBatch("Probe A", 2))

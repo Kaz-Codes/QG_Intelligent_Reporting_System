@@ -14,6 +14,30 @@ from decimal import Decimal
 
 class ConsignmentItemSchema(BaseModel):
     id : Optional[int] = None
+
+    # WHICH ORDER LINE THIS SHIPMENT LINE ALLOCATES AGAINST.
+    #
+    # Optional, and absent from everything the wizard currently sends: a line
+    # with no `order_item_id` either keeps the order line it already has or
+    # gets a new one, which is exactly today's behaviour. It is needed only
+    # when a LATER batch allocates against an order line that already exists,
+    # and the server validates that the line belongs to this order (see
+    # helpers.resolve_order_line) rather than trusting it.
+    order_item_id : Optional[int] = None
+
+    # WHAT THE ORDER BOUGHT, as opposed to what this batch carries.
+    #
+    # Also optional, and for the same reason: while an order holds one batch
+    # the two are the same quantity, so leaving it out means "the same as
+    # `quantity`" and the current wizard needs no change before step 8. Once an
+    # order has split they are different facts and this is the one that can no
+    # longer be inferred - see helpers.resolve_ordered_quantity.
+    #
+    # `ge=0`, not `gt=0` like `quantity`: the migration's COALESCE rows sit at
+    # zero and have to be expressible so they can be corrected. Allocating
+    # against one is refused at the server, with a message naming that fix.
+    ordered_quantity : Optional[Decimal] = Field(None, ge=0)
+
     item_id : Optional[int] = None
     item_name : Optional[str] = Field(None, max_length=255)
     # The operator's informal label for the line (see the model). Pydantic
@@ -105,3 +129,32 @@ class ConsignmentSchema(BaseModel):
     #---items and payments---
     items : Optional[list[ConsignmentItemSchema]] = []
     payments : Optional[list[ConsignmentPaymentSchema]] = []
+
+
+#------------------------------------
+# ADDING A BATCH TO AN EXISTING ORDER
+#
+# DELIBERATELY THIN. A batch is created by saying which of the order's items
+# this arrival brings and how much of each; everything else about it - the
+# route, the schedule, the ports, the clearance, the status - is entered
+# afterwards through the ordinary edit, because the requirements are explicit
+# that a later batch's shipping section starts empty and editable.
+#
+# Nothing commercial appears here at all: supplier, currency, incoterm and the
+# booked rate are the ORDER's and the new batch reads the same row its siblings
+# do. A field for any of them would be a second place to set a value that has
+# exactly one home.
+#------------------------------------
+
+class BatchAllocationSchema(BaseModel):
+    order_item_id : int
+    # `gt=0`: a batch that carries nothing of an item is a batch that does not
+    # carry it, which is expressed by leaving the line out.
+    quantity : Decimal = Field(gt=0)
+
+
+class CreateBatchSchema(BaseModel):
+    # At least one line, for the same reason the empty-draft guard exists on
+    # create: a batch carrying nothing is not a shipment, and creating one
+    # would put a row into every list and count with nothing in it.
+    allocations : list[BatchAllocationSchema] = Field(min_length=1)

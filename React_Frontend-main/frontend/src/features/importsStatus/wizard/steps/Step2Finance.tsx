@@ -3,7 +3,9 @@ import {
   type ConsignmentDraft, PAYMENT_INSTRUMENTS, INSTRUMENT_WORDING, RATE_SOURCES,
   foreignTotal, localTotal, lineTotal,
 } from '../../schema'
-import { Field, Input, Select, Callout, CarriedContext } from './fields'
+import { Field, FrozenField, Input, Select, Callout, CarriedContext } from './fields'
+import { useBatchContext, frozenReason } from '../BatchContext'
+import { useAuth } from '@/features/auth/AuthContext'
 
 const fx = (v: number | undefined, code: string | undefined) =>
   v === undefined ? '—' : `${code || ''} ${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim()
@@ -25,6 +27,12 @@ export function Step2Finance() {
   const instrument = watch('paymentInstrument') as keyof typeof INSTRUMENT_WORDING | ''
 
   const wording = instrument ? INSTRUMENT_WORDING[instrument] : null
+
+  // WHICH OF THIS STEP'S FIELDS THE ORDER HAS SETTLED. The tier lists come
+  // from the server on `group_frozen`; this only asks.
+  const batchCtx = useBatchContext()
+  const { user } = useAuth()
+  const frozen = (key: string) => frozenReason(batchCtx, key, !!user?.isAdmin)
   const draft = { items, exchangeRate: rate } as ConsignmentDraft
   const totalForeign = foreignTotal(draft)
   const totalLocal = localTotal(draft)
@@ -113,24 +121,49 @@ export function Step2Finance() {
             <Input type="date" {...register('instrumentDate')} />
           </Field>
 
-          <Field label="Works" hint="The entity the import is filed under" error={errors.works?.message}>
-            <Input {...register('works')} autoComplete="off" />
-          </Field>
+          {/* "WORKS" WAS HERE AND IS NOW STEP 1'S "Works / Branch" DROPDOWN.
+              It was free text that reached no column: `works` is retired on
+              the server (helpers.RETIRED_PAYLOAD_FIELDS — accepted from the
+              payload and discarded), superseded by the order's
+              `works_branch_id`, which Step 1's Branch select already writes.
+              The serializer even returns the BRANCH NAME under `works` now,
+              so this input round-tripped a value it could not change. Two
+              editable controls over one stored value is the thing to avoid,
+              so the duplicate goes rather than becoming a second dropdown. */}
 
-          <Field label="Exchange rate" htmlFor="exchangeRate" required error={errors.exchangeRate?.message} hint="Rate booked, not live">
-            <Input id="exchangeRate" type="number" min="0" step="any" className="tabular-nums" {...register('exchangeRate')} placeholder="0.00" />
-          </Field>
+          {/* THE RATE IS TIER 1 — once a batch has arrived, nobody may restate
+              it, including an admin. Rendered settled rather than disabled, and
+              rendered BEFORE the operator types, which is the whole point: a
+              423 on save arrives after the work (design §3.9). */}
+          {frozen('exchange_rate') ? (
+            <FrozenField label="Exchange rate" value={watch('exchangeRate')} reason={frozen('exchange_rate')!} />
+          ) : (
+            <Field label="Exchange rate" htmlFor="exchangeRate" required error={errors.exchangeRate?.message} hint="Rate booked, not live">
+              <Input id="exchangeRate" type="number" min="0" step="any" className="tabular-nums" {...register('exchangeRate')} placeholder="0.00" />
+            </Field>
+          )}
 
-          <Field label="Rate date" required error={errors.rateDate?.message}>
-            <Input type="date" {...register('rateDate')} />
-          </Field>
+          {frozen('rate_booked_on') ? (
+            <FrozenField label="Rate date" value={watch('rateDate')} reason={frozen('rate_booked_on')!} />
+          ) : (
+            <Field label="Rate date" required error={errors.rateDate?.message}>
+              <Input type="date" {...register('rateDate')} />
+            </Field>
+          )}
 
-          <Field label="Rate source" span hint="Where the booked rate came from — needed to reconcile against a bank advice later">
-            <Select {...register('rateSource')}>
-              <option value="">Select…</option>
-              {RATE_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </Select>
-          </Field>
+          {/* Tier 1 as well. Leaving it editable beside two settled neighbours
+              would say the freeze is about particular inputs rather than about
+              the valuation, which is the wrong lesson to teach. */}
+          {frozen('rate_source') ? (
+            <FrozenField label="Rate source" value={watch('rateSource')} reason={frozen('rate_source')!} span />
+          ) : (
+            <Field label="Rate source" span hint="Where the booked rate came from — needed to reconcile against a bank advice later">
+              <Select {...register('rateSource')}>
+                <option value="">Select…</option>
+                {RATE_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+            </Field>
+          )}
         </div>
       </section>
 

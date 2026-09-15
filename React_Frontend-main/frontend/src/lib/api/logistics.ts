@@ -389,6 +389,12 @@ export interface ApiImportFobJob {
   source_ref: string
   consignment_id: number
   instrument_number: string | null
+  /** THE CONSIGNMENT NUMBER (`177`, `177-2`) and the ORDER's payment reference
+   *  (`lc6222`), both built by the server. This row used to carry a front-end
+   *  copy of the whole display rule — `instrument_number || IMP-${id}` —
+   *  including a fallback that named a consignment nobody could look up. */
+  consignment_number: string | null
+  payment_reference: string | null
   supplier: string | null
   origin: string | null
   item_summary: string | null

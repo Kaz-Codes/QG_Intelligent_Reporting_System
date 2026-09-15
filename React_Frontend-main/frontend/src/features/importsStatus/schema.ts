@@ -135,6 +135,21 @@ export const consignmentItemSchema = z.object({
   moNo: optionalText,
   othersDescription: optionalText,
 
+  /** WHICH ORDER LINE THIS BATCH LINE ALLOCATES AGAINST — the id the server
+   *  needs to know that this line is a shipment of something the order already
+   *  bought, rather than a new item on the order.
+   *
+   *  Read-only in the wizard and never typed. It comes back on every fetch and
+   *  goes out on every save; the one thing that must not happen is it being
+   *  dropped in between, which is what made adding an item to batch 2 raise the
+   *  order's total by stealth (design §3.7b finding 3). */
+  orderItemId: optionalNumber,
+  /** What the ORDER bought for this line, across every batch. Shown on the
+   *  allocation table beside what this batch carries; only sent when the
+   *  operator changes it, since on an unsplit order the server keeps it in
+   *  step with `quantity` by itself. */
+  orderedQuantity: optionalNumber,
+
   // item
   itemId: optionalText,              // FK to item master once one exists
   itemName: z.string().default(''),
@@ -167,8 +182,14 @@ export const consignmentItemSchema = z.object({
 export type ConsignmentItem = z.infer<typeof consignmentItemSchema>
 
 export const consignmentStepSchema = z.object({
-  /** Internal ID, generated on creation and never edited (e.g. QC-2026-0148). */
+  /** The database id, as a string. A route target, not a label — see
+   *  `consignmentNumber` below. Never edited and never posted back. */
   systemId: z.string().default(''),
+  /** THE CONSIGNMENT NUMBER the wizard's step chips display: `177`, or
+   *  `177-2` on a later batch. Server-owned and read-only here; it is absent
+   *  from `draftToPayload` on purpose, because nothing in the browser gets to
+   *  decide what a consignment is called. */
+  consignmentNumber: z.string().default(''),
   branch: optionalText,
   supplier: optionalText,
   origin: optionalText,
@@ -204,7 +225,9 @@ export const financeStepSchema = z.object({
   instrumentNo: optionalText,
   /** Retirement date for LC, opening date for everything else. */
   instrumentDate: optionalDate,
-  works: optionalText,
+  // `works` IS GONE FROM THE DRAFT — step 8. It was free text on this step
+  // that the server discards (RETIRED_PAYLOAD_FIELDS); Works is the order's
+  // branch and Step 1's "Works / Branch" dropdown is the control for it.
   exchangeRate: optionalNumber,
   rateDate: optionalDate,
   rateSource: optionalText,
@@ -381,6 +404,11 @@ export type ConsignmentDraft = z.infer<typeof consignmentDraftSchema>
 export const emptyItem = (id: string): ConsignmentItem => ({
   id,
   backendId: undefined,
+  // A line the operator has just added has no order line yet. On the founding
+  // batch the server makes one; on a later batch it now refuses, which is the
+  // point — a new item belongs to the ORDER, not to an arrival.
+  orderItemId: undefined,
+  orderedQuantity: undefined,
   requisitionType: undefined,
   referenceNo: '', jobNo: '', moNo: '', othersDescription: '',
   itemId: '', itemName: '', placeholderName: '', itemCode: '', specification: '',
@@ -395,12 +423,12 @@ export const emptyPayment = (id: string): Payment => ({
 })
 
 export const DRAFT_DEFAULT_VALUES: ConsignmentDraft = {
-  systemId: '',
+  systemId: '', consignmentNumber: '',
   branch: '', supplier: '', origin: '', currency: '',
   consignmentType: '', incoterm: '', poDate: '', requisitionDate: '', requiredDate: '',
   items: [emptyItem('item-1')],
 
-  paymentInstrument: '', instrumentNo: '', instrumentDate: '', works: '',
+  paymentInstrument: '', instrumentNo: '', instrumentDate: '',
   exchangeRate: undefined, rateDate: '', rateSource: '',
 
   modeOfShipment: '', portOfLoading: '', portOfDelivery: '',
@@ -438,7 +466,7 @@ export const WIZARD_STEPS: WizardStepDef[] = [
   { step: 1, key: 'consignment', label: 'Consignment',
     fields: ['branch', 'supplier', 'origin', 'currency', 'consignmentType', 'incoterm', 'poDate', 'requisitionDate', 'requiredDate', 'items'] },
   { step: 2, key: 'finance', label: 'Finance',
-    fields: ['paymentInstrument', 'instrumentNo', 'instrumentDate', 'works', 'exchangeRate', 'rateDate', 'rateSource', 'items'] },
+    fields: ['paymentInstrument', 'instrumentNo', 'instrumentDate', 'exchangeRate', 'rateDate', 'rateSource', 'items'] },
   { step: 3, key: 'shipping', label: 'Shipping',
     fields: ['modeOfShipment', 'portOfLoading', 'portOfDelivery', 'readinessDate', 'etd', 'eta', 'etaWorks'] },
   { step: 4, key: 'payments', label: 'Payments',

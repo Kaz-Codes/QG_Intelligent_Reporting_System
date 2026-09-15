@@ -27,7 +27,7 @@ export function Step5StatusRemarks() {
   return (
     <div className="space-y-5">
       <CarriedContext items={[
-        { label: 'Consignment', value: watch('systemId') || 'New' },
+        { label: 'Consignment', value: watch('consignmentNumber') || 'New' },
         { label: 'Supplier', value: watch('supplier') },
       ]} />
 

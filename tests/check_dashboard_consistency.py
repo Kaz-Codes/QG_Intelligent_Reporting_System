@@ -333,6 +333,36 @@ if _split is None:
     print("         identical here, so nothing below could discriminate.")
     print("         Run:  DB_NAME=scratch_x python -m tests.batch_fixture")
 else:
+    # WHICH ORDER, AND WHETHER ITS BATCHES ARE DATED. The assertions below are
+    # WINDOWED, so they can only discriminate if both batches fall inside the
+    # period - and a batch created by `POST /{id}/batches` starts with no
+    # schedule at all, correctly, because the requirements say a later batch's
+    # shipping section begins empty. A run that picked an undated split
+    # therefore fails on "the two units differ" for a reason that has nothing
+    # to do with the count decisions. This is what makes that legible instead
+    # of baffling.
+    with _conn.cursor() as _c0:
+        _c0.execute("""
+            SELECT c.id, c.batch_sequence,
+                   COALESCE(c.eta_works, (SELECT max(i.eta_works)
+                                            FROM consignment_items i
+                                           WHERE i.consignment_id = c.id
+                                             AND i.is_deleted = false))
+              FROM consignments c
+             WHERE c.batch_group_id = %s AND c.is_deleted = false
+             ORDER BY c.batch_sequence
+        """, (_split,))
+        _dating = _c0.fetchall()
+
+    print(f"  fixture: order {_split} -> " + ", ".join(
+        f"batch {b[0]} (seq {b[1]}, arrives {b[2] or 'UNDATED'})" for b in _dating))
+
+    if any(b[2] is None for b in _dating):
+        print("  [WARN] a batch has no arrival date, so it falls out of every")
+        print("         windowed figure and the 'two units differ' guards below")
+        print("         cannot discriminate. Build a dated split with")
+        print("         DB_NAME=scratch_x python -m tests.batch_fixture")
+
     with _conn.cursor() as _cur:
         def one(sql_text, *params):
             _cur.execute(sql_text, params)
@@ -460,9 +490,16 @@ else:
             print("  [skip] the split order has no clearing agent")
 
         # --- the split must not have INVENTED money ---
+        # THE PRICE IS ON THE ORDER LINE, and reading it off
+        # `consignment_items.unit_price` was wrong in a way that only showed up
+        # once the fixture stopped writing that column by hand. It still exists
+        # in the database, but part 4 unmapped it - the ORM has not written it
+        # since, so a batch created by the real route leaves it NULL and this
+        # sum silently lost that batch's value.
         _order_value = one("""
-            SELECT COALESCE(SUM(i.quantity * i.unit_price), 0)
+            SELECT COALESCE(SUM(i.quantity * o.unit_price), 0)
               FROM consignment_items i
+              JOIN consignment_order_items o ON o.id = i.order_item_id
               JOIN consignments c ON c.id = i.consignment_id
              WHERE c.batch_group_id = %s AND i.is_deleted = false
                AND c.is_deleted = false

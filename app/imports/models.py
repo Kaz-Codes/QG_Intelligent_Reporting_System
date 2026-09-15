@@ -288,6 +288,32 @@ class ConsignmentOrderItem(Base, TimestampMixin):
             "allocated_quantity <= ordered_quantity",
             name="ck_allocation_within_order",
         ),
+
+        # THE LOWER BOUNDS, WITHOUT WHICH THE UPPER ONE CAN BE WALKED PAST.
+        #
+        # `allocated <= ordered` bounds a SUM, and a sum containing a negative
+        # term can satisfy it while the quantities it is made of do not. Order
+        # 250, batch 1 allocated 400, batch 2 allocated -150: the sum is 250,
+        # the CHECK passes, and 400 units have been committed against an order
+        # for 250. Over-allocation becomes arithmetically invisible - the one
+        # failure the whole invariant exists to prevent.
+        #
+        # `ordered_quantity >= 0` closes the mirror of it: a negative order
+        # makes every allocation an over-allocation, or (paired with a negative
+        # allocation) neither.
+        #
+        # The Pydantic schema constrains `quantity > 0` on the PAYLOAD, which
+        # is not the same control - the loaders bypass it entirely, and these
+        # two columns are written by a helper rather than straight from a
+        # request body.
+        CheckConstraint(
+            "ordered_quantity >= 0",
+            name="ck_order_item_ordered_quantity_non_negative",
+        ),
+        CheckConstraint(
+            "allocated_quantity >= 0",
+            name="ck_order_item_allocated_quantity_non_negative",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -330,14 +356,32 @@ class ConsignmentOrderItem(Base, TimestampMixin):
     )
 
     #--- quantity ---
-    # What was bought. Each batch line's own `quantity` is an allocation against
-    # this, and the sum of those allocations is mirrored into
-    # allocated_quantity below.
+    # What was bought.
+    #
+    # IT FOLLOWS THE LINE ONLY WHILE THE ORDER HOLDS ONE BATCH. With one
+    # shipment, "what was ordered" and "what this shipment carries" are the
+    # same quantity and there is nothing to tell apart, so an ordinary edit to
+    # the line quantity moves this with it - which is what every one of the 179
+    # existing records does and what keeps the wizard working unchanged.
+    #
+    # The moment an order SPLITS the two stop being the same fact, and this one
+    # stops following: it is then set explicitly (the payload's own
+    # `ordered_quantity`) and a batch save can no longer restate what the whole
+    # order bought. `helpers.resolve_ordered_quantity` is the one place that
+    # rule lives.
     ordered_quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 3),
         nullable=False
     )
 
+    # The SUM of every live line on every live batch of this order, denormalised
+    # onto the parent row where ck_allocation_within_order can see it.
+    #
+    # WRITTEN BY `helpers.reconcile_allocation` AND BY NOTHING ELSE. It used to
+    # be written line-by-line beside `ordered_quantity`, which was correct only
+    # while one line could be the whole sum; with two batches a per-line write
+    # sets it to whichever batch saved last. One writer, holding a row lock,
+    # reading the sum back out of the database - see that function.
     allocated_quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 3),
         default=0,

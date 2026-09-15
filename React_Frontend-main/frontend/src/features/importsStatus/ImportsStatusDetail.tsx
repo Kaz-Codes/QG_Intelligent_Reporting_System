@@ -154,12 +154,12 @@ export function ImportsStatusDetail() {
     <div className="space-y-4 pb-16">
       <div className="text-xs text-muted">
         <button onClick={() => navigate('/imports-status')} className="hover:underline">Consignments</button>
-        {' › '}{row.systemId}
+        {' › '}{row.consignmentNumber || row.systemId}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader
-          title={row.systemId}
+          title={row.consignmentNumber || row.systemId}
           subtitle={`${row.supplier} · ${row.branch} · ${row.requisitionSummary}`}
           module="importsStatus"
         />
@@ -247,7 +247,7 @@ export function ImportsStatusDetail() {
       {/* 1 — consignment */}
       <Section id="s-consignment" title="Consignment details" editStep="consignment" edit={<EditLink step="consignment" />}>
         <FieldGrid>
-          <Field label="Branch" value={row.branch} />
+          <Field label="Works / Branch" value={row.branch} />
           <Field label="Supplier" value={row.supplier} span={2} />
           <Field label="Country of origin" value={row.origin} />
           <Field label="Currency" value={row.currency} mono />
@@ -297,7 +297,6 @@ export function ImportsStatusDetail() {
       {/* 2 — finance */}
       <Section id="s-finance" title="Finance" editStep="finance" edit={<EditLink step="finance" />}>
         <FieldGrid>
-          <Field label="Works" value={row.works ?? undefined} />
           <Field label="Instrument" value={row.paymentInstrument ?? undefined} />
           <Field label="Instrument number" value={row.instrumentNo ?? undefined} mono />
           <Field label="Exchange rate" value={row.exchangeRate !== null ? row.exchangeRate.toFixed(2) : undefined} mono />
@@ -430,7 +429,7 @@ export function ImportsStatusDetail() {
         title="Reopen this consignment?"
         description={
           <>
-            <span className="font-medium text-ink">{row.systemId}</span> is closed. Reopening makes it editable
+            <span className="font-medium text-ink">{row.consignmentNumber || row.systemId}</span> is closed. Reopening makes it editable
             again until it is submitted at "Arrived at Works" once more.
           </>
         }

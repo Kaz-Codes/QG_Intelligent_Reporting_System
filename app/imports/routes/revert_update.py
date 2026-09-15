@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived, RETIRED_HISTORY_KEYS
+from app.imports.helpers import fetch_consignment, fetch_consignment_history, fetch_latest_consignment_history, revert, recompute_derived, RETIRED_HISTORY_KEYS, reconcile_allocation, AllocationError
 from app.imports.serializers import serialize_consignment
 from datetime import datetime, timezone
 import logging
@@ -66,7 +66,26 @@ def revert_update(
 
         # Revert updates. `skipped` names any field the history recorded whose
         # column has since been retired - see RETIRED_HISTORY_KEYS.
-        skipped = revert(consignment_history, consignment, db)
+        skipped = revert(consignment_history, consignment, db, user)
+
+        # A REVERT IS AN ALLOCATION CHANGE TOO, AND IT IS THE ONE THAT CAN GO
+        # OVER FROM BELOW.
+        #
+        # Two ways this path moves the invariant, and the second is the reason
+        # it needs the check rather than merely deserving it:
+        #
+        #   * it restores line quantities, re-adds lines an update soft-deleted
+        #     and removes lines an update added - all of which change the sum;
+        #   * `ordered_quantity` is on the ORDER LINE, shared by every batch, so
+        #     reverting an edit made on batch 2 can put the ORDER back to a
+        #     smaller figure while batch 1's allocation stays where it is.
+        #     Nothing about that involves an over-large allocation being typed -
+        #     the limit comes DOWN to meet a sum that was legal when it was
+        #     written.
+        #
+        # The same locked function every other write path ends at, so a revert
+        # cannot be governed by a different rule from the save it is undoing.
+        reconcile_allocation(db, consignment.batch_group_id)
 
         # Derived totals are not part of the change history (they are never
         # sent by the client), so recompute them from the reverted state.
@@ -85,8 +104,13 @@ def revert_update(
         # could not put back and why.
         detail = "Consignment reverted"
         if skipped:
+            # The reason now travels WITH the key, because there are two kinds
+            # of skip: a retired column that no longer exists, and a group field
+            # a closed batch has frozen. Looking each key up in
+            # RETIRED_HISTORY_KEYS - which is what this did - raises KeyError on
+            # the second kind, inside the success path.
             reasons = "; ".join(
-                f"{key} ({RETIRED_HISTORY_KEYS[key]})" for key in skipped
+                f"{key} ({reason})" for key, reason in sorted(skipped.items())
             )
             detail = (
                 f"Consignment reverted, except: {reasons}. "
@@ -99,8 +123,24 @@ def revert_update(
             "data":serialize_consignment(consignment, db),
             # Machine-readable alongside the sentence, so the front end can
             # surface it without parsing prose.
-            "skipped_fields":skipped,
+            # The keys, unchanged in shape for anything already reading it,
+            # and the reasons beside them so the front end can render a
+            # sentence per field without parsing prose.
+            "skipped_fields":sorted(skipped),
+            "skipped_detail":skipped,
         }
+
+    except AllocationError as e:
+        # Nothing is reverted. A revert that restored half a change and left
+        # the order over-allocated would be worse than one that refused and
+        # said why - which is the same principle the `skipped_fields` reporting
+        # below is built on.
+        db.rollback()
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=(f"This change cannot be undone: {e} Adjust the batches "
+                    f"that hold this quantity first."),
+        )
 
     except HTTPException:
         db.rollback()

@@ -35,7 +35,7 @@ export function Step6Clearance() {
   return (
     <div className="space-y-5">
       <CarriedContext items={[
-        { label: 'Consignment', value: watch('systemId') || 'New' },
+        { label: 'Consignment', value: watch('consignmentNumber') || 'New' },
         { label: 'Status', value: watch('status') || '—' },
         { label: 'Clearance measured from', value: basis.date ? `${basis.date} (${basis.kind === 'arrival' ? 'actual arrival' : 'ETA — no arrival logged yet'})` : 'Not yet arrived' },
       ]} />

@@ -8,6 +8,13 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
+
+/** The requirements' "blue highlighted line" for an order with quantity nobody
+ *  has put in a batch (Step 3). A left border rather than a filled row: the
+ *  table already uses background tint for hover and selection, and a third
+ *  meaning on the same channel is how a colour stops meaning anything. */
+const PENDING_ALLOCATION_ROW_CLASS =
+  'border-l-[3px] border-l-[var(--color-brand)] bg-[var(--color-brand)]/[0.04]'
 import { can } from '@/lib/roleAccess'
 import { SortableTable, type SortableColumn } from './components/SortableTable'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
@@ -59,7 +66,22 @@ export function ImportsStatusList() {
   const [branchFilter, setBranchFilter] = useState<string[]>([])
   const [supplierFilter, setSupplierFilter] = useState<string[]>([])
   const [requisitionFilter, setRequisitionFilter] = useState<string[]>([])
-  const [includeClosed, setIncludeClosed] = useState(false)
+  // DEFAULTS TO TICKED, and the reason is the data rather than a preference.
+  //
+  // Measured: of 181 live consignments, 149 are non-draft and 33 are
+  // non-closed - but only ONE is both. Practically everything submitted has
+  // reached "Arrived at Works" and practically everything still open is a
+  // draft, so the two sets barely intersect.
+  //
+  // Defaulting to false therefore showed 43 of 181 rows, and - because the
+  // export correctly excludes drafts and correctly matches this filter -
+  // produced a ONE-ROW file. Hiding completed records by default is right for
+  // a working queue and wrong for a module where 82% of the records are
+  // closed; it made the list and the export useless out of the box.
+  //
+  // Fixing it HERE rather than in the export is what keeps "what you see is
+  // what you export" true. See design doc section 9 step 8.
+  const [includeClosed, setIncludeClosed] = useState(true)
   const [draftsOnly, setDraftsOnly] = useState(false)
   const [etdFrom, setEtdFrom] = useState('')
   const [etdTo, setEtdTo] = useState('')
@@ -139,6 +161,10 @@ export function ImportsStatusList() {
     // list is where the undo button lives, so they have to be reachable here
     // rather than hidden away on a separate screen.
     includeDeleted: !!user?.isAdmin,
+    // THE PENDING-ALLOCATION HIGHLIGHT. Costs a correlated EXISTS over
+    // consignment_order_items per page, so the backend only computes it when
+    // asked - this is the screen that asks.
+    includeBatchContext: true,
   }), [page, stage, statusFilter, branchIds, supplierIds, requisitionFilter,
        includeClosed, draftsOnly, etdFrom, etdTo, debouncedSearch, user?.isAdmin])
 
@@ -234,12 +260,20 @@ export function ImportsStatusList() {
 
   const columns: SortableColumn<ImportsListRow>[] = [
     {
-      key: 'systemId', label: 'ID / Reference', width: 150,
+      key: 'systemId', label: 'Consignment / Reference', width: 150,
+      // Sorted on the numeric id, displayed as the consignment NUMBER. The two
+      // agree for an unsplit order and diverge on a later batch, where the id
+      // still gives the right ordering (batches are created in sequence) and
+      // the number is the only thing a person can look up — design 0.4.
       sortValue: (r) => r.id,
       render: (r) => (
         <div>
-          <div className="font-semibold tabular-nums">{r.systemId}</div>
-          <div className="text-[11px] text-muted">{r.instrumentNo || r.items[0]?.referenceNo || '—'}</div>
+          <div className="font-semibold tabular-nums">{r.consignmentNumber || '—'}</div>
+          {/* The payment REFERENCE (lc68756), not the bare number. Built
+              server-side, so this row and a notification about the same
+              consignment cannot disagree. Falls back to the first item's
+              reference, then a dash. */}
+          <div className="text-[11px] text-muted">{r.paymentReference || r.items[0]?.referenceNo || '—'}</div>
         </div>
       ),
     },
@@ -536,7 +570,7 @@ export function ImportsStatusList() {
             <RowDeleteActions
               isDeleted={r.isDeleted}
               busy={deletingId === r.id}
-              label={`consignment ${r.systemId}`}
+              label={`consignment ${r.consignmentNumber || r.id}`}
               onDelete={() => void handleDelete(r, false)}
               onUndo={() => void handleDelete(r, true)}
             />
@@ -676,7 +710,14 @@ export function ImportsStatusList() {
       <SortableTable
         columns={columns}
         rows={rows}
-        rowClassName={(r) => (r.isDeleted ? DELETED_ROW_CLASS : undefined)}
+        // DELETED WINS OVER PENDING. A soft-deleted row is struck through and
+        // greyed; painting it as "needs attention" too would be two states
+        // fighting over one row, and the deletion is the one that matters.
+        rowClassName={(r) => (
+          r.isDeleted ? DELETED_ROW_CLASS
+            : r.hasPendingAllocation ? PENDING_ALLOCATION_ROW_CLASS
+            : undefined
+        )}
         rowKey={(r) => String(r.id)}
         renderExpanded={(r) => <ConsignmentItemsPanel row={r} />}
         initialSort={{ key: 'systemId', dir: 'desc' }}
@@ -705,7 +746,7 @@ export function ImportsStatusList() {
         title="Reopen this consignment?"
         description={
           <>
-            <span className="font-medium text-ink">{confirmReopen?.systemId}</span> is closed. Reopening makes it
+            <span className="font-medium text-ink">{confirmReopen?.consignmentNumber}</span> is closed. Reopening makes it
             editable again until it is submitted at "Arrived at Works" once more.
           </>
         }
@@ -789,7 +830,7 @@ function ForwardedPanel({ onNavigate }: { onNavigate: (to: string) => void }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="border-t border-line hover:bg-canvas-alt">
-              <td className="px-3 py-2 font-semibold tabular-nums">{r.systemId}</td>
+              <td className="px-3 py-2 font-semibold tabular-nums">{r.consignmentNumber || '—'}</td>
               <td className="px-3 py-2">{r.supplier}<div className="text-[11px] text-muted">{r.origin}</div></td>
               <td className="px-3 py-2">
                 {r.items[0]?.itemName

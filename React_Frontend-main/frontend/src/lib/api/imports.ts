@@ -13,6 +13,10 @@ import { apiFetch, apiFetchBlob } from './client'
 
 export interface ApiConsignmentItem {
   id: number
+  /** The order line above this one. Echoed back on every save so a later
+   *  batch's line stays attached to what the order bought. */
+  order_item_id: number | null
+  ordered_quantity: string | number | null
   item_id: number | null
   item_code: string | null
   item_name: string | null
@@ -78,7 +82,27 @@ export interface ApiPayment {
 }
 
 export interface ApiConsignment {
+  /** The row's PRIMARY KEY. A link target and a React key — never a display
+   *  number. On a later batch the id and the number are different integers
+   *  (design 0.4), so rendering this is how `184` reaches a screen. */
   id: number
+  /** THE SHIPMENT'S NUMBER: `177`, or `177-2` once the order has split.
+   *  Derived on the server from the founding batch's id, `batches_ever` and
+   *  this row's sequence (order_view.consignment_number) — the suffix rule is
+   *  the one thing a front-end copy would get wrong first. Null only if a row
+   *  somehow has no order above it; `batch_group_id` is NOT NULL, so it does
+   *  not happen. */
+  consignment_number: string | null
+  /** Does this row's ORDER still have quantity nobody has put in a batch?
+   *
+   *  `null` means NOT ASKED FOR, which is not the same as `false` — only a
+   *  list fetched with `include_batch_context=true` carries a boolean. Read it
+   *  as "no highlight" when null, never as "fully allocated". */
+  has_pending_allocation: boolean | null
+  /** The ORDER this batch belongs to, and its place in the order. Two batches
+   *  of one LC share the group id and differ by the sequence. */
+  batch_group_id: number | null
+  batch_sequence: number | null
   branch: ApiMaster | null
   supplier: ApiMaster | null
   clearing_agent: ApiMaster | null
@@ -107,6 +131,13 @@ export interface ApiConsignment {
   eta_works: string | null
   payment_instrument: string | null
   instrument_number: string | null
+  /** The ORDER's payment reference, mode + number: `lc68756`. Built by the
+   *  server (order_view.payment_reference), so this is the SAME string the
+   *  notifications, dashboards and export use. Do NOT rebuild it here from
+   *  payment_instrument + instrument_number: that is an eleventh copy of a
+   *  rule nothing on this side can check against the other ten, and it
+   *  would have to duplicate the cadCAD guard too. */
+  payment_reference: string | null
   opening_or_retirement_date: string | null
   exchange_rate: string | number | null
   rate_booked_on: string | null
@@ -125,6 +156,10 @@ export interface ApiConsignment {
   container_detention: string | number | null
   items: ApiConsignmentItem[]
   payments: ApiPayment[]
+  /** DETAIL PAYLOAD ONLY — both read `batch_group` collections the list query
+   *  does not load, so they are absent (undefined) on a list row. */
+  allocation?: ApiAllocationLine[]
+  group_frozen?: ApiGroupFrozen
   eta_revisions: ApiEtaRevision[]
   status_updates: ApiStatusUpdate[]
   /** Cross-module hand-off. NULL = not sent. Set only by the send routes. */
@@ -237,6 +272,10 @@ export interface ConsignmentQuery {
   etdFrom?: string
   etdTo?: string
   search?: string
+  /** Ask for the batching fields — currently `has_pending_allocation` on every
+   *  row. Off by default because it costs a correlated EXISTS over a second
+   *  table per page, and only the imports list wants it. */
+  includeBatchContext?: boolean
 }
 
 function buildQuery(q: ConsignmentQuery): URLSearchParams {
@@ -251,6 +290,7 @@ function buildQuery(q: ConsignmentQuery): URLSearchParams {
   if (q.draftsOnly) params.set('drafts_only', 'true')
   if (q.sentOnly) params.set('sent_only', 'true')
   if (q.includeDeleted) params.set('include_deleted', 'true')
+  if (q.includeBatchContext) params.set('include_batch_context', 'true')
   if (q.etdFrom) params.set('etd_from', q.etdFrom)
   if (q.etdTo) params.set('etd_to', q.etdTo)
   if (q.search?.trim()) params.set('q', q.search.trim())
@@ -288,8 +328,45 @@ export async function getConsignment(id: number | string): Promise<ApiConsignmen
 // from the wizard's camelCase form state is importsMap.ts's draftToPayload().
 //-----------------------------------------------------
 
+/** One order line's allocation, from the DETAIL payload's `allocation` block.
+ *  Quantities arrive as strings (Decimal) or numbers depending on the driver. */
+export interface ApiAllocationLine {
+  order_item_id: number
+  item: string | null
+  item_code: string | null
+  unit_of_measurement: string | null
+  ordered_quantity: string | number | null
+  allocated_quantity: string | number | null
+  /** ordered - allocated, derived server-side. What Step 3 shows as pending
+   *  and what a new batch may draw from. */
+  outstanding_quantity: string | number | null
+}
+
+export interface ApiGroupFrozen {
+  is_frozen: boolean
+  frozen_by: { consignment_id: number; consignment_number: string | null } | null
+  /** PAYLOAD KEYS (`branch_id`, not `works_branch_id`), so a form can match
+   *  them to its own inputs. Tier 1 refuses everyone; Tier 2 refuses all but
+   *  an admin. */
+  hard: string[]
+  admin: string[]
+}
+
 export interface ConsignmentItemPayload {
   id?: number | null
+  /** WHICH ORDER LINE THIS BATCH LINE ALLOCATES AGAINST.
+   *
+   *  MUST BE SENT for any line on a later batch. Without it the server reads
+   *  the line as a NEW item on the order and silently raises what the order
+   *  bought — correct on the founding batch, wrong on every other one (design
+   *  §3.7b finding 3). Since 8b-1 the server refuses it on a later batch
+   *  rather than duplicating the order line, but the refusal is the backstop:
+   *  sending the id is the fix. */
+  order_item_id?: number | null
+  /** What the ORDER bought, as opposed to what this batch carries. Optional:
+   *  on a single-batch order the server keeps it in step with `quantity`, and
+   *  stops doing so once the order splits. */
+  ordered_quantity?: number | null
   item_id?: number | null
   item_name?: string | null
   placeholder_name?: string | null
@@ -507,6 +584,53 @@ export async function undoDeleteConsignmentApi(id: number | string): Promise<Api
 
 /** Dropdown values built from what is actually stored — see the backend route
  *  for why this can't just be the enums. */
+/** GET /consignments/{id}/batches — every live batch of this order, itself
+ *  included, in sequence order.
+ *
+ *  Not a `batch_group_id` filter on the list: the list carries the screen's own
+ *  filters, paging and `include_closed`, so "the siblings of this order" would
+ *  come back a different set depending on what the user had selected. */
+export async function getBatches(id: number | string): Promise<ApiConsignment[]> {
+  const res = await apiFetch<{ status_code: number; detail: string; data: ApiConsignment[]; total: number }>(
+    `/consignments/${id}/batches`,
+  )
+  return res.data
+}
+
+export interface BatchNumbering {
+  order_number: string
+  batches_ever: number
+  /** True exactly on the split — the moment `177` became `177-1`. What the
+   *  renumbering warning confirms against after the fact. */
+  siblings_renumbered: boolean
+  batches: {
+    consignment_id: number
+    batch_sequence: number
+    consignment_number: string
+    /** Null on the batch just created: it had no number a moment ago. */
+    previous_consignment_number: string | null
+  }[]
+}
+
+/** POST /consignments/{id}/batches — add an arrival to this order.
+ *
+ *  Takes allocations and NOTHING else. Route, schedule, clearance and status
+ *  start empty and are entered afterwards through the ordinary PUT, because a
+ *  later batch's shipping section starts blank (requirements, Step 3). */
+export async function createBatchApi(
+  id: number | string,
+  allocations: { order_item_id: number; quantity: number }[],
+): Promise<{ batch: ApiConsignment; numbering: BatchNumbering }> {
+  const res = await apiFetch<{
+    status_code: number; detail: string
+    data: { batch: ApiConsignment; numbering: BatchNumbering }
+  }>(`/consignments/${id}/batches`, {
+    method: 'POST',
+    body: JSON.stringify({ allocations }),
+  })
+  return res.data
+}
+
 export async function fetchFilterOptions() {
   const res = await apiFetch<OptionsEnvelope>('/consignments/filter-options')
   return res.data

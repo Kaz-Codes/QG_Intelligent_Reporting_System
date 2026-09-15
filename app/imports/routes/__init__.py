@@ -18,6 +18,14 @@ from app.imports.routes import get_consignment
 from app.imports.routes import get_trucking_jobs
 from app.imports.routes import get_consignments_list
 from app.imports.routes import update_consignment
+# POST /{consignment_id}/batches - a literal segment under a param path, so it
+# cannot be shadowed by anything above; listed beside the other writes.
+from app.imports.routes import create_batch
+# GET on the same path. It shares the segment with the POST above and differs by
+# method, so registration order does not matter between the two - but it must
+# still come after `get_consignment`, because `/{consignment_id}` is registered
+# there and FastAPI matches in registration order.
+from app.imports.routes import get_batches
 from app.imports.routes import submit_consignment
 from app.imports.routes import reopen_consignment
 from app.imports.routes import send_consignment

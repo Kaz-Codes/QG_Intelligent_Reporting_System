@@ -7,8 +7,9 @@ from app.logistics.models import LogisticsConsignment
 from app.imports.models import Consignment, ConsignmentBatchGroup, ConsignmentItem
 from app.trucking.models import TruckingConsignment
 from app.imports.order_view import (
-    line_item_name, line_specification, order_instrument_number,
-    order_origin, order_supplier_name,
+    consignment_number, line_item_name, line_specification,
+    order_instrument_number, order_origin, order_supplier_name,
+    payment_reference,
 )
 
 #-----------------------------------------------------
@@ -108,6 +109,23 @@ def _logistics_snapshot(order):
 
 
 def _import_snapshot(consignment):
+    # `quantity` HERE IS WHAT THIS BATCH CARRIES, NOT WHAT THE ORDER BOUGHT.
+    #
+    # It always read `item.quantity` off the shipment line, and that line's
+    # quantity is now an ALLOCATION - so on a split order this hands trucking
+    # the quantity of the arrival being sent rather than the whole order's. For
+    # trucking that is strictly MORE correct: a truck carries what turned up in
+    # that shipment, and before batching existed it was handed the whole order
+    # regardless.
+    #
+    # THE RISK IS IN THE STORED SNAPSHOTS, not here. A trucking job freezes this
+    # JSON at hand-off, and the 1,370 existing jobs hold snapshots written when
+    # a consignment could only be a whole order. Those do not change
+    # retroactively and nothing breaks; but a job created from now on means
+    # something subtly different from one created before, with nothing in the
+    # data saying which. Recorded rather than papered over - there is no
+    # migration that could tell the two apart, since for an unsplit order the
+    # two meanings coincide, which is every existing job.
     snapshot = []
     for item in consignment.items:
         if item.is_deleted:
@@ -171,7 +189,14 @@ def derive_open_requests(db):
         .where(Consignment.sent_to_trucking_at.is_not(None))
         .where(_not_taken("from-import-fob", Consignment.id))
         .options(
-            selectinload(Consignment.items),
+            # THE ORDER LINE TOO, and for the same reason the supplier note
+            # below gives. `_import_snapshot` reads `line_item_name` and
+            # `line_specification`, which walk `item.order_item` - so loading
+            # the lines alone warmed half of what the snapshot reads and left
+            # the other half to lazy-load once per LINE. The identical mistake,
+            # one level down, in the same options block.
+            selectinload(Consignment.items)
+                .selectinload(ConsignmentItem.order_item),
             # THE ORDER'S SUPPLIER, because that is what the rows below read.
             #
             # This eager-loaded `Consignment.supplier` — the HEADER relationship
@@ -188,14 +213,31 @@ def derive_open_requests(db):
     ).scalars().all()
 
     for consignment in imports_sent:
+        # `source_ref` IS THE PRIMARY KEY AND STAYS ONE - it is the link a
+        # trucking job is keyed on, not something anybody reads.
         ref = str(consignment.id)
+
+        # THE LABEL IS THE CONSIGNMENT NUMBER, WHICH IS NOT THE PRIMARY KEY.
+        # On a second batch those are different integers: batch 2 of order 21
+        # has id 184 and is called `21-2`, and "Import 184" names a
+        # consignment nobody can look up (design section 0.4). Harmless while
+        # every order held one batch; wrong from the first split, which this
+        # change is what makes possible.
+        number = consignment_number(consignment) or ref
         requests.append({
             "source": "from-import-fob",
             "source_ref": ref,
             "movement_type": "Inbound",
-            "label": f"Import {ref} — {order_supplier_name(consignment) or order_origin(consignment) or ''}".strip(" —"),
+            "label": f"Import {number} — {order_supplier_name(consignment) or order_origin(consignment) or ''}".strip(" —"),
             "supplier": order_supplier_name(consignment),
             "instrument_number": order_instrument_number(consignment),
+            # THE ORDER'S PAYMENT REFERENCE, mode + number: `lc6222`. The
+            # trucking queue printed `instrument_number` raw, so one
+            # consignment was called `6222` there and `lc6222` on the imports
+            # list, in the notifications and in every export. Same rule, same
+            # source - concatenated on the server so this cannot become an
+            # eleventh spelling of it (revision 11).
+            "payment_reference": payment_reference(consignment) or None,
             "snapshot": _import_snapshot(consignment),
             "days_open": _days_open(consignment.sent_to_trucking_at),
         })
@@ -303,6 +345,14 @@ def derive_import_fob_jobs(db):
             "source_ref": str(consignment.id),
             "consignment_id": consignment.id,
             "instrument_number": order_instrument_number(consignment),
+            # THE NUMBER AND THE REFERENCE, for the same reason as above. The
+            # Service Jobs row carried a FRONT-END copy of the whole display
+            # rule - instrument_number or else `IMP-{consignment_id}` -
+            # including the fallback this step deletes from the server. Left
+            # alone it would have gone on printing `IMP-184` for a batch the
+            # rest of the app calls `21-2`.
+            "consignment_number": consignment_number(consignment) or None,
+            "payment_reference": payment_reference(consignment) or None,
             "supplier": order_supplier_name(consignment),
             "origin": order_origin(consignment),
             "item_summary": (

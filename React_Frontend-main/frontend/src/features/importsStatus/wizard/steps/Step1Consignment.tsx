@@ -5,15 +5,17 @@ import {
   REQUISITION_TYPES, REQUISITION_FIELDS, CONSIGNMENT_TYPES, UNITS_OF_MEASURE, INCOTERMS,
   emptyItem, itemPendingFields, requiredVsEtaDelay,
 } from '../../schema'
-import { Field, Input, Select } from './fields'
+import { Field, FrozenField, Input, Select } from './fields'
+import { useBatchContext, frozenReason } from '../BatchContext'
+import { useAuth } from '@/features/auth/AuthContext'
 import { useMasters } from '../MastersContext'
 import { Disclosure } from '@/components/Disclosure'
 import { SearchableSelect, NotInMasterNote, type SearchableOption } from '@/components/ui/SearchableSelect'
 import { searchItems, exactCodeMatch, type ItemSearchResult } from '@/lib/api/masters'
 import { toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
+import { COUNTRY_OPTIONS, isIsoCountry } from '@/lib/countries'
 
 const CURRENCIES = ['USD', 'EUR', 'CNY', 'JPY', 'GBP', 'AED']
-const ORIGINS = ['China', 'Germany', 'Italy', 'Japan', 'Korea, Republic of', 'Sweden', 'Türkiye', 'United States']
 
 const REQ_LABEL: Record<string, string> = { store: 'Store', engineering: 'Engineering', others: 'Others' }
 const FIELD_LABEL: Record<string, string> = {
@@ -212,6 +214,13 @@ export function Step1Consignment() {
   const requiredDelay = requiredVsEtaDelay({ requiredDate: watch('requiredDate'), eta: watch('eta') })
   const { branches, suppliers, loading: mastersLoading } = useMasters()
   const supplierName = watch('supplier')
+  const origin = watch('origin')
+
+  // Tier 2 lives on this step: supplier, origin, works/branch, type, incoterm.
+  // `frozen()` returns a reason or null; the lists are the server's.
+  const batchCtx = useBatchContext()
+  const { user } = useAuth()
+  const frozen = (key: string) => frozenReason(batchCtx, key, !!user?.isAdmin)
 
   return (
     <div className="space-y-5">
@@ -221,9 +230,16 @@ export function Step1Consignment() {
           Consignment details — applies to the whole shipment
         </h3>
         <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* WORKS AND BRANCH ARE ONE FIELD (requirements line 83, "Works
+              becomes a dropdown populated from the same list as branches").
+              They were already one field: this control writes `branch_id`,
+              which the server routes to the ORDER's `works_branch_id` — the
+              column the sheet's Works figures filled. The dropdown asked for
+              is therefore this one, renamed, not a second control; Finance's
+              free-text "Works" input was the duplicate and is gone. */}
           <Field
-            label="Branch" htmlFor="branch" required error={errors.branch?.message}
-            hint={mastersLoading ? 'Loading branches…' : undefined}
+            label="Works / Branch" htmlFor="branch" required error={errors.branch?.message}
+            hint={mastersLoading ? 'Loading branches…' : 'The factory the import is for — the sheet’s Works column'}
           >
             <Select id="branch" {...register('branch')} disabled={mastersLoading}>
               <option value="">Select…</option>
@@ -240,6 +256,9 @@ export function Step1Consignment() {
               rather than letting the field look accepted and come back empty.
               The old hint here claimed such a name "is kept", which was not
               true of any save. */}
+          {frozen('supplier_id') ? (
+            <FrozenField label="Supplier" value={supplierName} reason={frozen('supplier_id')!} />
+          ) : (
           <Field
             label="Supplier" htmlFor="supplier" required error={errors.supplier?.message}
             hint={mastersLoading ? 'Loading suppliers…' : undefined}
@@ -264,20 +283,65 @@ export function Step1Consignment() {
               <NotInMasterNote master="supplier master" stored="none" />
             )}
           </Field>
+          )}
 
+          {/* EVERY COUNTRY, TYPE-TO-FILTER (requirements line 67), on the same
+              SearchableSelect as supplier and the ports so the behaviour
+              matches the rest of the form.
+
+              IT REPLACES AN EIGHT-OPTION `<select>`, AND THAT MATTERS MORE
+              THAN THE LENGTH. `origin` is free text on the order and holds 21
+              distinct spellings; only 6 of them were among those eight
+              options. A `<select>` whose value matches no `<option>` renders
+              as unselected WITHOUT firing a change, so 76 of the 174
+              consignments that state an origin showed this required field
+              blank while the stored value was perfectly intact — and picking
+              anything to make the "empty" field look right overwrote it.
+
+              SearchableSelect is a text input over a list, so it DISPLAYS
+              whatever is stored, ISO or not, and `allowFreeText` is off: an
+              un-chosen value goes back untouched on blur (see its handleBlur),
+              so nothing is blanked and no save is refused. A non-ISO value is
+              flagged rather than mapped — see isIsoCountry. */}
+          {frozen('origin') ? (
+            <FrozenField label="Country of origin" value={origin} reason={frozen('origin')!} />
+          ) : (
           <Field label="Country of origin" htmlFor="origin" required error={errors.origin?.message}>
-            <Select id="origin" {...register('origin')}>
-              <option value="">Select…</option>
-              {ORIGINS.map((o) => <option key={o}>{o}</option>)}
-            </Select>
+            <Controller
+              control={control}
+              name="origin"
+              render={({ field }) => (
+                <SearchableSelect
+                  id="origin"
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  options={COUNTRY_OPTIONS}
+                  placeholder="Search countries…"
+                  emptyMessage="No matching country"
+                />
+              )}
+            />
+            {origin && !isIsoCountry(origin) && (
+              <p className="text-xs text-[var(--color-watch)]">
+                Not an ISO country name — kept as it is. Pick the ISO name from the list to standardise it.
+              </p>
+            )}
           </Field>
+          )}
 
-          <Field label="Currency" htmlFor="currency" required error={errors.currency?.message}>
-            <Select id="currency" {...register('currency')}>
-              <option value="">Select…</option>
-              {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
-            </Select>
-          </Field>
+          {/* CURRENCY IS TIER 1. It sits on Step 1 rather than Finance, but it
+              is a valuation input like the rate — changing it after a batch has
+              arrived restates a stored total in a different unit. */}
+          {frozen('currency') ? (
+            <FrozenField label="Currency" value={watch('currency')} reason={frozen('currency')!} />
+          ) : (
+            <Field label="Currency" htmlFor="currency" required error={errors.currency?.message}>
+              <Select id="currency" {...register('currency')}>
+                <option value="">Select…</option>
+                {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
+              </Select>
+            </Field>
+          )}
 
           <Field label="Consignment type" htmlFor="consignmentType" hint="Can be filled later">
             <Select id="consignmentType" {...register('consignmentType')}>

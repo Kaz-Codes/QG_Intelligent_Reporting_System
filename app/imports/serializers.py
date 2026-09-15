@@ -5,10 +5,13 @@ from datetime import date
 from app.imports.demand_dates import (
     earliest_required_date, line_required_date, line_requisition_date,
 )
+from app.imports.allocation import allocation_view
 from app.imports.order_view import (
+    consignment_number,
     order_branch, order_currency, order_exchange_rate, order_incoterm,
     order_instrument_number, order_origin, order_payment_instrument,
     order_rate_booked_on, order_rate_source, order_supplier, order_type,
+    payment_reference,
     order_branch_name,
 )
 
@@ -76,7 +79,8 @@ def build_system_remarks(consignment):
 # THAT CAN BE SENT IN RESPONSE
 #---------------------------------------
 
-def serialize_consignment(consignment, db, include_change_history=True):
+def serialize_consignment(consignment, db, include_change_history=True,
+                          has_pending_allocation=None):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
     data = {
@@ -89,11 +93,37 @@ def serialize_consignment(consignment, db, include_change_history=True):
         # Both are server-controlled: `batch_sequence` is assigned at creation
         # and never reused, so 177-2 identifies one shipment for ever.
         #
-        # The DISPLAY form built from these ("177" alone while an order has one
-        # batch, "177-2" once it has more) is section 3.4's `consignment_number`
-        # and is not built yet — these are the raw values it will need.
         "batch_group_id" : consignment.batch_group_id,
         "batch_sequence" : consignment.batch_sequence,
+
+        # DOES THIS ORDER STILL HAVE QUANTITY NOBODY HAS BATCHED?
+        #
+        # `None` means "not asked for", which is NOT the same as False and the
+        # front end must not read it as such - the list sends
+        # `include_batch_context=true` and gets a boolean; every other caller
+        # gets null and renders no highlight rather than a confident "fully
+        # allocated". Computed for a whole page in one query by the list route
+        # (helpers.pending_allocation_ids), never by this function, because
+        # deriving it here would mean loading `group.order_items` per row.
+        "has_pending_allocation" : has_pending_allocation,
+
+        # THE SHIPMENT'S NUMBER: "177" while an order holds one batch, "177-2"
+        # once it has split.
+        #
+        # Published for exactly the reason `payment_reference` was (revision
+        # 11): the rule has existed on the server since step 1 and nothing a
+        # person looks at obeyed it. The list's top line is still
+        # `String(c.id)`, so the moment this change creates a real second batch
+        # the screen would show `184` - a number belonging to no consignment
+        # anyone can look up. Rendering it is step 8; having it to render is
+        # this step's job.
+        #
+        # DERIVED ON THE SERVER, NOT ASSEMBLED IN THE BROWSER. Three values
+        # feed it (the founding batch's id, `batches_ever`, this row's
+        # sequence) and the rule that combines them - a suffix only once an
+        # order has EVER held two - is the one thing about numbering that a
+        # front-end copy would get wrong first.
+        "consignment_number" : consignment_number(consignment) or None,
         "branch" : serialize_master(order_branch(consignment)),
         "supplier" : serialize_master(order_supplier(consignment)),
         # `works` was free text and is RETIRED - the order's `works_branch_id`
@@ -150,6 +180,27 @@ def serialize_consignment(consignment, db, include_change_history=True):
         "cargo_readiness_date" : consignment.cargo_readiness_date,
         "payment_instrument" : order_payment_instrument(consignment),
         "instrument_number" : order_instrument_number(consignment),
+
+        # THE ORDER'S PAYMENT REFERENCE, mode + number concatenated: `lc68756`.
+        #
+        # Published because step 1 unified TEN backend call sites onto one rule
+        # and then no screen used it - the list and the detail header both took
+        # `instrument_number` raw and rendered `68756`. So the rule existed and
+        # nothing a person looks at obeyed it.
+        #
+        # CONCATENATED HERE RATHER THAN IN THE BROWSER, deliberately. The
+        # alternative is the front end joining `payment_instrument` and
+        # `instrument_number` itself, which is an eleventh spelling of the rule
+        # in a language where nothing can check it against the other ten - no
+        # test can compare a TypeScript expression to a Python function. It
+        # would also have to re-implement the `cadCAD` guard (see
+        # `payment_reference_from`), and a duplicated guard is the half that
+        # gets dropped when someone simplifies the expression.
+        #
+        # NULL rather than "" when the order has no instrument number, so the
+        # front end's `?? fallback` works and a missing reference cannot render
+        # as a bare mode or a stray separator.
+        "payment_reference" : payment_reference(consignment) or None,
         "opening_or_retirement_date" : consignment.opening_or_retirement_date,
         "exchange_rate" : order_exchange_rate(consignment),
         "rate_booked_on" : order_rate_booked_on(consignment),
@@ -199,7 +250,76 @@ def serialize_consignment(consignment, db, include_change_history=True):
     if include_change_history:
         data["change_history"] = serialize_many(consignment.change_history)
 
+        # THE ORDER'S ALLOCATION - what was bought, what is spoken for, and
+        # what is still outstanding, per item.
+        #
+        # ON THE DETAIL PAYLOAD ONLY, and behind the same flag as the change
+        # history for the same reason: it reads `group.order_items`, which the
+        # list query deliberately does not load. Publishing it from the list
+        # would lazy-load one query per row for a panel the list does not draw
+        # - which is precisely the N+1 the eager loads beside it just closed.
+        #
+        # It is what the Step 3 allocation screen and the "pending allocation"
+        # highlight are built from (step 8). Outstanding is derived here rather
+        # than stored, because a stored copy of `ordered - allocated` is a
+        # third number that can disagree with the two it comes from.
+        data["allocation"] = allocation_view(consignment.batch_group)
+
+        # THE GROUP FREEZE, so the wizard does not render an editable rate
+        # field that 423s on save (design 3.9). The same treatment
+        # `missing_fields` used to get, for the same reason: a disabled control
+        # and a failed save must not disagree.
+        #
+        # DETAIL ONLY, in this block, for the reason `allocation` is - it reads
+        # `group.batches`, which the list query does not load, so publishing it
+        # from the list would be one query per row for a panel the list does
+        # not draw.
+        #
+        # IT PUBLISHES THE ORDER'S FACTS, NOT THE CALLER'S EFFECTIVE SET.
+        # `hard` and `admin` are properties of the ORDER; which of them applies
+        # is a property of the VIEWER, and the front end already holds
+        # `user.isAdmin` (it renders the Reopen button from it). Threading a
+        # user through eleven serializer call sites to compute a set union the
+        # client can do from data it already has would be the larger change and
+        # the more fragile one. What must not move to the browser is the FIELD
+        # LISTS, and they do not - they come from helpers.HARD_FROZEN and
+        # helpers.ADMIN_FROZEN, in payload-key form so the wizard can match
+        # them to its own inputs directly.
+        # IMPORTED INSIDE THE FUNCTION, like `item_current_values` above and
+        # for the same reason: `helpers` imports this module, so a module-level
+        # import here is a cycle.
+        from app.imports.helpers import (
+            ADMIN_FROZEN, HARD_FROZEN, freezing_batch,
+        )
+
+        blocking = freezing_batch(consignment.batch_group)
+        data["group_frozen"] = {
+            "is_frozen": blocking is not None,
+            # Which batch settled the terms - named, because "this order is
+            # frozen" without saying why is a dead end for whoever reads it.
+            "frozen_by": None if blocking is None else {
+                "consignment_id": blocking.id,
+                "consignment_number": consignment_number(blocking) or None,
+            },
+            # Payload keys, not column names: `branch_id`, which the wizard
+            # posts, rather than `works_branch_id`, which it has never heard of.
+            "hard": sorted(_payload_keys_for(HARD_FROZEN)),
+            "admin": sorted(_payload_keys_for(ADMIN_FROZEN)),
+        }
+
     return data
+
+
+def _payload_keys_for(columns):
+    """Group COLUMN names -> the PAYLOAD keys the wizard posts them under.
+
+    One asymmetry, and it is the whole reason this exists: `works_branch_id` is
+    posted as `branch_id`. A front end handed the column name would disable an
+    input that is not there and leave the real one editable.
+    """
+    from app.imports.helpers import PAYLOAD_TO_GROUP
+
+    return {key for key, column in PAYLOAD_TO_GROUP.items() if column in columns}
 
 #---------------------------------------------
 # A SINGLE DYNAMIC FUNCTION THAT

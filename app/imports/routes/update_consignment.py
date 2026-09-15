@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates
+from app.imports.helpers import assert_group_writable, GroupFrozenError, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
 
 from app.imports.helpers import (
     fetch_consignment, is_closed, CLOSED_STATUS_VALUE,
@@ -172,6 +172,31 @@ def _notify_status_lifecycle(db, updation_dict, consignment):
         )
 
 
+def posted_item_payloads(consignment, consignment_data):
+    """{ConsignmentItem instance: the order-line half of what was posted for it}.
+
+    Keyed by INSTANCE rather than by id, because that is what
+    `sync_order_items` matches on - on an update its collection is a mix of
+    rows that existed, rows just added and rows soft-deleted, and position
+    means nothing across those three.
+
+    Only items the client actually sent are included. A line absent from the
+    payload keeps whatever its order line already holds, which is what a
+    partial save should do.
+    """
+    by_id = {item.id: item for item in consignment.items if item.id is not None}
+
+    payloads = {}
+    for schema in consignment_data.items:
+        item = by_id.get(schema.id)
+        if item is None:
+            continue
+        _line_fields, order_item_fields = split_item_payload(schema.model_dump())
+        payloads[item] = order_item_fields
+
+    return payloads
+
+
 @router.put("/{consignment_id}")
 def update_consignment(
         consignment_data : ConsignmentSchema, 
@@ -278,7 +303,7 @@ def update_consignment(
         # to be written onto the consignment and mirrored across afterwards.
         apply_updates(updation_dict, consignment)
         if group_updates and consignment.batch_group is not None:
-            apply_group_updates(group_updates, consignment.batch_group)
+            apply_group_updates(group_updates, consignment.batch_group, user)
 
         # THE CLOSED LOCK IS WRITTEN HERE, AND ONLY HERE.
         #
@@ -332,7 +357,34 @@ def update_consignment(
         # otherwise leave `allocated_quantity` describing quantities the lines
         # no longer carry, which is the drift the over-allocation CHECK cannot
         # see and `post_load`'s "Allocation totals" check exists to catch.
-        sync_order_items(consignment, db, header_fields=order_item_header)
+        #
+        # PASSED THE POSTED ITEM PAYLOADS, and that is not belt and braces.
+        # This call used to receive only `header_fields`, which was fine while
+        # every order-line field was written by `apply_item_updates` from the
+        # diff. `ordered_quantity` broke that: with no payload in hand,
+        # `resolve_ordered_quantity` falls through to "an order with one batch
+        # follows its line" and overwrites an explicitly posted order quantity
+        # with the line's. Handing it the payload means case 1 - the client
+        # said so - wins, here as it does on create.
+        #
+        # (`order_item_id` is validated separately - `resolve_order_line`
+        # reads it off the line's own column, so it is checked however it
+        # arrived.)
+        sync_order_items(consignment, db, payloads=posted_item_payloads(
+            consignment, consignment_data), header_fields=order_item_header)
+
+        # THE ALLOCATION INVARIANT. Changing a line's quantity IS
+        # re-allocation, so an ordinary edit goes through the same locked check
+        # the batch-create route does - a route that enforces the rule while
+        # the edit beside it walks round the rule is worth nothing.
+        #
+        # AFTER the line updates and the order-line sync, so the sum it reads
+        # back out of the database is the one this save actually leaves behind.
+        # It takes the order's row locks first (see app/imports/allocation.py),
+        # which is also why the group's own UPDATE from apply_group_updates
+        # above has not been flushed yet: order lines before the group row,
+        # always, or two concurrent saves deadlock against each other.
+        reconcile_allocation(db, consignment.batch_group_id)
 
         # Recompute + store the derived money totals and per-line variance from
         # the now-updated lines and rate.
@@ -353,6 +405,31 @@ def update_consignment(
             "detail":"Consignment updated",
             "data":serialize_consignment(consignment, db)
         }
+
+    except GroupFrozenError as e:
+        # 423, THE SAME STATUS THE ROW LOCK RETURNS, so the front end's existing
+        # "this record is closed" handling applies unchanged and there is no
+        # second locked-state vocabulary to learn (design 3.9).
+        #
+        # NOTE WHAT IS NOT HERE: an admin bypass. Tier 1 refuses an admin too,
+        # and this is the only rule in the application where is_admin does not
+        # pass - every other check in authorize() lets an admin through
+        # unconditionally. That asymmetry is deliberate: a rate money has moved
+        # against is a historical fact rather than a permission. Anyone
+        # "fixing" it here should read helpers.frozen_columns_for first.
+        db.rollback()
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=str(e),
+            headers=None,
+        )
+
+    except AllocationError as e:
+        # 422 naming the item and the overage. Raising a bare 500 here would
+        # tell an operator who has typed a quantity too large that the system
+        # is broken, rather than that the number is.
+        db.rollback()
+        raise HTTPException(status_code=e.status_code, detail=str(e))
 
     except HTTPException:
         db.rollback()
