@@ -22,6 +22,24 @@ DEMAND_WINDOW_DAYS = 180
 DEFAULT_LEAD_TIME_DAYS = 30
 SAFETY_FACTOR = Decimal("0.2")
 
+# Distinct from "latest=None" (a legitimate answer meaning the Issuance table
+# is empty) — a sentinel for "the caller didn't pass anything, compute it
+# yourself" so the two meanings of "no value" can never be confused.
+_UNSET = object()
+
+
+def latest_issuance_date(db):
+    """max(Issuance.from_date), or None if the table is empty.
+
+    Three functions below (consumption_map, issuance_windows,
+    issuance_totals_by_item) each used to run this exact query themselves —
+    three round trips for a value that cannot change within one request.
+    Called once by the route and passed into all three via their `latest`
+    parameter; any caller that doesn't pass it (e.g. app/notifications/scanner.py)
+    still gets it computed internally, unchanged.
+    """
+    return db.execute(select(func.max(Issuance.from_date))).scalar()
+
 
 #-------------------------------------
 # FETCH EVERY STOCK ROW
@@ -238,9 +256,10 @@ MONTHS_12_DAYS = DEAD_STOCK_WINDOW_DAYS
 MONTHS_3_DAYS = 92
 
 
-def issuance_windows(db):
+def issuance_windows(db, latest=_UNSET):
     """({(item_code, branch): {"v12", "v3"}}, window_info)"""
-    latest = db.execute(select(func.max(Issuance.from_date))).scalar()
+    if latest is _UNSET:
+        latest = db.execute(select(func.max(Issuance.from_date))).scalar()
 
     if latest is None:
         return {}, {"latest": None, "from_12m": None, "from_3m": None,
@@ -301,7 +320,7 @@ def issuance_windows(db):
 # should only count what THIS branch issued.
 #-------------------------------------
 
-def issuance_totals_by_item(db, branch=None):
+def issuance_totals_by_item(db, branch=None, latest=_UNSET):
     """{item_code: {"v12", "v3"}} — issuance value over the two windows,
     folded across every branch that issued the item, not just the ones the
     Stock table still has a row for.
@@ -313,7 +332,8 @@ def issuance_totals_by_item(db, branch=None):
     would read as "moving" here because of activity at a branch the current
     view has filtered out entirely.
     """
-    latest = db.execute(select(func.max(Issuance.from_date))).scalar()
+    if latest is _UNSET:
+        latest = db.execute(select(func.max(Issuance.from_date))).scalar()
     if latest is None:
         return {}
 
@@ -419,8 +439,9 @@ def latest_purchase_map(db):
 # Feeds days_of_stock (runway = available / avg daily consumption).
 #-------------------------------------
 
-def consumption_map(db):
-    latest = db.execute(select(func.max(Issuance.from_date))).scalar()
+def consumption_map(db, latest=_UNSET):
+    if latest is _UNSET:
+        latest = db.execute(select(func.max(Issuance.from_date))).scalar()
     if latest is None:
         return {}
 
@@ -464,7 +485,11 @@ def consumption_map(db):
 # reorder_level column for those.
 #-------------------------------------
 
-def reorder_level_map(db):
+def _reorder_level_map_legacy(db):
+    """Pre-rewrite implementation, kept only for the diff test in
+    tests/ or ad-hoc verification against real data. reorder_level_map below
+    is the one every caller uses; this loads the whole table into Python and
+    aggregates by hand, which is what the SQL rewrite replaces."""
     latest = db.execute(select(func.max(StoreRequisition.prepare_date))).scalar()
     if latest is None:
         return {}
@@ -508,6 +533,73 @@ def reorder_level_map(db):
         avg_daily = total / window
         lead = (Decimal(lead_sum[key]) / Decimal(lead_count[key])) if lead_count.get(key) else default_lead
         result[key] = (avg_daily * lead * buffer_multiplier).quantize(Decimal("0.001"))
+
+    return result
+
+
+def reorder_level_map(db):
+    """SQL-aggregate rewrite of the above: two GROUP BY queries instead of
+    pulling every store_requisition row into Python. Demand and lead time
+    have DIFFERENT where-clauses (demand is windowed, lead time is all-time,
+    by design - see the module docstring) so they stay two separate queries
+    rather than one FILTER-based query; verified byte-identical against real
+    data and against synthetic edge-case rows (zero quantity, zero-day lead
+    time, demand without a completed cycle, a completed cycle with no
+    in-window demand) in a scratch database before this replaced the legacy
+    version above.
+    """
+    latest = db.execute(select(func.max(StoreRequisition.prepare_date))).scalar()
+    if latest is None:
+        return {}
+
+    window_start = latest - timedelta(days=DEMAND_WINDOW_DAYS)
+
+    # Demand: SUM(req_quantity), grouped by (item_code, branch), restricted to
+    # the demand window. `!= 0` matches the original loop's truthiness check
+    # on req_quantity exactly (a Decimal("0") row was excluded there too, not
+    # just a NULL one) — isnot(None) alone would not reproduce that.
+    demand_rows = db.execute(
+        select(
+            StoreRequisition.item_code,
+            StoreRequisition.branch,
+            func.sum(StoreRequisition.req_quantity),
+        )
+        .where(StoreRequisition.prepare_date.between(window_start, latest))
+        .where(StoreRequisition.req_quantity.isnot(None))
+        .where(StoreRequisition.req_quantity != 0)
+        .group_by(StoreRequisition.item_code, StoreRequisition.branch)
+    ).all()
+
+    # Lead time: AVG(stock_in_date - prepare_date), grouped the same way,
+    # restricted to completed cycles ONLY — deliberately NOT scoped to the
+    # demand window (see module docstring: any completed cycle counts, ever).
+    lead_rows = db.execute(
+        select(
+            StoreRequisition.item_code,
+            StoreRequisition.branch,
+            func.avg(StoreRequisition.stock_in_date - StoreRequisition.prepare_date),
+            func.count(StoreRequisition.id),
+        )
+        .where(StoreRequisition.prepare_date.isnot(None))
+        .where(StoreRequisition.stock_in_date.isnot(None))
+        .where(StoreRequisition.stock_in_date >= StoreRequisition.prepare_date)
+        .group_by(StoreRequisition.item_code, StoreRequisition.branch)
+    ).all()
+
+    demand = {(item_code, branch): total for item_code, branch, total in demand_rows if total}
+    lead = {(item_code, branch): avg_days for item_code, branch, avg_days, count in lead_rows if count}
+
+    window = Decimal(DEMAND_WINDOW_DAYS)
+    default_lead = Decimal(DEFAULT_LEAD_TIME_DAYS)
+    buffer_multiplier = Decimal("1") + SAFETY_FACTOR
+
+    result = {}
+    for key, total in demand.items():
+        if total <= 0:
+            continue
+        avg_daily = Decimal(str(total)) / window
+        lead_days = Decimal(str(lead[key])) if key in lead else default_lead
+        result[key] = (avg_daily * lead_days * buffer_multiplier).quantize(Decimal("0.001"))
 
     return result
 

@@ -15,9 +15,20 @@ from app.dashboard.purchases.calculations import (
 )
 from typing import Optional
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _run_with_own_session(fn, *args, **kwargs):
+    """Never share a session across threads — each of the three independent
+    calls below opens and closes its own."""
+    db = SessionLocal()
+    try:
+        return fn(db, *args, **kwargs)
+    finally:
+        db.close()
 
 
 @router.get("/purchases")
@@ -57,16 +68,38 @@ def purchases_dashboard(
         # screen shows which date it actually used.
         field = date_field if date_field in DATE_FIELDS else DATE_FIELD_DEFAULT
 
-        rows = fetch_filtered_consignments(
-            db, supplier, branch, item_category, mop,
-            sourcing_o, po_from_date, po_to_date, search,
-            period_from, period_to, field,
-        )
+        # fetch_filtered_consignments, source_coverage and option_lists don't
+        # depend on the fetch or on each other at all, so they run
+        # concurrently, each on its own SessionLocal() — never the route's
+        # own `db`, which stays reserved for authorize(). Every future's
+        # .result() is awaited below (via as_completed), including ones that
+        # finish without error, so an exception in any of the three still
+        # propagates to the except Exception handler unchanged.
+        jobs = {
+            "rows": (fetch_filtered_consignments, (
+                supplier, branch, item_category, mop,
+                sourcing_o, po_from_date, po_to_date, search,
+                period_from, period_to, field,
+            )),
+            "coverage": (source_coverage, (period_from, period_to, field)),
+            "option_lists": (option_lists, ()),
+        }
+        results = {}
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(_run_with_own_session, fn, *args): name
+                for name, (fn, args) in jobs.items()
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+
+        rows = results["rows"]
 
         # Status is derived, so it is filtered here rather than in SQL — and
         # filtered on the ORDER's status, keeping all of that order's lines.
         # Judging each line on its own would leave an order half in and half
-        # out, and every figure below counts orders.
+        # out, and every figure below counts orders. This stays sequential
+        # relative to the fetch above — it can't run before rows exists.
         if status:
             wanted = set(status)
             rows = [
@@ -85,11 +118,11 @@ def purchases_dashboard(
             # month reads as "no purchases in Aug 2026, latest is 23 Jan 2026"
             # rather than as a confident zero.
             "period": serialize_period(period_from, period_to, period_kind),
-            "coverage": source_coverage(db, period_from, period_to, field),
+            "coverage": results["coverage"],
             "date_field": field,
             "date_field_options": DATE_FIELD_OPTIONS,
             "statuses": PURCHASE_STATUSES,
-            **option_lists(db),
+            **results["option_lists"],
         }
 
         return {
