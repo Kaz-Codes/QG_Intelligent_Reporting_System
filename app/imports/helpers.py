@@ -14,7 +14,7 @@ from datetime import datetime, timezone, date
 from sqlalchemy.inspection import inspect
 from decimal import Decimal
 from app.imports.order_view import (
-    line_item_code, line_item_name, line_specification,
+    consignment_number, line_item_code, line_item_name, line_specification,
     line_unit_price, order_exchange_rate, order_instrument_number,
 )
 # THE ALLOCATION INVARIANT lives in its own module for the same reason
@@ -848,7 +848,7 @@ def updated_payments(consignment, update_consignment_data, db):
 # APPLY ALL THE UPDATES
 #------------------------------------
 
-def apply_group_updates(updation_dict, group):
+def apply_group_updates(updation_dict, group, user):
     """Apply a group diff, whose keys are PAYLOAD keys, to the group's columns.
 
     The one asymmetry in the whole scheme: `branch_id` in, `works_branch_id`
@@ -857,9 +857,32 @@ def apply_group_updates(updation_dict, group):
     would write `branch_id` onto the group, where no such column exists, and
     SQLAlchemy would let it: it would set a plain Python attribute, change
     nothing in the database, and report success.
+
+    `user` IS REQUIRED, NOT OPTIONAL, and that is the point of the parameter.
+    A default of None would make an un-updated caller silently admin-less or
+    silently unchecked depending on which way the default fell; a required
+    argument makes every call site declare who is writing, and a caller that
+    was missed is a TypeError at import-exercising time rather than a hole.
+
+    THE SECOND LINE OF DEFENCE (design 3.9, and CLAUDE.md on the six write
+    paths). `assert_group_writable` has already run at the route; this
+    RE-DERIVES the same answer immediately before the setattr rather than
+    trusting a flag the caller passed. Section 4.7 records six write paths
+    found one at a time, four of them by driving rather than by reading - that
+    is precisely the situation in which a second check earns its keep.
+
+    IT RAISES; IT DOES NOT SKIP. Dropping a frozen field quietly and applying
+    the rest would be the failure this whole rule exists to prevent, wearing
+    the costume of a safety net: the save would return 200 and the operator
+    would believe the rate had changed.
     """
     if group is None:
         return
+
+    assert_group_writable(group, user, [
+        key for key, change in updation_dict.items()
+        if isinstance(change, dict) and "new_value" in change
+    ])
 
     for key, change in updation_dict.items():
         if not (isinstance(change, dict) and "new_value" in change):
@@ -1068,7 +1091,7 @@ def add_in_status_change_history(updation_dict, consignment, user, db):
 # UPDATES
 #---------------------------------
 
-def revert(consignment_history, consignment, db):
+def revert(consignment_history, consignment, db, user=None):
     history = consignment_history.history
     fields = history["fields"]
     items_updates = history["items"]
@@ -1078,8 +1101,11 @@ def revert(consignment_history, consignment, db):
     deleted_items = history["deleted_items"]
     deleted_payments = history["deleted_payments"]
 
-    # Reverting local fields. Returns what it could not restore - see below.
-    skipped = list(revert_local_fields(consignment, fields))
+    # Reverting local fields. Returns {key: reason} for whatever it could not
+    # restore - a retired column, or a group field a closed batch has frozen.
+    # `user` decides Tier 2: an admin may restore a supplier, nobody may
+    # restore a rate.
+    skipped = dict(revert_local_fields(consignment, fields, user))
 
     # Deletig new items added in update
     add_or_delete(new_items, ConsignmentItem, consignment.id, ConsignmentItem.id, db, delete=True)
@@ -1094,12 +1120,12 @@ def revert(consignment_history, consignment, db):
     add_or_delete(deleted_payments, Payment, consignment.id, Payment.id, db, delete=False)
 
     # Reverting already existing items updates
-    skipped += revert_old_values(items_updates, ConsignmentItem, consignment.id,
-                                 ConsignmentItem.id, db)
+    skipped.update(revert_old_values(items_updates, ConsignmentItem, consignment.id,
+                                     ConsignmentItem.id, db))
 
     # Reverting already existing payments updates
-    skipped += revert_old_values(payments_updates, Payment, consignment.id,
-                                 Payment.id, db)
+    skipped.update(revert_old_values(payments_updates, Payment, consignment.id,
+                                     Payment.id, db))
 
     # WHAT COULD NOT BE RESTORED GOES BACK TO THE CALLER, and from there into
     # the response. A revert that quietly does less than it says is the bug this
@@ -1107,7 +1133,7 @@ def revert(consignment_history, consignment, db):
     # exist, everything else is back" is the difference between a partial undo
     # and a partial undo NOBODY KNOWS ABOUT. A log line would not be that - it
     # is the same silence with a paper trail nobody reads.
-    return sorted(set(skipped))
+    return skipped
 
 
 #---------------------------------------
@@ -1148,16 +1174,31 @@ RETIRED_HISTORY_KEYS = {
 }
 
 
-def revert_local_fields(consignment, fields):
+def revert_local_fields(consignment, fields, user=None):
     """Restore a consignment's header fields, wherever they now live.
 
     Returns the list of keys it deliberately could NOT restore, so the caller
     can tell the user. An empty list means everything came back.
+
+    A FROZEN GROUP FIELD IS SKIPPED, NOT FATAL - design 3.9, decided after the
+    survey. Refusing the whole revert was the other candidate and is wrong for
+    one reason: a history row mixing a frozen field with ordinary ones would
+    become permanently un-revertable, and the operator would get nothing back
+    at all rather than everything the rule actually permits. Tier 1 has no
+    override, so "come back later as an admin" is not an answer there.
+
+    IT REUSES THE RETIRED-KEY CHANNEL because that channel already means
+    exactly this: "the revert succeeded, here is what could not be put back and
+    why". The two reasons differ (a retired column no longer exists; a frozen
+    one is deliberately protected) so they carry different explanations, but
+    the mechanism - restore the rest, report the remainder, never fail silently
+    - is the same one, and a second reporting path would be a second thing to
+    keep in agreement.
     """
     consignment_columns = {c.key for c in inspect(consignment).mapper.column_attrs}
     group = getattr(consignment, "batch_group", None)
 
-    skipped = []
+    skipped = {}
     unknown = []
 
     for key, change in fields.items():
@@ -1165,6 +1206,21 @@ def revert_local_fields(consignment, fields):
             continue
 
         old_value = change["old_value"]
+
+        # THE FREEZE IS CHECKED FIRST, AND SKIPS THE KEY WHOLE - every
+        # destination it has, not only the group one.
+        #
+        # `branch_id` is the reason that matters. It is the one payload key with
+        # TWO destinations (the group's works_branch_id AND every order line's
+        # branch_id), so restoring the line half while the group half is frozen
+        # would leave the header saying one branch and its lines another - the
+        # exact divergence the fan-out exists to prevent, created by the safety
+        # rule. Skipping a key wholly is the only self-consistent answer.
+        if key in PAYLOAD_TO_GROUP and group is not None:
+            if frozen_violations(group, user, [key]):
+                skipped[key] = frozen_reason(group, user, key)
+                continue
+
         routed = False
 
         if key in consignment_columns:
@@ -1197,7 +1253,7 @@ def revert_local_fields(consignment, fields):
             routed = True
 
         if key in RETIRED_HISTORY_KEYS:
-            skipped.append(key)
+            skipped[key] = RETIRED_HISTORY_KEYS[key]
             routed = True
 
         if not routed:
@@ -1211,7 +1267,7 @@ def revert_local_fields(consignment, fields):
             f"RETIRED_HISTORY_KEYS with the reason."
         )
 
-    return sorted(set(skipped))
+    return skipped
 
 
 def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
@@ -1248,7 +1304,7 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
     Routing uses `split_item_payload`, the SAME function the write path uses, so
     a field cannot be written to one table and restored to another.
     """
-    skipped = []
+    skipped = {}
 
     for data in updated_data:
         data_id = data.get("id")
@@ -1281,7 +1337,12 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 
         retired = {k: v for k, v in changes.items() if k in RETIRED_HISTORY_KEYS}
         routable = {k: v for k, v in changes.items() if k not in retired}
-        skipped.extend(retired)
+        # The reason travels WITH the key. It used to be a bare list and the
+        # route looked each one up in RETIRED_HISTORY_KEYS - which stops working
+        # the moment a second kind of skip exists (a frozen field is not a
+        # retired column and carries a different explanation), and stops
+        # working by raising KeyError inside the success path.
+        skipped.update({k: RETIRED_HISTORY_KEYS[k] for k in retired})
 
         # Raises, naming the keys, on anything belonging to neither table.
         line_fields, order_item_fields = split_item_payload(routable)
@@ -1296,7 +1357,7 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
                     setattr(order_item, key,
                             coerce_value(ConsignmentOrderItem, key, old_value))
 
-    return sorted(set(skipped))
+    return skipped
 
 
 #---------------------------------------
@@ -1328,6 +1389,256 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
 
 def is_closed(consignment):
     return consignment.current_status == Status.ARRIVED_AT_WORKS.value
+
+
+#---------------------------------------------------------------------------
+# THE GROUP FREEZE - design section 3.9
+#
+# A batch closing does not only lock that batch. It settles the ORDER's terms,
+# because money has already moved against them: batch 1 closes at rate 278.50,
+# its `pkr_total` is stored and reported, and somebody then edits the GROUP's
+# rate to 281.00 to book batch 3 correctly. Batch 1's stored total does not move
+# - its update route 423s - so the group now says one thing and the stored
+# figure says another, and neither is wrong for its own basis. That is
+# CLAUDE.md's "one metric, one definition" failure reached from a new direction.
+#
+# IT IS LIVE TODAY, NOT PREPARATION FOR STEP 8b. `PUT /consignments/{id}` on any
+# open batch of a split order already reaches every one of these columns; step 7
+# opened it when it made splitting possible through the API. Nobody has hit it
+# because nobody can split from the UI yet, which is luck rather than safety.
+#
+# TWO TIERS, AND THE FIELD SETS ARE IN *COLUMN* SPACE.
+#
+# Section 3.9's sketch lists `works_branch_id`, which is the COLUMN; the payload
+# key for it is `branch_id` (PAYLOAD_TO_GROUP). Comparing an incoming payload
+# key against a set of column names would therefore never match on branch, and
+# the freeze would have a hole in exactly the field a works change goes through.
+# So the sets below are columns, and every caller routes its keys through
+# PAYLOAD_TO_GROUP first - the same map the write path and both revert paths
+# already route on, so there is no second spelling of where a field goes.
+#---------------------------------------------------------------------------
+
+# TIER 1 - NOBODY, INCLUDING AN ADMIN.
+#
+# The valuation inputs. Changing one after a batch has closed restates that
+# batch's stored pkr_total, which is precisely what CLAUDE.md rule 4 exists to
+# prevent: "the money totals are STORED (recomputed on save) so a later rate
+# change or edit can't restate a printed report". A rate that has been reported
+# against is a historical fact, not a field; a genuinely rebooked rate applies
+# to the NEXT LC, not retrospectively to this one.
+HARD_FROZEN = frozenset({
+    "exchange_rate", "rate_booked_on", "rate_source", "currency",
+})
+
+# TIER 2 - FROZEN FOR NORMAL USERS, an admin may still write them.
+#
+# Commercial facts rather than valuation inputs: who the counterparty is and on
+# what terms. None feeds a stored money total, and correcting a wrong one on a
+# three-batch LC is normal work rather than an exceptional recovery - the record
+# should not stay permanently wrong because one shipment landed. They freeze
+# against casual edits; an admin is the deliberation.
+#
+# NOT A GUARD AGAINST TYPOS, and must not be documented as one - rule 13 permits
+# inline supplier creation, and a user can pick the wrong supplier from an
+# entirely correct dropdown. The justification is the commercial/valuation split
+# above, and the tiers make no sense read any other way.
+#
+# `payment_instrument` IS HERE. Section 3.9's prose called it "deliberately
+# absent from both tiers" while its own code sketch included it - an internal
+# contradiction, resolved in the direction the sketch and the note itself
+# pointed ("It should be Tier 2"). It is the paired half of `instrument_number`,
+# and "the instrument is frozen but the instrument number is not" is the kind of
+# split that gets implemented by accident.
+ADMIN_FROZEN = frozenset({
+    "supplier_id", "origin", "consignment_type", "incoterm",
+    "instrument_number", "payment_instrument", "works_branch_id",
+})
+
+# EVERY PAYLOAD-REACHABLE GROUP COLUMN IS IN ONE TIER OR THE OTHER. Measured
+# against the mapper rather than assumed: PAYLOAD_TO_GROUP has exactly eleven
+# destinations and HARD_FROZEN | ADMIN_FROZEN is the same eleven, no gap and no
+# overlap. So for a NORMAL USER a frozen group is entirely read-only, and the
+# two tiers diverge only for an admin. That is not what "two tiers" suggests and
+# it is the single most important fact for the front end, which is why the
+# serializer publishes the sets rather than a boolean.
+#
+# `insurance_amount` is on the group and is deliberately in NEITHER set. It is
+# not reachable from the payload today (it is absent from GROUP_SHARED_FIELDS),
+# so nothing can write it and nothing needs to exempt it - but step 9 wires it
+# up, and section 3.9 says the payment process does not freeze. Anyone
+# implementing this as "deny all group writes for non-admins", which the
+# paragraph above makes tempting, would freeze it by accident. Named here and
+# asserted in tests/test_group_freeze.py so that cannot happen quietly.
+FREEZE_EXEMPT_GROUP_COLUMNS = frozenset({"insurance_amount"})
+
+
+class GroupFrozenError(Exception):
+    """A write to a group field that a closed batch has settled.
+
+    Mirrors AllocationError: one exception, raised wherever the rule is checked,
+    mapped to one status by every route that can raise it. 423 - the same status
+    the row lock returns - so the front end's existing "this record is closed"
+    handling applies and there is no second locked-state vocabulary to learn.
+    """
+
+    status_code = 423
+
+    def __init__(self, fields, tier, group=None, batch=None):
+        self.fields = sorted(fields)
+        self.tier = tier                      # "hard" | "admin"
+        self.group_id = getattr(group, "id", None)
+        self.batch = batch
+
+        named = ", ".join(FROZEN_FIELD_LABELS.get(f, f) for f in self.fields)
+
+        where = ""
+        if batch is not None:
+            number = consignment_number(batch) or batch.id
+            where = f" Batch {number} has arrived at works."
+
+        if tier == "hard":
+            why = ("Rates and currency that money has already moved against "
+                   "cannot be changed by anyone, including an admin.")
+        else:
+            why = ("The order's commercial terms are settled once a batch has "
+                   "arrived. An admin can still correct them.")
+
+        super().__init__(f"Cannot change {named} on this order.{where} {why}")
+
+
+# What a refusal CALLS each field. A message reading "Cannot change
+# works_branch_id" names a column an operator has never seen; the screen says
+# "Works / Branch". The refusal has to be actionable, not merely accurate.
+FROZEN_FIELD_LABELS = {
+    "exchange_rate": "the exchange rate",
+    "rate_booked_on": "the rate date",
+    "rate_source": "the rate source",
+    "currency": "the currency",
+    "supplier_id": "the supplier",
+    "branch_id": "the works / branch",
+    "origin": "the country of origin",
+    "consignment_type": "the consignment type",
+    "incoterm": "the incoterm",
+    "instrument_number": "the instrument number",
+    "payment_instrument": "the payment instrument",
+}
+
+
+def freezing_batch(group):
+    """The earliest live batch of this order that has closed, or None.
+
+    `batches`, NOT `consignments` - the relationship on ConsignmentBatchGroup is
+    `batches` (models.py), and section 3.9's sketch said `consignments` for four
+    revisions. An AttributeError inside a freeze check would surface as a 500 on
+    an ordinary save.
+    """
+    if group is None:
+        return None
+
+    for batch in sorted(group.batches, key=lambda b: b.batch_sequence or 0):
+        if not batch.is_deleted and is_closed(batch):
+            return batch
+    return None
+
+
+def group_is_frozen(group):
+    """Has any live batch of this order closed?
+
+    DERIVED, NOT STORED. A `frozen_at` column would be a denormalisation that
+    can drift from the batch statuses it summarises, and this design has already
+    rejected that shape twice (the numbering suffix, the shared group fields). A
+    group holds a handful of batches and they are loaded anyway.
+    """
+    return freezing_batch(group) is not None
+
+
+def frozen_columns_for(group, user):
+    """Which GROUP COLUMNS this user may not write right now.
+
+    IT NEVER RETURNS AN EMPTY SET FOR AN ADMIN ON A FROZEN GROUP, and that is
+    the only place in this application where `is_admin` does not pass. Every
+    other check in authorize() lets an admin through unconditionally. The
+    asymmetry is deliberate - Tier 1 is a historical fact rather than a
+    permission - and it is commented here AND at the raise site, because the
+    first person to read either in isolation will assume it is a bug and fix it.
+    """
+    if not group_is_frozen(group):
+        return frozenset()
+
+    if user is not None and getattr(user, "is_admin", False):
+        return HARD_FROZEN
+
+    return HARD_FROZEN | ADMIN_FROZEN
+
+
+def frozen_violations(group, user, payload_keys):
+    """The payload keys in `payload_keys` this user may not write.
+
+    Takes PAYLOAD keys and routes them through PAYLOAD_TO_GROUP, so `branch_id`
+    is tested against `works_branch_id` rather than missed. Returns payload
+    keys, because that is what the caller was handed and what the front end
+    disables.
+    """
+    frozen = frozen_columns_for(group, user)
+    if not frozen:
+        return []
+
+    return sorted(
+        key for key in payload_keys
+        if PAYLOAD_TO_GROUP.get(key) in frozen
+    )
+
+
+def frozen_reason(group, user, key):
+    """Why this one key could not be restored, in a sentence an operator reads.
+
+    The revert report needs a reason PER KEY, because a single revert can be
+    refused two ways at once - one field retired, another frozen - and
+    "some fields could not be restored" is the report that tells nobody
+    anything.
+    """
+    column = PAYLOAD_TO_GROUP.get(key)
+    label = FROZEN_FIELD_LABELS.get(key, key)
+    batch = freezing_batch(group)
+    where = ""
+    if batch is not None:
+        where = f" (batch {consignment_number(batch) or batch.id} has arrived at works)"
+
+    if column in HARD_FROZEN:
+        return (f"{label} is settled{where} - money has moved against it and "
+                f"nobody, including an admin, can restate it")
+    return (f"{label} is settled{where} - an admin can still change it, "
+            f"but this revert cannot")
+
+
+def assert_group_writable(group, user, payload_keys):
+    """Refuse a write to a frozen group field. Raises GroupFrozenError.
+
+    THE FIRST OF TWO LINES OF DEFENCE. This is the pre-write check every path
+    calls before touching anything; `apply_group_updates` re-derives the same
+    answer immediately before each setattr. Two checks for one rule is normally
+    the thing to avoid - here it is deliberate, because section 4.7 records six
+    write paths found one at a time, four of them by driving rather than by
+    reading, and a silent drop is the exact failure this rule exists to prevent.
+
+    IT RUNS BEFORE ANY WRITE, including before the change-history row. In the
+    update route the history is written before the group is applied, so a check
+    between them would record a change that never happened.
+    """
+    offending = frozen_violations(group, user, payload_keys)
+    if not offending:
+        return
+
+    # Tier 1 is reported in preference to Tier 2 when a payload carries both:
+    # it is the refusal with no way round it, so it is the one the operator
+    # needs to read first.
+    hard = [k for k in offending if PAYLOAD_TO_GROUP.get(k) in HARD_FROZEN]
+    raise GroupFrozenError(
+        hard or offending,
+        "hard" if hard else "admin",
+        group,
+        freezing_batch(group),
+    )
 
 
 #---------------------------------------

@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
+from app.imports.helpers import assert_group_writable, GroupFrozenError, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
 
 from app.imports.helpers import (
     fetch_consignment, is_closed, CLOSED_STATUS_VALUE,
@@ -303,7 +303,7 @@ def update_consignment(
         # to be written onto the consignment and mirrored across afterwards.
         apply_updates(updation_dict, consignment)
         if group_updates and consignment.batch_group is not None:
-            apply_group_updates(group_updates, consignment.batch_group)
+            apply_group_updates(group_updates, consignment.batch_group, user)
 
         # THE CLOSED LOCK IS WRITTEN HERE, AND ONLY HERE.
         #
@@ -405,6 +405,24 @@ def update_consignment(
             "detail":"Consignment updated",
             "data":serialize_consignment(consignment, db)
         }
+
+    except GroupFrozenError as e:
+        # 423, THE SAME STATUS THE ROW LOCK RETURNS, so the front end's existing
+        # "this record is closed" handling applies unchanged and there is no
+        # second locked-state vocabulary to learn (design 3.9).
+        #
+        # NOTE WHAT IS NOT HERE: an admin bypass. Tier 1 refuses an admin too,
+        # and this is the only rule in the application where is_admin does not
+        # pass - every other check in authorize() lets an admin through
+        # unconditionally. That asymmetry is deliberate: a rate money has moved
+        # against is a historical fact rather than a permission. Anyone
+        # "fixing" it here should read helpers.frozen_columns_for first.
+        db.rollback()
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=str(e),
+            headers=None,
+        )
 
     except AllocationError as e:
         # 422 naming the item and the overage. Raising a bare 500 here would

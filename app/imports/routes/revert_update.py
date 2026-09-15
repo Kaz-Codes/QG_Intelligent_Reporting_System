@@ -66,7 +66,7 @@ def revert_update(
 
         # Revert updates. `skipped` names any field the history recorded whose
         # column has since been retired - see RETIRED_HISTORY_KEYS.
-        skipped = revert(consignment_history, consignment, db)
+        skipped = revert(consignment_history, consignment, db, user)
 
         # A REVERT IS AN ALLOCATION CHANGE TOO, AND IT IS THE ONE THAT CAN GO
         # OVER FROM BELOW.
@@ -104,8 +104,13 @@ def revert_update(
         # could not put back and why.
         detail = "Consignment reverted"
         if skipped:
+            # The reason now travels WITH the key, because there are two kinds
+            # of skip: a retired column that no longer exists, and a group field
+            # a closed batch has frozen. Looking each key up in
+            # RETIRED_HISTORY_KEYS - which is what this did - raises KeyError on
+            # the second kind, inside the success path.
             reasons = "; ".join(
-                f"{key} ({RETIRED_HISTORY_KEYS[key]})" for key in skipped
+                f"{key} ({reason})" for key, reason in sorted(skipped.items())
             )
             detail = (
                 f"Consignment reverted, except: {reasons}. "
@@ -118,7 +123,11 @@ def revert_update(
             "data":serialize_consignment(consignment, db),
             # Machine-readable alongside the sentence, so the front end can
             # surface it without parsing prose.
-            "skipped_fields":skipped,
+            # The keys, unchanged in shape for anything already reading it,
+            # and the reasons beside them so the front end can render a
+            # sentence per field without parsing prose.
+            "skipped_fields":sorted(skipped),
+            "skipped_detail":skipped,
         }
 
     except AllocationError as e:

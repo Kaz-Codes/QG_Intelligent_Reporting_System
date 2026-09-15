@@ -432,8 +432,53 @@ allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
 no writer at all before step 7, which is how undo-delete could produce a live
 batch under a deleted order.
 
-**NOT BUILT: the group freeze** (design §3.9) — a closed batch does not yet
-stop anyone editing the ORDER's fields. Nothing is stubbed for it.
+**THE GROUP FREEZE IS BUILT** (design §3.9). A closed batch settles the whole
+ORDER, in two tiers, because money has already moved against its terms —
+`helpers.assert_group_writable`, raising `GroupFrozenError` → **423**, the same
+status the row lock returns.
+
+- **Tier 1 — `HARD_FROZEN`: `exchange_rate`, `rate_booked_on`, `rate_source`,
+  `currency`. NOBODY, INCLUDING AN ADMIN.** The valuation inputs; changing one
+  restates a stored, reported `pkr_total` (rule 4). **This is the only rule in
+  the application `is_admin` does not pass** — every other check in
+  `authorize()` lets an admin through unconditionally. Deliberate, and
+  commented at both the definition and the raise site.
+- **Tier 2 — `ADMIN_FROZEN`: `supplier_id`, `origin`, `consignment_type`,
+  `incoterm`, `instrument_number`, `payment_instrument`, `branch_id`
+  (→`works_branch_id`). Frozen for normal users, an admin may still write
+  them.** Commercial facts, not valuation inputs; correcting one on a
+  three-batch LC is normal work, not an exceptional recovery. **Not a guard
+  against typos** and must not be documented as one.
+- **The two tiers cover EVERY payload-reachable group column — all eleven, no
+  gap, no overlap** (asserted in `tests/test_group_freeze.py`). So for a normal
+  user a frozen order is entirely read-only, and the tiers diverge only for an
+  admin. `insurance_amount` is deliberately in neither: §3.9 exempts the payment
+  process, and step 9 wires that column up.
+- **The field sets are COLUMN names; callers route payload keys through
+  `PAYLOAD_TO_GROUP` first.** `branch_id` is posted, `works_branch_id` is
+  stored — comparing the posted key against column names would leave the works
+  field editable on a closed order while every other Tier 2 field refused.
+- **Closed is `is_closed()` — "Arrived at Works" and nothing else** (rule 8). A
+  soft-deleted batch does not freeze. **Whether `Order Cancelled` should is an
+  open question**, recorded in §3.9, deliberately not decided.
+- **Two write paths reach it, and both check**: `PUT /{id}` (before the
+  change-history row, not between it and the apply) and `revert_local_fields`.
+  `apply_group_updates` **re-derives the same answer before each setattr** as a
+  second line of defence, and **raises rather than skipping** — a silent drop is
+  the failure this rule exists to prevent. Create is exempt because it always
+  makes a fresh group; batch-create, delete and undo-delete touch only
+  bookkeeping columns.
+- **Revert is PARTIAL, not all-or-nothing.** It restores what it may and reports
+  what it could not, through the same `skipped` channel `RETIRED_HISTORY_KEYS`
+  uses — the reason now travels *with* the key (`skipped_detail`), because a
+  frozen field is not a retired column and the route used to look each key up in
+  `RETIRED_HISTORY_KEYS`, which would `KeyError` inside the success path. A
+  frozen key is skipped **whole**, every destination it has: `branch_id` has
+  two, and half-restoring it would leave the header and its lines disagreeing.
+- **`serialize_consignment` publishes `group_frozen`** (detail only, beside
+  `allocation`, for the same N+1 reason): `is_frozen`, `frozen_by`, and the
+  `hard` / `admin` field lists **in payload-key form**, so the wizard can
+  disable exactly the inputs it has.
 
 **A new batch lands as a `draft` at "TT/LC in Process" with no dates, no ports
 and no clearing agent** — `add_batch` copies none of the founding batch's

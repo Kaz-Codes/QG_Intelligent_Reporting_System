@@ -253,7 +253,61 @@ def serialize_consignment(consignment, db, include_change_history=True):
         # third number that can disagree with the two it comes from.
         data["allocation"] = allocation_view(consignment.batch_group)
 
+        # THE GROUP FREEZE, so the wizard does not render an editable rate
+        # field that 423s on save (design 3.9). The same treatment
+        # `missing_fields` used to get, for the same reason: a disabled control
+        # and a failed save must not disagree.
+        #
+        # DETAIL ONLY, in this block, for the reason `allocation` is - it reads
+        # `group.batches`, which the list query does not load, so publishing it
+        # from the list would be one query per row for a panel the list does
+        # not draw.
+        #
+        # IT PUBLISHES THE ORDER'S FACTS, NOT THE CALLER'S EFFECTIVE SET.
+        # `hard` and `admin` are properties of the ORDER; which of them applies
+        # is a property of the VIEWER, and the front end already holds
+        # `user.isAdmin` (it renders the Reopen button from it). Threading a
+        # user through eleven serializer call sites to compute a set union the
+        # client can do from data it already has would be the larger change and
+        # the more fragile one. What must not move to the browser is the FIELD
+        # LISTS, and they do not - they come from helpers.HARD_FROZEN and
+        # helpers.ADMIN_FROZEN, in payload-key form so the wizard can match
+        # them to its own inputs directly.
+        # IMPORTED INSIDE THE FUNCTION, like `item_current_values` above and
+        # for the same reason: `helpers` imports this module, so a module-level
+        # import here is a cycle.
+        from app.imports.helpers import (
+            ADMIN_FROZEN, HARD_FROZEN, freezing_batch,
+        )
+
+        blocking = freezing_batch(consignment.batch_group)
+        data["group_frozen"] = {
+            "is_frozen": blocking is not None,
+            # Which batch settled the terms - named, because "this order is
+            # frozen" without saying why is a dead end for whoever reads it.
+            "frozen_by": None if blocking is None else {
+                "consignment_id": blocking.id,
+                "consignment_number": consignment_number(blocking) or None,
+            },
+            # Payload keys, not column names: `branch_id`, which the wizard
+            # posts, rather than `works_branch_id`, which it has never heard of.
+            "hard": sorted(_payload_keys_for(HARD_FROZEN)),
+            "admin": sorted(_payload_keys_for(ADMIN_FROZEN)),
+        }
+
     return data
+
+
+def _payload_keys_for(columns):
+    """Group COLUMN names -> the PAYLOAD keys the wizard posts them under.
+
+    One asymmetry, and it is the whole reason this exists: `works_branch_id` is
+    posted as `branch_id`. A front end handed the column name would disable an
+    input that is not there and leave the real one editable.
+    """
+    from app.imports.helpers import PAYLOAD_TO_GROUP
+
+    return {key for key, column in PAYLOAD_TO_GROUP.items() if column in columns}
 
 #---------------------------------------------
 # A SINGLE DYNAMIC FUNCTION THAT

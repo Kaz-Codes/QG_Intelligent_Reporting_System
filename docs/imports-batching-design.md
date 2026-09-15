@@ -31,6 +31,142 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 15 (§3.9 BUILT: the two-tier group freeze)
+
+Deferred from step 7, built here. **It is not preparation for 8b — it closes a
+hole that has been live since step 7 made splitting reachable through the API.**
+`PUT /consignments/{id}` on any open batch of a split order already reached
+every one of the eleven group columns. Nobody had hit it because nobody can
+split from the UI yet, which is luck rather than safety.
+
+### What the survey found that §3.9 did not predict
+
+| | |
+|---|---|
+| **It is TWO write paths, not six** | The six that end at `reconcile_allocation` are the ALLOCATION six. Only `PUT /{id}` and `revert_local_fields` reach a Tier 1/2 field. Create writes all eleven but makes a *fresh* group, so it can never be frozen; batch-create, delete and undo-delete touch only `batches_ever` and `is_deleted`, which §3.9 exempts as bookkeeping. Create's exemption is structural and would evaporate if 8b ever let a create attach to an existing group — noted at `new_batch_group` rather than guarded. |
+| **The two tiers cover EVERY payload-reachable group column** — all eleven, no gap, no overlap | Measured against the mapper, not assumed. So for a normal user a frozen order is **entirely read-only**, and the tiers diverge **only for an admin**. That is not what "two tiers" suggests, and it is why a `group_finance_frozen` boolean could not have driven the UI: it would have said "finance is frozen" while supplier and origin were equally locked. |
+| **The field sets have to be in COLUMN space, and §3.9's own sketch is the trap** | The sketch lists `works_branch_id`; the wizard posts `branch_id`. Comparing an incoming payload key against a set of column names matches nothing, so the works field would have stayed editable on a closed order while every other Tier 2 field refused — a hole in the one field whose name differs. Callers route through `PAYLOAD_TO_GROUP` first; `tests/test_group_freeze.py` pins it both ways. |
+| **`insurance_amount` is on the group and is in neither tier** | Unreachable from the payload today, so nothing can write it. Step 9 wires it up, and §3.9 says the payment process does not freeze. An implementation of "deny every group write for non-admins" — which the coverage fact above makes tempting — would freeze it by accident. Named in `FREEZE_EXEMPT_GROUP_COLUMNS` and asserted. |
+| **The check must run before the change-history row, not just before the apply** | `add_in_consignment_change_history(…, group_updates=…)` runs ~10 lines before `apply_group_updates`. A check between them would have recorded a change that never happened. It sits immediately after the existing `is_locked` 423 guard — fail before any work. |
+| **`require_admin` already existed; there is no role column** | The ruling asked for "a single require_admin-style dependency" to be built. `app/auth/authorize_user.py:74` already has one, and `User` has `is_admin` — CLAUDE.md's "There are no roles" is accurate. Tier 2 reads `user.is_admin` exactly as §3.9's sketch does. Building a second one would have been a second spelling of an existing rule. **Zero work, reported rather than folded in.** |
+
+### The rulings, as built
+
+- **Tier 1 refuses an admin.** The only rule in the application where `is_admin`
+  does not pass, commented at the definition *and* at the raise site, because
+  whoever reads either in isolation will assume it is a bug.
+- **Tier 2 permits an admin**, through `user.is_admin`. A freeze nobody can lift
+  turns every typo into a support ticket.
+- **Belt and braces.** `assert_group_writable` at the route, and
+  `apply_group_updates` **re-derives the same answer** immediately before each
+  setattr. It **raises**; it does not skip. A silent drop would be this exact
+  failure wearing the costume of a safety net — the save returns 200 and the
+  operator believes the rate changed.
+- **`apply_group_updates` takes `user` as a REQUIRED argument.** A default would
+  make an un-updated caller either silently admin-less or silently unchecked
+  depending on which way it fell; a required argument makes every call site
+  declare who is writing.
+- **Partial revert, reusing the `RETIRED_KEYS` channel.** Restore what is
+  permitted, report what was refused, name the field and say why.
+- **`is_closed` is the definition**; `Order Cancelled` is recorded in §3.9 as an
+  open question rather than decided.
+- **A batch created after batch 1 closed inherits the terms** and cannot set
+  them. Driven: batch 3 is created on a frozen order (allowed — that is answer
+  4), and its attempt to set the rate 423s.
+
+### Two things the revert change forced, neither of them optional
+
+**The reason had to travel with the key.** The route formatted its report as
+`f"{key} ({RETIRED_HISTORY_KEYS[key]})"`. A frozen field is not a retired
+column, so the moment a second kind of skip existed that line raised `KeyError`
+— **inside the success path**, after the revert had already been applied.
+`revert_local_fields` and `revert_old_values` now return `{key: reason}` and the
+route formats from that; `skipped_fields` keeps its list shape and
+`skipped_detail` carries the reasons.
+
+**A frozen key is skipped WHOLE — every destination it has.** `branch_id` is the
+one payload key with two (`works_branch_id` on the group, `branch_id` on every
+order line). Restoring the line half while the group half is frozen would leave
+the header saying one branch and its lines another — the exact divergence the
+fan-out exists to prevent, created by the safety rule. Skipping wholly is the
+only self-consistent answer.
+
+### What the front end gets
+
+`serialize_consignment` publishes **`group_frozen`** — detail only, in the same
+block as `allocation` and for the same reason (it reads `group.batches`, which
+the list query does not load, so publishing it from the list is one query per
+row for a panel the list does not draw):
+
+```json
+"group_frozen": {
+  "is_frozen": true,
+  "frozen_by": {"consignment_id": 21, "consignment_number": "21-1"},
+  "hard":  ["currency", "exchange_rate", "rate_booked_on", "rate_source"],
+  "admin": ["branch_id", "consignment_type", "incoterm", "instrument_number",
+            "origin", "payment_instrument", "supplier_id"]
+}
+```
+
+**Payload keys, not column names** — `branch_id`, which the wizard posts, rather
+than `works_branch_id`, which it has never heard of. It publishes **the order's
+facts, not the caller's effective set**: which tier applies is a property of the
+viewer, and the front end already holds `user.isAdmin` (it renders the Reopen
+button from it). Threading a user through eleven serializer call sites to
+compute a set union the client can do from data it already has would have been
+the larger and more fragile change. What must not move to the browser is the
+FIELD LISTS, and they do not.
+
+### Verified — driven, not read
+
+`tests/check_group_freeze.py`, **32 checks, 0 failed**, against `scratch_freeze`
+(a clone of the 183-consignment dev database at `f3a91c60d28b`) with a genuine
+split built through the real routes by `python -m tests.batch_fixture` — order
+21, batch `21-1` closed at "Arrived at Works", batch `21-2` open — and a real
+non-admin login created through `POST /users/`.
+
+**Every check asserts the stored VALUE, never the status code alone**, because a
+freeze that returns 200 and drops the field is the failure it exists to prevent.
+All four tier/role outcomes are shown side by side: Tier 1 refuses clerk **and**
+admin, Tier 2 refuses the clerk and permits the admin, and in each case the
+column is re-read from the table to confirm it did or did not move.
+
+Also driven: the freeze is off before any batch closes; `group_frozen` flips and
+names the batch; `branch_id` refuses (the rename hole); the batch's own fields
+stay editable on a frozen order; `ordered_quantity` — an order-LINE field — is
+not frozen; a third batch is created on a frozen order and cannot set its rate;
+and the clerk's revert restores `remarks`, leaves `origin` at its new value,
+reports `skipped_fields: ["origin"]` with a reason, and says so in the sentence.
+
+Alongside: `tests/test_group_freeze.py` **34 pure assertions**, no database —
+the tier membership, the coverage facts, the payload-key routing and the setattr
+guard. **Suite: 188 passed** (was 154), `configure_mappers()` clean against the
+scratch database, `check_batch_allocation.py` 50/0, `tsc -b` clean.
+
+**`check_dashboard_consistency.py` needs a fixture-only database: 94/0.** Run
+after `check_group_freeze.py` it reports one failure — *"both batches of the
+split order appear as separate rows — group 21 -> [21, 184, 185]"* — because the
+freeze driver creates a third batch as part of its new-batch check. The
+assertion is right and the fixture had moved under it. Recorded because the next
+person will hit it and think they have broken the list.
+
+### Two driver mistakes worth recording, both of which produced green
+
+- **A fragment `PUT` silently empties a batch.** Posting `{"origin": "Japan"}`
+  alone soft-deleted all three of batch 2's lines, because the update route
+  deletes any line missing from the payload — the wizard's contract. The
+  allocation was then empty, and the new-batch section reported `skip` rather
+  than failing. The driver now posts the whole record back, which is what the
+  wizard does. **A driver that tests a shape the application never posts is
+  testing something else.**
+- **The driver is not idempotent, and its second run lies.** Re-running without
+  recreating the database turned four passes into failures: the origin was
+  already `Germany` from the first run, so the save produced no diff, so there
+  was nothing for the freeze to refuse and the request returned 200. Said so in
+  its docstring rather than engineering around it.
+
+---
+
 ## Changelog — revision 14 (the origin migration, and where price basis multiplies)
 
 Answers to revision 13's open items, plus the design question price basis turns
@@ -2258,6 +2394,12 @@ pay an N+1. That is one line in each, and it is the cheaper problem.
 
 ### 3.9 The group freeze — closing the hole answer 4 opened
 
+> **BUILT — revision 15.** `helpers.assert_group_writable`, both tiers,
+> both write paths, a second guard inside `apply_group_updates`, and a
+> partial revert that reports what it skipped. Driven on a real split
+> order with batch 1 closed: `tests/check_group_freeze.py`, 32 checks.
+> Three things this section did not predict are recorded in revision 15.
+
 Adding a batch to a locked group is now allowed to any user, always, with no
 admin and no reopen. That is right operationally, and it opens exactly the hole
 you identified: **the group is not lockable, so a user with ordinary edit rights
@@ -2283,6 +2425,21 @@ came from.
 > in **two tiers**. Closed means `is_closed()` — which per §3.10 is now
 > **status "Arrived at Works", and nothing else**.
 
+**OPEN QUESTION, deliberately not decided in revision 15: `Order Cancelled`.**
+`is_closed()` is the one-part test and says no, so a group whose only batch has
+been cancelled does **not** freeze — and that is what is built and pinned. But
+the list's own `is_truly_closed` treats `Order Cancelled` as closed too, for
+hiding purposes, so the application already holds two readings of "finished"
+and the freeze has silently taken one of them.
+
+The argument each way is short. A cancelled order was never reconciled, so
+nothing was reported against its rate and there is nothing to protect. Against:
+a cancellation can follow a partial payment, and an LC that was opened and then
+cancelled has bank charges booked against a rate. Nobody has asked for either
+behaviour, which is why it is recorded rather than guessed at. Whoever decides
+must change `freezing_batch` only — there is one definition and the tests name
+this case explicitly.
+
 **The one-part test makes this freeze stronger, and that is the right direction.**
 Under the two-part test the group's exchange rate would have stayed editable
 while a batch's goods sat at the factory, simply because nobody had pressed
@@ -2307,7 +2464,7 @@ there is no legitimate case for one — a genuinely rebooked rate applies to the
 reopen path.**
 
 `supplier_id`, `origin`, `consignment_type`, `incoterm`, `instrument_number`,
-and `works_branch_id`.
+**`payment_instrument`** and `works_branch_id`.
 
 **These are commercial facts, not valuation inputs.** They describe who the
 counterparty is and under what terms; none of them feeds a stored money total.
@@ -2340,12 +2497,14 @@ used.
 new batches still attach, because answer 4 requires it. The freeze governs
 user-editable fields, not bookkeeping.
 
-**`payment_instrument` is deliberately absent from both tiers.** It is the
-paired half of `instrument_number` and belongs in Tier 2 with it — but it is
-also part of the payment reference display (§3.4), and Step 4 is unfrozen. It
-should be Tier 2; noting it here because "the instrument is frozen but the
-instrument number is not" is the kind of split that gets implemented by
-accident.
+**`payment_instrument` is in Tier 2 — RESOLVED, revision 15.** This paragraph
+used to say it was "deliberately absent from both tiers" while the code sketch
+below included it, and the paragraph itself ended by saying it *should* be
+Tier 2. The sketch and the ruling agreed; the prose was a stale open item.
+Resolved in the direction both pointed: it is the paired half of
+`instrument_number`, and "the instrument is frozen but the instrument number is
+not" is exactly the split that gets implemented by accident. Being part of the
+payment reference display (§3.4) is a read, and reads are never frozen.
 
 #### Why two tiers rather than one
 
@@ -4221,8 +4380,10 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    creation, and numbering (§3.5a). The group and order-item MODELS came
    earlier, with revision A.
 
-   **The group freeze (§3.9) is NOT part of this and was deliberately left
-   out.** It needs batches that can close before it can be tested, and the
+   **The group freeze (§3.9) was deliberately left out of step 7 and is now
+   BUILT — revision 15. The reasoning below is kept because it is why step 7
+   stopped where it did, and because "nothing was left behind for it" turned
+   out to be the thing that made the freeze cheap to add later.** It needs batches that can close before it can be tested, and the
    survey may find its tier boundaries want adjusting now that allocation is
    real. **Nothing was left behind for it** — no stub, no dead parameter, no
    flag — because a hook that is never called is indistinguishable from one
@@ -4435,6 +4596,13 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    > records are closed. List **31 → 179**, export **0 → 341 rows**, and the
    > export still matches the filter exactly.
 
+8c. **The group freeze (§3.9) — BUILT, revision 15.** Deferred from step 7 and
+   taken before 8b, because 8b puts the allocation screen in front of operators
+   and makes splitting reachable; the hole it closes was already live through
+   the API from step 7 onward. Two tiers, two write paths, a second guard at the
+   setattr, a partial revert that reports what it skipped, and `group_frozen` on
+   the detail payload for 8b to render from. `Order Cancelled` is left as a
+   recorded open question in §3.9.
 9. **Payments:** the group move (§4.4), insurance, the addenda table.
 10. **Chatbot metadata**, verified by importing `backend.*` from inside
     `chatbot_backend/`.

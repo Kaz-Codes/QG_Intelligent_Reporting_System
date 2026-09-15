@@ -102,10 +102,17 @@ def create_batch(
         # make the normal case the exceptional one.
         #
         # What a closed batch DOES restrict is editing the ORDER's own fields
-        # while it is closed. That is the group freeze, it is a separate rule,
-        # and it is not built yet - see the design, section 3.9. Nothing is
-        # stubbed for it here: a guard that is never called cannot be told
-        # apart from one that is called and does nothing.
+        # while it is closed. That is the group freeze - a separate rule, and
+        # it is BUILT (design 3.9, helpers.assert_group_writable).
+        #
+        # IT IS STILL NOT CALLED HERE, and that remains correct rather than an
+        # omission: this route writes no group field. The body is `allocations`
+        # and nothing else, and `claim_batch_sequence` touches only
+        # `batches_ever`, which is bookkeeping the freeze deliberately exempts.
+        # A new batch INHERITS the order's terms; the moment anyone tries to
+        # change them - through `PUT /{id}` on this new batch like any other -
+        # the freeze refuses. Driven in tests/check_group_freeze.py: batch 3 is
+        # created on a frozen order, and its attempt to set the rate 423s.
 
         # THE ORDER LINES, VALIDATED BEFORE ANYTHING IS WRITTEN.
         requested_ids = [a.order_item_id for a in batch_data.allocations]
