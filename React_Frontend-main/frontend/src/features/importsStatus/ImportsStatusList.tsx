@@ -8,6 +8,13 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { RowDeleteActions, DELETED_ROW_CLASS } from '@/components/RowDeleteActions'
+
+/** The requirements' "blue highlighted line" for an order with quantity nobody
+ *  has put in a batch (Step 3). A left border rather than a filled row: the
+ *  table already uses background tint for hover and selection, and a third
+ *  meaning on the same channel is how a colour stops meaning anything. */
+const PENDING_ALLOCATION_ROW_CLASS =
+  'border-l-[3px] border-l-[var(--color-brand)] bg-[var(--color-brand)]/[0.04]'
 import { can } from '@/lib/roleAccess'
 import { SortableTable, type SortableColumn } from './components/SortableTable'
 import { StatusPill, Tag, PaymentDot } from './components/atoms'
@@ -154,6 +161,10 @@ export function ImportsStatusList() {
     // list is where the undo button lives, so they have to be reachable here
     // rather than hidden away on a separate screen.
     includeDeleted: !!user?.isAdmin,
+    // THE PENDING-ALLOCATION HIGHLIGHT. Costs a correlated EXISTS over
+    // consignment_order_items per page, so the backend only computes it when
+    // asked - this is the screen that asks.
+    includeBatchContext: true,
   }), [page, stage, statusFilter, branchIds, supplierIds, requisitionFilter,
        includeClosed, draftsOnly, etdFrom, etdTo, debouncedSearch, user?.isAdmin])
 
@@ -699,7 +710,14 @@ export function ImportsStatusList() {
       <SortableTable
         columns={columns}
         rows={rows}
-        rowClassName={(r) => (r.isDeleted ? DELETED_ROW_CLASS : undefined)}
+        // DELETED WINS OVER PENDING. A soft-deleted row is struck through and
+        // greyed; painting it as "needs attention" too would be two states
+        // fighting over one row, and the deletion is the one that matters.
+        rowClassName={(r) => (
+          r.isDeleted ? DELETED_ROW_CLASS
+            : r.hasPendingAllocation ? PENDING_ALLOCATION_ROW_CLASS
+            : undefined
+        )}
         rowKey={(r) => String(r.id)}
         renderExpanded={(r) => <ConsignmentItemsPanel row={r} />}
         initialSort={{ key: 'systemId', dir: 'desc' }}

@@ -72,6 +72,13 @@ export interface ImportsListRow {
    *  called `21-2`, and printing it names a consignment nobody can look up
    *  (design 0.4). Use `consignmentNumber` for anything a person reads. */
   systemId: string
+  /** Does this row's ORDER still have unallocated quantity? `null` = the
+   *  caller did not ask (see apiToRow). Drives the pending highlight. */
+  hasPendingAllocation: boolean | null
+  /** Which order this batch belongs to, and where in it. `batchSequence` is
+   *  what the number is derived from; neither is ever displayed raw. */
+  batchGroupId: number | null
+  batchSequence: number | null
   /** WHAT THE SCREEN SHOWS: `177`, or `177-1` / `177-2` once the order has
    *  split. Built by the server, never assembled here — the rule is "suffix
    *  only once an order has EVER held two batches", which is exactly the part
@@ -285,6 +292,13 @@ export function apiToRow(c: ApiConsignment): ImportsListRow {
     id: c.id,
     systemId: String(c.id),
     consignmentNumber: c.consignment_number ?? '',
+    // NULL MEANS "NOT ASKED FOR", not "fully allocated" — only a list fetched
+    // with includeBatchContext carries a boolean. Kept nullable all the way to
+    // the row so a screen that forgot the flag renders no highlight rather
+    // than a confident "nothing pending".
+    hasPendingAllocation: c.has_pending_allocation ?? null,
+    batchGroupId: c.batch_group_id ?? null,
+    batchSequence: c.batch_sequence ?? null,
     branch: c.branch?.name ?? '—',
     supplier: c.supplier?.name ?? '—',
     origin: c.origin ?? '—',
@@ -434,6 +448,16 @@ function numGt0(v: unknown): number | undefined {
 function itemToPayload(item: DraftItem): ConsignmentItemPayload {
   return {
     id: item.backendId ?? null,
+    // SENT ON EVERY LINE THAT HAS ONE. Dropping it is not a missing feature,
+    // it is a data corruption: the server reads a line with no order line as a
+    // NEW item on the order and raises what the order bought. Measured before
+    // the backend guard existed — one added line on batch 2 took an order from
+    // 33.523 to 38.523 with a 200 response (design §3.7b finding 3).
+    order_item_id: item.orderItemId ?? null,
+    // Only when the operator actually changed it. On an unsplit order the
+    // server keeps `ordered_quantity` in step with `quantity` on its own, and
+    // sending a stale copy back would freeze it at whatever was last fetched.
+    ordered_quantity: numGt0(item.orderedQuantity),
     item_name: strOrUndef(item.itemName),
     placeholder_name: strOrUndef(item.placeholderName),
     item_code: strOrUndef(item.itemCode),
@@ -609,6 +633,11 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
     items: (c.items ?? []).filter((i) => !i.is_deleted).map((item, i) => ({
       ...emptyItem(`item-${c.id}-${item.id ?? i}`),
       backendId: item.id,
+      // READ IN SO IT CAN BE SENT BACK OUT. The round trip is the whole point:
+      // a line that loses its order line on the way through the wizard becomes
+      // a new item on the order the next time it is saved.
+      orderItemId: item.order_item_id ?? undefined,
+      orderedQuantity: toNumber(item.ordered_quantity) ?? undefined,
       requisitionType: (item.requisition_type ? (REQ_TYPE_FROM_API[item.requisition_type] ?? undefined) : undefined) as DraftItem['requisitionType'],
       referenceNo: item.reference_number ?? '',
       jobNo: item.job_number ?? '',

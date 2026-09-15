@@ -2,7 +2,7 @@ from app.imports.models import (
     Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory,
     ConsignmentBatchGroup, ConsignmentOrderItem,
 )
-from sqlalchemy import select, func, or_, and_, not_, update
+from sqlalchemy import select, func, or_, and_, not_, update, literal
 from sqlalchemy.orm import joinedload, selectinload
 from app.imports.serializers import serialize_many
 from app.imports.models import ConsignmentChangeHistory, EtaRevisionHistory, StatusUpdateHistory
@@ -473,6 +473,69 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
     rows = db.execute(query).scalars().all()
 
     return rows, total
+
+
+#---------------------------------------------------------------------------
+# WHICH ORDERS STILL HAVE QUANTITY NOBODY HAS PUT IN A BATCH
+#
+# The requirements want the list to highlight a consignment whose order has
+# items pending allocation (requirements, Step 3 - "a blue highlighted line").
+#
+# A BOOLEAN COMPUTED IN SQL, NOT THE `allocation` BLOCK. `allocation_view`
+# reads `group.order_items`, which the list query deliberately does not load;
+# publishing it per row would be one collection load per row for a panel the
+# list does not draw, which is exactly the N+1 the eager loads closed.
+#
+# IT IS A PROPERTY OF THE ORDER, NOT OF THE ROW. Every batch of an
+# under-allocated order reports true, which is right: the pending quantity
+# belongs to the ORDER, and hiding it on all but one batch would mean whether
+# you saw it depended on which arrival you happened to be looking at.
+#
+# PAID ONLY WHEN ASKED FOR. `include_batch_context=False` skips the subquery
+# entirely rather than computing it and discarding it - the list already runs a
+# count plus a page plus five eager loads, and this is a correlated EXISTS over
+# a second table that only one screen needs.
+#---------------------------------------------------------------------------
+
+HAS_PENDING_ALLOCATION = (
+    select(literal(1))
+    .select_from(ConsignmentOrderItem)
+    .where(ConsignmentOrderItem.batch_group_id == Consignment.batch_group_id)
+    .where(ConsignmentOrderItem.is_deleted.is_(False))
+    # STRICTLY LESS THAN. Equal is fully allocated and must not highlight;
+    # greater than cannot happen (ck_allocation_within_order), and if it ever
+    # did, a row that is over-allocated is not "pending" and the allocation
+    # check is the thing that should be complaining, not the list.
+    .where(ConsignmentOrderItem.allocated_quantity
+           < ConsignmentOrderItem.ordered_quantity)
+    .correlate(Consignment)
+    .exists()
+)
+
+
+def pending_allocation_ids(db, consignments):
+    """Which of these consignments belong to an under-allocated order.
+
+    Returned as a set of consignment ids rather than attached to the rows,
+    because the rows are ORM objects the serializer walks by mapper - hanging a
+    computed attribute on them is how a field ends up in one payload and not
+    another depending on which query built it.
+
+    ONE QUERY FOR THE WHOLE PAGE, not one per row. The alternative reads
+    naturally (`any(o.outstanding for o in c.batch_group.order_items)`) and is
+    twenty lazy loads on a twenty-row page.
+    """
+    if not consignments:
+        return set()
+
+    ids = [c.id for c in consignments]
+    rows = db.execute(
+        select(Consignment.id)
+        .where(Consignment.id.in_(ids))
+        .where(HAS_PENDING_ALLOCATION)
+    ).scalars().all()
+
+    return set(rows)
 
 
 #----------------------------------------
@@ -2451,6 +2514,34 @@ def resolve_ordered_quantity(order_item, line, line_payload, group):
     return None
 
 
+class NewItemOnLaterBatch(AllocationError):
+    """An item posted on a later batch with nothing saying what it allocates against.
+
+    422, like the other allocation refusals - the client sent something the
+    server cannot act on, which is a request problem rather than a permission
+    or a lock.
+
+    THE MESSAGE NAMES THE ITEM, because the alternative is an operator staring
+    at a six-line form being told "an item is invalid". Where the payload did
+    not even carry a name, it says so rather than printing "None".
+    """
+
+    status_code = 422
+
+    def __init__(self, item_name, batch_sequence):
+        self.item_name = item_name
+        self.batch_sequence = batch_sequence
+        named = f'"{item_name}"' if item_name else "An unnamed item"
+        where = f" (batch {batch_sequence})" if batch_sequence else ""
+        super().__init__(
+            f"{named} is not one of the items this order bought, and this is "
+            f"not the order's first batch{where}. Allocate against an existing "
+            f"order line by sending its `order_item_id`, or add the item to the "
+            f"order explicitly - posting it here would raise what the order is "
+            f"recorded as having bought."
+        )
+
+
 def resolve_order_line(db, item, consignment, line_payload):
     """The order line this shipment line is an allocation against.
 
@@ -2482,6 +2573,32 @@ def resolve_order_line(db, item, consignment, line_payload):
 
     if item.order_item is not None:
         return item.order_item
+
+    # A NEW ITEM ON A SPLIT ORDER IS REFUSED - design 3.7b, finding 3.
+    #
+    # With no `order_item_id` and no existing link, the only honest reading of
+    # this line is "a new item on the order". That is right on the founding
+    # batch, where the order is being written for the first time, and wrong on
+    # every later one - there it silently RAISES WHAT THE ORDER BOUGHT.
+    #
+    # Measured before this guard existed, on the split fixture: a wizard-shaped
+    # PUT adding one line to batch 2 returned 200, created order line 456, and
+    # took the order from 33.523 ordered to 38.523. No error, and the
+    # over-allocation CHECK cannot see it because each line sits inside its own
+    # order line - the sum is larger but so is the limit.
+    #
+    # THE FRONT END SENDING `order_item_id` IS THE REAL FIX; this is the one
+    # that catches the next client. It is the same reasoning as the freeze's
+    # setattr guard: a rule enforced only where today's caller happens to obey
+    # it is not enforced.
+    #
+    # The founding batch stays permissive, so the ordinary create path and
+    # every single-batch order behave exactly as before.
+    if (getattr(consignment.batch_group, "batches_ever", 1) or 1) > 1:
+        raise NewItemOnLaterBatch(
+            line_payload.get("item_name") if line_payload else None,
+            getattr(consignment, "batch_sequence", None),
+        )
 
     return ConsignmentOrderItem(batch_group_id=consignment.batch_group_id)
 

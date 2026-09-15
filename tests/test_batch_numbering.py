@@ -31,6 +31,7 @@ import pytest
 from app.imports.allocation import (
     OrderLineHasNoQuantity, OverAllocation, UnknownOrderLine, plain,
 )
+from app.imports.helpers import NewItemOnLaterBatch
 from app.imports.order_view import consignment_number_from, reference_label_from
 
 from conftest import Obj
@@ -305,3 +306,45 @@ class TestTheRefusalMessages:
         is what anyone would type. The 1000 case is the one that matters:
         `normalize()` turns it into `1E+3`."""
         assert plain(value) == expected
+
+
+#---------------------------------------------------------------------------
+# A new item on a LATER batch - design section 3.7b, finding 3
+#
+# The trap this closes was measured, not imagined: a wizard-shaped PUT adding
+# one line to batch 2 returned 200, created a second order line, and took an
+# order from 33.523 ordered to 38.523. The over-allocation CHECK cannot see it
+# because each line sits inside its own order line - the sum grew, but so did
+# the limit.
+#---------------------------------------------------------------------------
+
+class TestNewItemOnLaterBatch:
+
+    def test_it_is_422_like_the_other_allocation_refusals(self):
+        """The client sent something the server cannot act on - a request
+        problem, not a permission or a lock."""
+        assert NewItemOnLaterBatch("Probe A", 2).status_code == 422
+
+    def test_the_message_names_the_item(self):
+        """An operator staring at a six-line form being told 'an item is
+        invalid' has been told nothing."""
+        assert '"Probe A"' in str(NewItemOnLaterBatch("Probe A", 2))
+
+    def test_an_unnamed_item_says_so_rather_than_printing_None(self):
+        message = str(NewItemOnLaterBatch(None, 2))
+        assert "unnamed item" in message
+        assert "None" not in message
+
+    def test_the_message_says_HOW_TO_FIX_IT(self):
+        """Naming `order_item_id` is the difference between a refusal somebody
+        can act on and one they raise a ticket about."""
+        assert "order_item_id" in str(NewItemOnLaterBatch("Probe A", 2))
+
+    def test_it_names_the_batch_when_it_knows_which(self):
+        assert "batch 2" in str(NewItemOnLaterBatch("Probe A", 2))
+
+    def test_it_omits_the_SEQUENCE_rather_than_printing_a_blank_one(self):
+        """The prose says "the order's first batch" either way; what must not
+        appear is the parenthesised sequence with nothing in it."""
+        assert "(batch" not in str(NewItemOnLaterBatch("Probe A", None))
+        assert "(batch 2)" in str(NewItemOnLaterBatch("Probe A", 2))

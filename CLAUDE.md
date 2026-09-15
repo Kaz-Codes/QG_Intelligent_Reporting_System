@@ -386,14 +386,18 @@ allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
   a client that wants to must send `ordered_quantity`. Both are optional fields
   on `ConsignmentItemSchema` and both are published per item.
 - **A line that allocates against something the order already bought MUST send
-  `order_item_id`.** Without it the server reads the line as a NEW item on the
-  order — correct on the founding batch, wrong on a later one — and **silently
-  creates a second order line**. Measured: adding `{"item_name": "Probe A",
-  "quantity": 5}` to batch 2 of an order for 100 of Probe A returns 200 and
-  leaves the order claiming it bought **105**, with no error and nothing the
-  over-allocation check can see, because each line is within its own order line.
-  The id is validated against the order (`UnknownOrderLine`); an id that is
-  never sent cannot be.
+  `order_item_id`**, and since 8b-1 the server **refuses** the alternative:
+  a line with no `id` and no `order_item_id` on an order that has split raises
+  **`NewItemOnLaterBatch` (422)**, naming the item and how to fix it. The
+  founding batch stays permissive, because there a new item genuinely is a new
+  order line.
+  Before that guard it **silently created a second order line** — measured: one
+  extra line on batch 2 returned 200 and took an order from 33.523 ordered to
+  38.523, with nothing the over-allocation check can see, because each line is
+  within its own order line. **An EXISTING line was always safe**
+  (`resolve_order_line` reads the line's own column); only *adding* was the
+  trap. The wizard now round-trips `order_item_id` — it never carried it at
+  all — which is the real fix; the refusal catches the next client.
 
 **Numbering — `177` and `177-2`, and neither is the primary key.**
 
@@ -1311,18 +1315,19 @@ masters filter by **id**, enums/statuses by stored value. The contract:
   which promised a completeness check that no longer exists — see rule 8),
   `etd_from`/`etd_to`, `include_closed` (default false hides "Arrived at Works"
   and "Order Cancelled"), `include_deleted`, `q`, `page`, `page_size`.
-  **NO `batch_group_id` FILTER YET, and there needs to be one** — there is
-  currently no way to fetch an order's sibling batches, which the batching UI
-  needs to show an earlier batch's route locked above a later one. Worse than
-  missing: FastAPI drops an undeclared query param, so `?batch_group_id=21`
-  returns a full unfiltered page and *looks like it worked*. `?q=<instrument
-  number>` happens to return the siblings (it is on the group, so they share
-  it) but is not a substitute — it fails for an order with no number and
-  matches other orders containing the same substring.
-  **Nor a pending-allocation flag**, which the list's blue highlight needs; the
-  `allocation` block is detail-only on purpose (it reads `group.order_items`,
-  which the list does not load). Add a boolean computed in SQL, not the block.
-  Design §3.7b has both, measured.
+  **`include_batch_context`** (default false) adds **`has_pending_allocation`**
+  to every row — a correlated `EXISTS` over `consignment_order_items`, computed
+  for the whole page in one query and only when asked for, because only the
+  imports list wants it. `null` means "not asked", which is NOT `false`: a
+  caller that omits the flag must render no highlight rather than "fully
+  allocated". **It is a property of the ORDER** — every batch of an
+  under-allocated order reports true.
+  **Siblings are their own endpoint, `GET /consignments/{id}/batches`**, not a
+  `batch_group_id` filter (which §3.7b proposed and 8b-1 rejected): the list
+  carries the screen's own filters, paging and `include_closed`, so the
+  siblings of an order would come back a different set depending on what the
+  user had selected. The locked-above sections need all of them, always, in
+  sequence order.
 - **Logistics** `GET /logistics/`: `status[]`, `order_type[]`, `customer[]`,
   `gate_out_from`/`gate_out_to`, `include_deleted`, `q`, `page`, `page_size`.
 - **Trucking** `GET /trucking/`: `movement_type[]`, `source[]`, `open_only`,

@@ -79,7 +79,8 @@ def build_system_remarks(consignment):
 # THAT CAN BE SENT IN RESPONSE
 #---------------------------------------
 
-def serialize_consignment(consignment, db, include_change_history=True):
+def serialize_consignment(consignment, db, include_change_history=True,
+                          has_pending_allocation=None):
     #saved_consignment = fetch_consignment(db, consignment.id)
 
     data = {
@@ -94,6 +95,17 @@ def serialize_consignment(consignment, db, include_change_history=True):
         #
         "batch_group_id" : consignment.batch_group_id,
         "batch_sequence" : consignment.batch_sequence,
+
+        # DOES THIS ORDER STILL HAVE QUANTITY NOBODY HAS BATCHED?
+        #
+        # `None` means "not asked for", which is NOT the same as False and the
+        # front end must not read it as such - the list sends
+        # `include_batch_context=true` and gets a boolean; every other caller
+        # gets null and renders no highlight rather than a confident "fully
+        # allocated". Computed for a whole page in one query by the list route
+        # (helpers.pending_allocation_ids), never by this function, because
+        # deriving it here would mean loading `group.order_items` per row.
+        "has_pending_allocation" : has_pending_allocation,
 
         # THE SHIPMENT'S NUMBER: "177" while an order holds one batch, "177-2"
         # once it has split.

@@ -22,6 +22,8 @@ import {
   type ConsignmentDraft, type ConsignmentItem, type Payment,
 } from '../schema'
 import { MastersProvider, useMasters } from './MastersContext'
+import { BatchProvider } from './BatchContext'
+import type { ApiConsignment } from '@/lib/api/imports'
 import { WizardStepper } from '@/components/ui/WizardStepper'
 import { useStepNavigation } from '@/lib/useStepNavigation'
 import { Step1Consignment } from './steps/Step1Consignment'
@@ -100,6 +102,10 @@ function ImportsStatusWizardInner() {
   // else. `record_state` used to be read here too, as the second half of the
   // old two-part close test; it is not part of closing any more.
   const [originalStatus, setOriginalStatus] = useState('')
+  // THE RECORD ITSELF, kept alongside the draft. `apiToDraft` is lossy on
+  // purpose - it produces what the FORM edits - and the batching screens need
+  // what the form does not hold: the allocation, the freeze and the sequence.
+  const [record, setRecord] = useState<ApiConsignment | null>(null)
 
   const loadRecord = useCallback(() => {
     if (!id) return
@@ -109,6 +115,7 @@ function ImportsStatusWizardInner() {
     getConsignment(id)
       .then((c) => {
         setConsignmentId(c.id)
+        setRecord(c)
         setIsLocked(c.is_locked)
         setOriginalStatus(c.current_status ?? '')
         methods.reset(apiToDraft(c))
@@ -383,7 +390,8 @@ function ImportsStatusWizardInner() {
 
       <Card>
         <CardContent className="p-6">
-          <FormProvider {...methods}>
+          <BatchProvider record={record}>
+      <FormProvider {...methods}>
             <form onSubmit={(e) => e.preventDefault()}>
               <StepComponent />
 
@@ -425,6 +433,7 @@ function ImportsStatusWizardInner() {
               </div>
             </form>
           </FormProvider>
+      </BatchProvider>
         </CardContent>
       </Card>
 

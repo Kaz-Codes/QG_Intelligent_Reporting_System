@@ -31,6 +31,167 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 16 (step 8b-1 BUILT: the allocation screen)
+
+Step 7's API has been live with no way in. This is the way in: an operator can
+now see what an order bought, what each batch has taken, what is left, and turn
+the remainder into the next arrival.
+
+### The two API additions §3.7b named
+
+**`GET /consignments/{id}/batches`** — every live batch of the order, itself
+included, in sequence order, through the SAME serializer the list and detail
+use, so a sibling card and a list row cannot disagree about a batch.
+
+§3.7b proposed a `batch_group_id` filter on the list instead. **Built as an
+endpoint rather than a filter**, and the reason is worth keeping: the list
+carries the screen's own filters, its paging and its `include_closed` default,
+so "the siblings of this order" would come back a different set depending on
+what the user happened to have selected. The locked-above sections need all of
+them, always. An order holds a handful of batches, so there is nothing to page.
+
+**`include_batch_context=true` on the list** — adds `has_pending_allocation` to
+every row, a correlated `EXISTS` over `consignment_order_items`, computed for a
+whole page in one query and **only when asked for**. One flag rather than a
+family of them: whatever the batching screens need from a list row arrives
+under this, so the query gains one branch rather than one per field.
+
+Two properties that are easy to get wrong and are pinned:
+
+- **`null` is not `false`.** A list fetched without the flag publishes `null`,
+  and the front end renders no highlight rather than a confident "fully
+  allocated".
+- **It is a property of the ORDER.** Both `21-1` and `21-2` report `true` for
+  the same under-allocated order. Hiding it on all but one batch would mean
+  whether you saw it depended on which arrival you opened.
+
+### The duplicate order line — refused on the server as well
+
+§3.7b finding 3, reproduced before it was fixed rather than after. A
+wizard-shaped `PUT` adding one line to batch 2:
+
+```
+PUT /consignments/184   -> 200 OK
+order lines 40,41,42,43,44  ->  40,41,42,43,44, 456
+ordered 33.523 -> 38.523
+```
+
+No error, and the over-allocation CHECK cannot see it because each line sits
+inside its own order line: the sum grew and so did the limit.
+
+**`NewItemOnLaterBatch`, 422**, when a line has no `id`, no `order_item_id` and
+the order has split. The founding batch stays permissive — there a new item
+genuinely is a new order line. The message names the item and says how to fix
+it; an unnamed one reads "An unnamed item" rather than printing `None`.
+
+**The front end sending `order_item_id` is the real fix and is also built** —
+`orderItemId` now round-trips through `apiToDraft` → draft → `itemToPayload`.
+It had never existed in the wizard at all. The server refusal is what catches
+the next client, the same reasoning as the freeze's setattr guard.
+
+**An EXISTING line was always safe** — `resolve_order_line` reads the line's own
+column, so only *adding* was the trap. That narrowed the fix considerably and
+is why the ordinary save of batch 2 needed no change.
+
+### The screen
+
+Step 3 became allocation-aware rather than gaining a step. Top to bottom:
+the allocation table (item, ordered, allocated, outstanding — **quantity
+always, never weight**, with the unit beside it), the sibling batch cards with
+the current one marked, **Create next batch**, then earlier batches' route and
+schedule read-only, then this batch's own editable route.
+
+**A compact table, not a card grid.** Every row carries the same figures, so a
+table lets an operator scan the outstanding column down the page, which is the
+one question the screen exists to answer. Cards earn their place when a batch
+can hold per-batch specifications worth showing, and nothing produces those yet.
+
+**It reads the server's allocation, never the form's.** `allocated` is the sum
+across every batch and is owned by `reconcile_allocation`; the quantity in the
+form is one batch's line. Deriving the first from the second would be right on
+a single-batch order and silently wrong the moment one split.
+
+### The renumbering warning, with the numbers in it
+
+Fires on the Create confirm, before the POST, and only when the order currently
+holds one batch — the only case where a number changes. What it says:
+
+> This renames the consignment you are looking at.
+> **176 → 176-1**
+> The new batch will be 176-2. Anything already issued quoting 176 will need
+> the suffix. Numbers are permanent — deleting a batch later does not give 176
+> back.
+
+and the confirm button reads **"Create 176-2 and rename 176"**. On an
+already-split order it says instead that no existing number changes. After the
+call the panel reports what actually happened from the API's own `numbering`
+block — `176 is now 176-1`, `176-2 — new` — rather than the client diffing two
+fetches (§3.5a).
+
+### Two defects the browser found that nothing else would have
+
+Both produced a screen that disagreed with the database while returning 200.
+
+| | |
+|---|---|
+| **The allocation table was stale after a split** | `refresh()` re-fetched the siblings, but the allocation came from the record the wizard had loaded *before* the split. The database said allocated 15040 / outstanding 0; the screen said **40 outstanding**, with nothing to say which was right. `BatchProvider` now owns the detail and re-fetches it, seeded from the prop so the first paint costs no extra round trip. It deliberately does not reload the wizard's form — re-running `apiToDraft` would discard a route the operator had typed. |
+| **The header kept the old number** | The panel said "Batch created. 176 is now 176-1" while the heading two inches above still read **"Edit Consignment 176"**. Two numbers for one record on one screen, which is the whole failure the numbering rules exist to prevent. The header now moves from the API's `numbering` block, `shouldDirty: false` so an operator who edited nothing is not prompted about unsaved changes. |
+
+### The freeze, pulled forward from 8b-2
+
+It cost minutes rather than the hour budgeted, because the state was already
+served: `group_frozen` went onto the detail payload with the freeze itself
+(revision 15). Only the rendering was missing.
+
+A settled field **shows its value and removes the input** rather than disabling
+one — a disabled input still looks like something that could be enabled, while
+a value with a reason beside it reads as a fact about the order. And it renders
+**before the operator types**, which was the point of pulling it forward: a 423
+on save arrives after the work.
+
+**The tier lists are never restated in the browser.** `frozenReason()` asks
+`group_frozen.hard` / `.admin`, which the server publishes as payload keys. If
+a field moves tier, no front-end code changes.
+
+Covered: `currency` (Step 1), `exchange_rate`, `rate_booked_on`, `rate_source`
+(Step 2) for Tier 1; `supplier_id` and `origin` (Step 1) for Tier 2. Driven on
+a frozen order as an admin — the Tier 1 fields render settled and the Tier 2
+ones stay editable, which is the asymmetry §3.9 exists for.
+
+### What was driven, and what was not
+
+Against `scratch_8b` (clone of the 183-consignment dev database at
+`f3a91c60d28b`) with a split from `tests.batch_fixture` and a second order split
+**through the new screen**.
+
+Driven in the browser:
+
+- **a split through the UI**: order `175` → the modal previewing `175 → 175-1`
+  → confirm → `175 is now 175-1`, `175-2 — new`, header moves to
+  **"Edit Consignment 175-1"**, outstanding **40 Ton → 0 Ton**;
+- **over-allocation refused readably**: asking for 9999 of 40 returns the
+  server's own words — *"More has been allocated than the order holds. Neutral
+  Lining: 10005 allocated against 46 ordered (over by 9959)"*;
+- **batch 2 of a split order** (`21-2`): allocation table over five order lines,
+  sibling cards `21-1` / `21-2`, earlier-batch route read-only above its own;
+- **the frozen order**: Exchange rate and Rate date render **SETTLED** with
+  *"batch 21-1 has arrived at works… nobody can change it, including an admin"*;
+- **the list highlight**: 0 highlighted rows when nothing is pending, 1 when an
+  order is made under-allocated — confirmed against the API both times, so a
+  highlight that never fires cannot pass as "working".
+
+Suite: **194 pytest** (was 188), `configure_mappers()` clean,
+`check_group_freeze.py` 32/0, `check_batch_allocation.py` 50/0,
+`check_dashboard_consistency.py` 94/0, `tsc -b` clean.
+
+**NOT driven, and left for 8b-2:** `skipped_fields` reaching a human, the
+locked-above pattern on Step 6 (clearance) — only Step 3 has it — and the
+read-only treatment of shared fields on a later batch, which is a *different*
+rule from the freeze (the requirements say entered-once-on-batch-1; the freeze
+only bites once a batch has CLOSED). Price basis is 8b-3 and is untouched.
+
+---
+
 ## Changelog — revision 15 (§3.9 BUILT: the two-tier group freeze)
 
 Deferred from step 7, built here. **It is not preparation for 8b — it closes a
@@ -4596,6 +4757,23 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    > records are closed. List **31 → 179**, export **0 → 341 rows**, and the
    > export still matches the filter exactly.
 
+8b-1. **The allocation screen — BUILT, revision 16.** The two API additions
+   §3.7b named (`GET /{id}/batches`, `include_batch_context`), the
+   `order_item_id` round trip, the server-side refusal of a new item on a later
+   batch, Step 3's allocation table, batch creation, the renumbering warning
+   with the numbers in it, the pending-allocation highlight — and the freeze
+   RENDERING, pulled forward from 8b-2 because the state was already served.
+8b-2. **Still to do — rendering state the API already returns.** `skipped_fields`
+   reaching a human; the locked-above pattern on Step 6 (clearance), which only
+   Step 3 has; and the read-only treatment of shared fields on a later batch,
+   which is a DIFFERENT rule from the freeze — the requirements say
+   entered-once-on-batch-1, while the freeze only bites once a batch has closed.
+8b-3. **Still to do — price basis**, end to end. Independent of batching; the
+   design is settled in revision 14 and the measured trap is that adding the
+   three columns to `ConsignmentItemSchema` puts them in the item diff, where an
+   omitted `price_basis` writes NULL over a NOT NULL column — the same shape as
+   revision 13's `ordered_quantity` bug, so `SERVER_RESOLVED_ITEM_FIELDS` grows
+   in the same change.
 8c. **The group freeze (§3.9) — BUILT, revision 15.** Deferred from step 7 and
    taken before 8b, because 8b puts the allocation screen in front of operators
    and makes splitting reachable; the hole it closes was already live through

@@ -5,7 +5,9 @@ import {
   REQUISITION_TYPES, REQUISITION_FIELDS, CONSIGNMENT_TYPES, UNITS_OF_MEASURE, INCOTERMS,
   emptyItem, itemPendingFields, requiredVsEtaDelay,
 } from '../../schema'
-import { Field, Input, Select } from './fields'
+import { Field, FrozenField, Input, Select } from './fields'
+import { useBatchContext, frozenReason } from '../BatchContext'
+import { useAuth } from '@/features/auth/AuthContext'
 import { useMasters } from '../MastersContext'
 import { Disclosure } from '@/components/Disclosure'
 import { SearchableSelect, NotInMasterNote, type SearchableOption } from '@/components/ui/SearchableSelect'
@@ -214,6 +216,12 @@ export function Step1Consignment() {
   const supplierName = watch('supplier')
   const origin = watch('origin')
 
+  // Tier 2 lives on this step: supplier, origin, works/branch, type, incoterm.
+  // `frozen()` returns a reason or null; the lists are the server's.
+  const batchCtx = useBatchContext()
+  const { user } = useAuth()
+  const frozen = (key: string) => frozenReason(batchCtx, key, !!user?.isAdmin)
+
   return (
     <div className="space-y-5">
       {/* header */}
@@ -248,6 +256,9 @@ export function Step1Consignment() {
               rather than letting the field look accepted and come back empty.
               The old hint here claimed such a name "is kept", which was not
               true of any save. */}
+          {frozen('supplier_id') ? (
+            <FrozenField label="Supplier" value={supplierName} reason={frozen('supplier_id')!} />
+          ) : (
           <Field
             label="Supplier" htmlFor="supplier" required error={errors.supplier?.message}
             hint={mastersLoading ? 'Loading suppliers…' : undefined}
@@ -272,6 +283,7 @@ export function Step1Consignment() {
               <NotInMasterNote master="supplier master" stored="none" />
             )}
           </Field>
+          )}
 
           {/* EVERY COUNTRY, TYPE-TO-FILTER (requirements line 67), on the same
               SearchableSelect as supplier and the ports so the behaviour
@@ -291,6 +303,9 @@ export function Step1Consignment() {
               un-chosen value goes back untouched on blur (see its handleBlur),
               so nothing is blanked and no save is refused. A non-ISO value is
               flagged rather than mapped — see isIsoCountry. */}
+          {frozen('origin') ? (
+            <FrozenField label="Country of origin" value={origin} reason={frozen('origin')!} />
+          ) : (
           <Field label="Country of origin" htmlFor="origin" required error={errors.origin?.message}>
             <Controller
               control={control}
@@ -312,13 +327,21 @@ export function Step1Consignment() {
               </p>
             )}
           </Field>
+          )}
 
-          <Field label="Currency" htmlFor="currency" required error={errors.currency?.message}>
-            <Select id="currency" {...register('currency')}>
-              <option value="">Select…</option>
-              {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
-            </Select>
-          </Field>
+          {/* CURRENCY IS TIER 1. It sits on Step 1 rather than Finance, but it
+              is a valuation input like the rate — changing it after a batch has
+              arrived restates a stored total in a different unit. */}
+          {frozen('currency') ? (
+            <FrozenField label="Currency" value={watch('currency')} reason={frozen('currency')!} />
+          ) : (
+            <Field label="Currency" htmlFor="currency" required error={errors.currency?.message}>
+              <Select id="currency" {...register('currency')}>
+                <option value="">Select…</option>
+                {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
+              </Select>
+            </Field>
+          )}
 
           <Field label="Consignment type" htmlFor="consignmentType" hint="Can be filled later">
             <Select id="consignmentType" {...register('consignmentType')}>

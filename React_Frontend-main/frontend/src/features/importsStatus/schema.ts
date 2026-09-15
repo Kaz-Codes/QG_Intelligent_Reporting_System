@@ -135,6 +135,21 @@ export const consignmentItemSchema = z.object({
   moNo: optionalText,
   othersDescription: optionalText,
 
+  /** WHICH ORDER LINE THIS BATCH LINE ALLOCATES AGAINST — the id the server
+   *  needs to know that this line is a shipment of something the order already
+   *  bought, rather than a new item on the order.
+   *
+   *  Read-only in the wizard and never typed. It comes back on every fetch and
+   *  goes out on every save; the one thing that must not happen is it being
+   *  dropped in between, which is what made adding an item to batch 2 raise the
+   *  order's total by stealth (design §3.7b finding 3). */
+  orderItemId: optionalNumber,
+  /** What the ORDER bought for this line, across every batch. Shown on the
+   *  allocation table beside what this batch carries; only sent when the
+   *  operator changes it, since on an unsplit order the server keeps it in
+   *  step with `quantity` by itself. */
+  orderedQuantity: optionalNumber,
+
   // item
   itemId: optionalText,              // FK to item master once one exists
   itemName: z.string().default(''),
@@ -389,6 +404,11 @@ export type ConsignmentDraft = z.infer<typeof consignmentDraftSchema>
 export const emptyItem = (id: string): ConsignmentItem => ({
   id,
   backendId: undefined,
+  // A line the operator has just added has no order line yet. On the founding
+  // batch the server makes one; on a later batch it now refuses, which is the
+  // point — a new item belongs to the ORDER, not to an arrival.
+  orderItemId: undefined,
+  orderedQuantity: undefined,
   requisitionType: undefined,
   referenceNo: '', jobNo: '', moNo: '', othersDescription: '',
   itemId: '', itemName: '', placeholderName: '', itemCode: '', specification: '',
