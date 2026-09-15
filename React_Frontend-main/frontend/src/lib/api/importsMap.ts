@@ -648,7 +648,22 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
       // a line that loses its order line on the way through the wizard becomes
       // a new item on the order the next time it is saved.
       orderItemId: item.order_item_id ?? undefined,
-      orderedQuantity: toNumber(item.ordered_quantity) ?? undefined,
+      // `orderedQuantity` IS DELIBERATELY NOT READ IN.
+      //
+      // Loading it made every save carry a pinned order quantity, and that
+      // broke an ordinary edit: raising a quantity in Step 1 posted the OLD
+      // ordered figure beside the new line quantity, which is an
+      // over-allocation. Measured - "More has been allocated than the order
+      // holds. order line 435: 53 allocated against 3 ordered (over by 50)",
+      // 422, on a field that had always just worked.
+      //
+      // Left undefined, the server keeps deriving it from the line while the
+      // order holds one batch, so Step 1 behaves exactly as it always has.
+      // Step 3's allocation input is the one place that pins it, and it takes
+      // the figure from the ALLOCATION BLOCK - the server's own view of what
+      // the order bought - rather than from a draft copy that may be stale.
+      // That is the contract section 3.7b describes: a client that wants to
+      // change what was ordered has to say so.
       requisitionType: (item.requisition_type ? (REQ_TYPE_FROM_API[item.requisition_type] ?? undefined) : undefined) as DraftItem['requisitionType'],
       referenceNo: item.reference_number ?? '',
       jobNo: item.job_number ?? '',

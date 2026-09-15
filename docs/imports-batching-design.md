@@ -91,26 +91,69 @@ component that performs the save and has no other way to observe one.
 The column header explains which figures are live and which follow a save,
 because three of the five columns come from the server and one does not.
 
-### Driven end to end, on an untouched consignment
+### A regression the first fix introduced, found by driving Step 1
+
+Pinning `ordered_quantity` made the allocation screen work and **broke an
+ordinary edit**: `apiToDraft` read the order quantity into the draft, so every
+save carried it, so raising a quantity in Step 1 posted the OLD ordered figure
+beside the NEW line quantity — an over-allocation against the order's own
+record. Measured:
 
 ```
-Step 1 quantity          15000
-Step 3 before            Ordered 15000 | Allocated 15000 | Outstanding 0
-type 9000 in "This batch", save   -> PUT 200
-Step 3 after             Ordered 15000 | Allocated  9000 | Outstanding 6000
-create button                     -> enabled
-modal                             -> "183 -> 183-1", new batch 183-2
-after create             header "Edit Consignment 183-1"
-                         "183 is now 183-1" / "183-2 - new"
-                         Ordered 15000 | Allocated 15000 | Outstanding 0
+PUT items:[{quantity: 53, ordered_quantity: 3}]   ->  422
+"More has been allocated than the order holds.
+ order line 435: 53 allocated against 3 ordered (over by 50)"
+```
+
+A field that had always just worked began refusing. **`orderedQuantity` is
+therefore NOT read into the draft.** Left undefined, the server keeps deriving
+it from the line while the order holds one batch, so Step 1 behaves exactly as
+before; Step 3's allocation input is the only place that pins it, and it takes
+the figure from the **allocation block** — the server's own view of what the
+order bought — rather than from a draft copy that can be stale. That is the
+contract §3.7b describes: a client that wants to change what was ordered has to
+say so.
+
+### A bug reported mid-session and WITHDRAWN
+
+While driving, a live batch line was found pointing at a **soft-deleted order
+line** with `allocated_quantity = 0`, which looked like allocation corruption
+reachable from an ordinary save. It is not. **Consignments 180 and 181 are
+already soft-deleted in the source database**, and `allocation_totals`
+deliberately excludes a deleted batch's lines (its own docstring says so), so
+the order line correctly has nothing allocated to it and is correctly retired.
+The probe had picked deleted records. Recorded because the reasoning looked
+sound right up to the point of checking the untouched database, which is the
+step that settled it.
+
+One real observation survives and is NOT this change's: `PUT` on a
+soft-deleted consignment returns 200 and writes.
+
+### Driven end to end, on an untouched consignment
+
+Consignment 177, typing in Step 1 as an operator does rather than reading what
+was already there:
+
+```
+Step 1   quantity typed 400, saved          -> PUT 200 (no over-allocation)
+Step 3   before   Ordered 400 Ton | This batch 400 | Allocated 400 | Outstanding 0
+         reduce "This batch" to 250, save   -> PUT 200
+         after    Ordered 400 Ton | This batch 250 | Allocated 250 | Outstanding 150
+         create button                      -> enabled
+modal    "177 -> 177-1", new batch 177-2
+create                                      -> POST 200
+header   "Edit Consignment 177-1"
+result   "177 is now 177-1" / "177-2 - new"
+LIST     177-1 and 177-2, both adv4067
 ```
 
 and in the database, which is the part a screenshot cannot vouch for:
 
 ```
- id  | seq | this_batch | ordered  | allocated
- 183 |  1  |   9000.000 | 15000.000| 15000.000
- 184 |  2  |   6000.000 | 15000.000| 15000.000
+ id  | seq | this_batch | item                    | ordered | allocated
+ 177 |  1  |    250.000 | Exothermic Powder       | 400.000 |   400.000
+ 177 |  1  |    120.000 | Exothermic Riser Sleeve | 120.000 |   120.000
+ 184 |  2  |    150.000 | Exothermic Powder       | 400.000 |   400.000
 ```
 
 Suite: 194 pytest, `check_dashboard_consistency.py` 94/0,
