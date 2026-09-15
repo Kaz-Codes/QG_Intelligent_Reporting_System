@@ -4,6 +4,7 @@ import {
   emptyPayment, foreignTotal, paidTotal, unpaidTotal, bankChargesTotal,
 } from '../../schema'
 import { Field, Input, Select, Callout, CarriedContext } from './fields'
+import { EnteredOnBatchOne } from './EnteredOnBatchOne'
 
 const fx = (v: number, code: string | undefined) =>
   `${code || ''} ${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim()
@@ -33,6 +34,7 @@ export function Step4Payments() {
   const outstanding = total - paid - unpaid
 
   return (
+    <EnteredOnBatchOne what="Payments">
     <div className="space-y-5">
       <CarriedContext items={[
         { label: 'Instrument', value: instrument || '—' },
@@ -120,5 +122,6 @@ export function Step4Payments() {
         step 7.
       </Callout>
     </div>
+    </EnteredOnBatchOne>
   )
 }

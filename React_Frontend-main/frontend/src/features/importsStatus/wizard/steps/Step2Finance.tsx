@@ -4,6 +4,7 @@ import {
   foreignTotal, localTotal, lineTotal,
 } from '../../schema'
 import { Field, FrozenField, Input, Select, Callout, CarriedContext } from './fields'
+import { EnteredOnBatchOne } from './EnteredOnBatchOne'
 import { useBatchContext, frozenReason } from '../BatchContext'
 import { useAuth } from '@/features/auth/AuthContext'
 
@@ -38,6 +39,7 @@ export function Step2Finance() {
   const totalLocal = localTotal(draft)
 
   return (
+    <EnteredOnBatchOne what="Finance">
     <div className="space-y-5">
       <CarriedContext items={[
         { label: 'Supplier', value: watch('supplier') },
@@ -56,6 +58,7 @@ export function Step2Finance() {
               <tr>
                 <th className="px-2 py-1.5 text-left font-medium">Item</th>
                 <th className="px-2 py-1.5 text-right font-medium">Quantity</th>
+                <th className="px-2 py-1.5 text-center font-medium">Priced by</th>
                 <th className="px-2 py-1.5 text-right font-medium">Unit price ({currency || 'foreign'})</th>
                 <th className="px-2 py-1.5 text-right font-medium">Line total</th>
               </tr>
@@ -70,28 +73,63 @@ export function Step2Finance() {
                   <td className="px-2 py-2 text-right tabular-nums">
                     {it.quantity ?? '—'} <span className="text-muted">{it.uom}</span>
                   </td>
+                  {/* PRICED BY — per item, because one consignment can carry a
+                      bar sold per piece and a powder sold per kilo. */}
+                  <td className="px-2 py-2 text-center">
+                    <Select
+                      className="w-28"
+                      aria-label={`How ${it.itemName || `item ${i + 1}`} is priced`}
+                      {...register(`items.${i}.priceBasis`)}
+                    >
+                      <option value="quantity">Quantity</option>
+                      <option value="weight">Weight</option>
+                    </Select>
+                  </td>
+                  {/* ONE PRICE FIELD, NOT TWO SIDE BY SIDE. The unused basis's
+                      price is not read at all, so showing it would leave a
+                      number on screen that nothing multiplies - which is the
+                      thing the requirements ask to make visible rather than
+                      hide. Swapping the input says it plainly. */}
                   <td className="px-2 py-2">
-                    <Input
-                      type="number" min="0" step="any" className="text-right tabular-nums"
-                      {...register(`items.${i}.foreignUnitPrice`)}
-                      placeholder="0.00"
-                    />
+                    {it.priceBasis === 'weight' ? (
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="number" min="0" step="any" className="text-right tabular-nums"
+                          aria-label={`Weight per unit of ${it.itemName || `item ${i + 1}`} in kg`}
+                          {...register(`items.${i}.unitWeight`)}
+                          placeholder="kg / unit"
+                        />
+                        <span className="text-[11px] text-muted">×</span>
+                        <Input
+                          type="number" min="0" step="any" className="text-right tabular-nums"
+                          aria-label={`Price per kg of ${it.itemName || `item ${i + 1}`}`}
+                          {...register(`items.${i}.weightUnitPrice`)}
+                          placeholder="per kg"
+                        />
+                      </div>
+                    ) : (
+                      <Input
+                        type="number" min="0" step="any" className="text-right tabular-nums"
+                        {...register(`items.${i}.foreignUnitPrice`)}
+                        placeholder="0.00"
+                      />
+                    )}
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">{fx(lineTotal(it), currency)}</td>
                 </tr>
               ))}
               {items.length === 0 && (
-                <tr><td colSpan={4} className="px-2 py-6 text-center text-muted">Add items in step 1 first.</td></tr>
+                <tr><td colSpan={5} className="px-2 py-6 text-center text-muted">Add items in step 1 first.</td></tr>
               )}
             </tbody>
             <tfoot>
               <tr className="border-t-2 border-line font-semibold">
-                <td className="px-2 py-2" colSpan={3}>Consignment total</td>
+                <td className="px-2 py-2" colSpan={4}>Consignment total</td>
                 <td className="px-2 py-2 text-right tabular-nums">{fx(totalForeign, currency)}</td>
               </tr>
               {rate !== undefined && (
                 <tr className="text-muted">
-                  <td className="px-2 py-1" colSpan={3}>In PKR at {rate}</td>
+                  <td className="px-2 py-1" colSpan={4}>In PKR at {rate}</td>
                   <td className="px-2 py-1 text-right tabular-nums">{pkr(totalLocal)}</td>
                 </tr>
               )}
@@ -173,5 +211,6 @@ export function Step2Finance() {
         so a report printed today and one printed next month show the same figure.
       </Callout>
     </div>
+    </EnteredOnBatchOne>
   )
 }

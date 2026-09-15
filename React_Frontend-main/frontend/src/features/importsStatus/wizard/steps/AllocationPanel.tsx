@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useFormContext } from 'react-hook-form'
+import { useFormContext, useWatch } from 'react-hook-form'
 import { createBatchApi, type BatchNumbering } from '@/lib/api/imports'
 import { ApiError } from '@/lib/api/client'
 import { Button } from '@/components/ui/button'
@@ -40,7 +40,10 @@ function qty(v: string | number | null | undefined, unit: string | null): string
 }
 
 export function AllocationPanel() {
-  const { watch, setValue } = useFormContext<ConsignmentDraft>()
+  const { watch, setValue, control } = useFormContext<ConsignmentDraft>()
+  // The draft's own lines, so the "this batch" column is live form state
+  // rather than a second copy of it.
+  const draftItems = useWatch({ control, name: 'items' }) ?? []
   const ctx = useBatchContext()
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -131,12 +134,22 @@ export function AllocationPanel() {
         )}
       </h3>
 
+      <p className="border-b border-line px-4 py-2 text-xs text-muted">
+        <span className="font-medium text-ink">This batch</span> is how much of
+        the order this shipment carries — lower it to leave the rest for a later
+        arrival. <span className="font-medium text-ink">Allocated</span> and{' '}
+        <span className="font-medium text-ink">Outstanding</span> are what the
+        server holds across every batch, so they follow a save rather than the
+        box beside them.
+      </p>
+
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-canvas-alt text-xs text-muted">
             <tr>
               <th className="px-3 py-2 text-left font-medium">Item</th>
               <th className="px-3 py-2 text-right font-medium">Ordered</th>
+              <th className="px-3 py-2 text-right font-medium">This batch</th>
               <th className="px-3 py-2 text-right font-medium">Allocated</th>
               <th className="px-3 py-2 text-right font-medium">Outstanding</th>
             </tr>
@@ -144,6 +157,11 @@ export function AllocationPanel() {
           <tbody>
             {rows.map((r) => {
               const out = n(r.outstanding_quantity)
+              // THIS BATCH'S OWN LINE, matched by order line rather than by
+              // position: a batch carries SOME of the order's lines, not all
+              // of them in the same order.
+              const idx = draftItems.findIndex((it) => it?.orderItemId === r.order_item_id)
+              const mine = idx >= 0 ? draftItems[idx] : null
               return (
                 <tr key={r.order_item_id} className="border-t border-line">
                   <td className="px-3 py-2">
@@ -152,6 +170,31 @@ export function AllocationPanel() {
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {qty(r.ordered_quantity, r.unit_of_measurement)}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {mine ? (
+                      <input
+                        type="number" min="0" step="any"
+                        aria-label={`Quantity of ${r.item || 'this item'} in this batch`}
+                        className="w-28 rounded border border-line bg-canvas px-2 py-1 text-right tabular-nums"
+                        value={mine.quantity ?? ''}
+                        onChange={(e) => {
+                          const next = e.target.value === '' ? undefined : Number(e.target.value)
+                          // PIN WHAT THE ORDER BOUGHT BEFORE CHANGING WHAT THIS
+                          // BATCH CARRIES. Until this is set the server derives
+                          // the order quantity FROM the line, so lowering the
+                          // line would shrink the order and leave nothing
+                          // outstanding — which is precisely why an order could
+                          // not be split from the UI at all.
+                          if (mine.orderedQuantity == null) {
+                            setValue(`items.${idx}.orderedQuantity`, n(r.ordered_quantity), { shouldDirty: true })
+                          }
+                          setValue(`items.${idx}.quantity`, next, { shouldDirty: true })
+                        }}
+                      />
+                    ) : (
+                      <span className="text-xs text-muted">not on this batch</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {qty(r.allocated_quantity, r.unit_of_measurement)}

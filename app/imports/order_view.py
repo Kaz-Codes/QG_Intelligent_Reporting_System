@@ -26,6 +26,9 @@ not `.supplier`, so a reader can see the value belongs to the order. That
 distinction is the whole point: the navigation is hidden, the OWNERSHIP is not.
 """
 
+from app.enums import PriceBasis
+
+
 
 def order_of(consignment):
     """The order a batch belongs to. None only on an unsaved object."""
@@ -176,6 +179,73 @@ def line_hs_code(line):
 
 def line_unit_price(line):
     return _line_field(line, "unit_price")
+
+
+#---------------------------------------------------------------------------
+# HOW A LINE IS PRICED - enums.PriceBasis, design revision 14
+#
+#     quantity basis   quantity x unit_price
+#     weight   basis   quantity x unit_weight x weight_unit_price
+#
+# THE BASIS SELECTS THE RATE; THE PER-BATCH QUANTITY KEEPS DOING THE
+# MULTIPLYING. That is the whole design answer and it is why nothing else
+# moved: `unit_weight` is kilograms PER UNIT (models.py says so explicitly,
+# against `ConsignmentItem.net_weight`, which is the batch's TOTAL), so both
+# formulas are `quantity x (something per unit)`. `recompute_derived` stays
+# where it is, and two batches of one order still sum to the order's value.
+#
+# THE WRONG ANSWER, named so nobody proposes it later: valuing on
+# `ConsignmentItem.net_weight x weight_unit_price` - the batch's MEASURED total
+# weight. It looks more accurate and is not. `net_weight` is entered after
+# arrival and is NULL on nearly every line, so a line would value at nothing
+# until somebody weighed it and an order's value would drift as weights came
+# in; and it double-counts the moment anyone multiplies by quantity again.
+#
+# ONE FIELD IS AUTHORITATIVE, THE OTHER IS NOT READ. Under the weight basis
+# `unit_price` is ignored entirely, and vice versa. The stored value is never a
+# blend of the two, which is what keeps a column of unit prices summable.
+#---------------------------------------------------------------------------
+
+def line_price_basis(line):
+    """Which formula this line is priced by. Defaults to quantity.
+
+    NOT NULL with a server default, so the fallback is defensive rather than
+    load-bearing - an in-session object whose attribute has been expired reads
+    None, and a valuation is not the place to discover that.
+    """
+    basis = _line_field(line, "price_basis")
+    return basis or PriceBasis.QUANTITY.value
+
+
+def line_weight_unit_price(line):
+    return _line_field(line, "weight_unit_price")
+
+
+def line_unit_weight(line):
+    return _line_field(line, "unit_weight")
+
+
+def line_effective_unit_price(line):
+    """What one unit of this line costs, whichever basis it is priced on.
+
+    THE ONE PYTHON DEFINITION. Every Python valuation multiplies the batch
+    line's quantity by this, so a basis change reaches `recompute_derived`, the
+    two dashboard figures and the reports column without any of them knowing
+    the rule.
+
+    RETURNS None RATHER THAN ZERO when the basis is weight and either input is
+    missing. A weight-priced line with no weight is a line nobody has finished
+    entering, and every caller already skips a None price - a 0 would quietly
+    value it at nothing and make the consignment total look complete.
+    """
+    if line_price_basis(line) == PriceBasis.WEIGHT.value:
+        unit_weight = line_unit_weight(line)
+        per_kg = line_weight_unit_price(line)
+        if unit_weight is None or per_kg is None:
+            return None
+        return unit_weight * per_kg
+
+    return line_unit_price(line)
 
 
 def line_uom(line):

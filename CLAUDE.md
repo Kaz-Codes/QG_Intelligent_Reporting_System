@@ -385,6 +385,15 @@ allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
   **after a split, posting `quantity` alone can never change what was ordered**;
   a client that wants to must send `ordered_quantity`. Both are optional fields
   on `ConsignmentItemSchema` and both are published per item.
+  - **AND A CLIENT THAT SENDS ONLY `quantity` CAN NEVER LEAVE ANYTHING
+    OUTSTANDING**, which is the same rule read from the other end and is worth
+    stating separately because it cost a release. Entering 15000 on an unsplit
+    order sets ordered 15000 *and* allocated 15000 → outstanding 0 → the
+    allocation screen's "Create next batch" is correctly disabled and no order
+    can be split from the UI at all. The wizard therefore **pins
+    `ordered_quantity`** the first time Step 3's "This batch" input is touched,
+    after which the two move independently. A consignment nobody splits sends
+    nothing new.
 - **A line that allocates against something the order already bought MUST send
   `order_item_id`**, and since 8b-1 the server **refuses** the alternative:
   a line with no `id` and no `order_item_id` on an order that has split raises
@@ -1444,6 +1453,33 @@ from the list by default. **Enum values are Title Case and must match the fronte
 
 **10. Free text is banned for anything reported on** — masters instead (except
 `works`, which is deliberately free text on the consignment).
+
+**11a. HOW A LINE IS PRICED — `price_basis`, per order line (built, revision 18).**
+
+    quantity basis   quantity x unit_price
+    weight   basis   quantity x unit_weight x weight_unit_price
+
+The **basis selects the RATE; the per-batch quantity keeps doing the
+multiplying** — `unit_weight` is kilograms PER UNIT (not
+`ConsignmentItem.net_weight`, which is the line's total), so both formulas are
+`quantity x (something per unit)` and `recompute_derived` did not move.
+
+- **One Python definition, `order_view.line_effective_unit_price`**, called by
+  all four Python valuation sites; **one SQL twin**,
+  `dashboard/imports/helpers.LINE_EFFECTIVE_UNIT_PRICE`, imported by the three
+  aggregates. The rule exists twice because a Python helper cannot be pushed
+  into a SQL aggregate; `tests/test_price_basis.py` evaluates the two against
+  each other, which is what keeps a duplicated rule honest.
+- **Whichever basis is chosen, the OTHER price is not read.** A stored value in
+  the unused field is inert, and the form swaps the input rather than showing
+  both so nothing sits on screen that nothing multiplies.
+- **An incomplete weight line is NULL, never 0** — it drops out of the total in
+  Python and in SQL alike. A 0 would make a consignment look complete.
+- **`price_basis` is NOT NULL and is in `SERVER_RESOLVED_ITEM_FIELDS`**, so an
+  absent key leaves it alone. **BOTH writers of the order line must test
+  `model_fields_set`** — `updated_items` (the diff) and `posted_item_payloads`
+  (which feeds `sync_order_item_from_line` from `model_dump()`). Guarding only
+  the first was a 500 on an ordinary save.
 
 **11. ELC and ALC are manual, per-item, never calculated.** Goods value, bank
 charges and demurrage are reference figures only, never summed into them. Record

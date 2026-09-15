@@ -454,9 +454,20 @@ function itemToPayload(item: DraftItem): ConsignmentItemPayload {
     // the backend guard existed — one added line on batch 2 took an order from
     // 33.523 to 38.523 with a 200 response (design §3.7b finding 3).
     order_item_id: item.orderItemId ?? null,
-    // Only when the operator actually changed it. On an unsplit order the
-    // server keeps `ordered_quantity` in step with `quantity` on its own, and
-    // sending a stale copy back would freeze it at whatever was last fetched.
+    // SENT WHENEVER THE LINE HAS ONE, AND THAT IS WHAT MAKES A SPLIT POSSIBLE.
+    //
+    // `resolve_ordered_quantity` makes the ORDER's quantity follow the line's
+    // while an order holds one batch. So a wizard that sends only `quantity`
+    // can never leave anything outstanding: entering 15000 in Step 1 set
+    // ordered 15000 AND allocated 15000, the allocation table read
+    // "Outstanding 0", and "Create next batch" was correctly disabled for ever.
+    // Measured in the browser - the button fired no request and logged no
+    // error, because there was genuinely nothing to allocate.
+    //
+    // Sending it PINS what the order bought, so lowering this batch's quantity
+    // in Step 3 leaves a remainder instead of shrinking the order. It is unset
+    // until Step 3's allocation input is touched, so a consignment nobody
+    // splits behaves exactly as before and the server keeps deriving it.
     ordered_quantity: numGt0(item.orderedQuantity),
     item_name: strOrUndef(item.itemName),
     placeholder_name: strOrUndef(item.placeholderName),
@@ -467,7 +478,16 @@ function itemToPayload(item: DraftItem): ConsignmentItemPayload {
     unit_of_measurement: strOrUndef(item.uom),
     batch_no: strOrUndef(item.batchNo),
     requisition_type: item.requisitionType ? REQ_TYPE_TO_API[item.requisitionType] : undefined,
+    // THE BASIS AND BOTH PRICES. `price_basis` is NOT NULL server-side and is
+    // in SERVER_RESOLVED_ITEM_FIELDS, so omitting it would leave it alone
+    // rather than clearing it - but the form always knows it, so it always
+    // goes. The unused basis's price is sent as whatever the line still holds;
+    // the server does not read it, and clearing it would throw away a value
+    // the operator may want back when they switch the toggle again.
+    price_basis: item.priceBasis ?? 'quantity',
     unit_price: numGt0(item.foreignUnitPrice),
+    weight_unit_price: numGt0(item.weightUnitPrice),
+    unit_weight: numGt0(item.unitWeight),
     net_weight: numGe0(item.netWeight),
     gross_weight: numGe0(item.grossWeight),
     length: numGe0(item.length),
@@ -637,7 +657,25 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
       // a line that loses its order line on the way through the wizard becomes
       // a new item on the order the next time it is saved.
       orderItemId: item.order_item_id ?? undefined,
-      orderedQuantity: toNumber(item.ordered_quantity) ?? undefined,
+      priceBasis: (item.price_basis === 'weight' ? 'weight' : 'quantity'),
+      weightUnitPrice: toNumber(item.weight_unit_price) ?? undefined,
+      unitWeight: toNumber(item.unit_weight) ?? undefined,
+      // `orderedQuantity` IS DELIBERATELY NOT READ IN.
+      //
+      // Loading it made every save carry a pinned order quantity, and that
+      // broke an ordinary edit: raising a quantity in Step 1 posted the OLD
+      // ordered figure beside the new line quantity, which is an
+      // over-allocation. Measured - "More has been allocated than the order
+      // holds. order line 435: 53 allocated against 3 ordered (over by 50)",
+      // 422, on a field that had always just worked.
+      //
+      // Left undefined, the server keeps deriving it from the line while the
+      // order holds one batch, so Step 1 behaves exactly as it always has.
+      // Step 3's allocation input is the one place that pins it, and it takes
+      // the figure from the ALLOCATION BLOCK - the server's own view of what
+      // the order bought - rather than from a draft copy that may be stale.
+      // That is the contract section 3.7b describes: a client that wants to
+      // change what was ordered has to say so.
       requisitionType: (item.requisition_type ? (REQ_TYPE_FROM_API[item.requisition_type] ?? undefined) : undefined) as DraftItem['requisitionType'],
       referenceNo: item.reference_number ?? '',
       jobNo: item.job_number ?? '',

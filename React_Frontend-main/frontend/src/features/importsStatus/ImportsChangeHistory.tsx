@@ -7,6 +7,8 @@ import { ChangeHistoryCard } from '@/components/changeHistory/ChangeHistoryCard'
 import { RevertConfirmDialog } from '@/components/changeHistory/RevertConfirmDialog'
 import { useAuth } from '@/features/auth/AuthContext'
 import { ApiError } from '@/lib/api/client'
+import { fieldLabel } from '@/lib/api/importsChangeHistoryMap'
+import type { RevertOutcome } from '@/lib/api/imports'
 import {
   getConsignment, getConsignmentChangeHistory, revertConsignmentUpdate,
   type ApiConsignment, type ApiChangeHistoryEntry,
@@ -63,6 +65,9 @@ export function ImportsChangeHistory() {
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [revertingId, setRevertingId] = useState<string | null>(null)
+  // What the last revert could not put back. Null when everything came
+  // back, which is the ordinary case.
+  const [skipped, setSkipped] = useState<RevertOutcome | null>(null)
   const [confirmEntry, setConfirmEntry] = useState<ChangeHistoryEntry | null>(null)
 
   // Masters resolve the FK columns (branch_id -> "QCL"); they never change
@@ -138,9 +143,23 @@ export function ImportsChangeHistory() {
     if (!id) return
     setRevertingId(entryId)
     setError(null)
+    setSkipped(null)
     try {
-      await revertConsignmentUpdate(id, entryId)
+      const outcome = await revertConsignmentUpdate(id, entryId)
       setConfirmEntry(null)
+      // WHAT DID NOT COME BACK, TO THE PERSON WHO PRESSED THE BUTTON.
+      //
+      // The API has returned `skipped_fields` since part 4 and nothing ever
+      // rendered it: `revertConsignmentUpdate` returned `res.data` and dropped
+      // the rest. So a revert that restored four fields and refused a fifth
+      // said "Consignment reverted" and left the operator with no way to learn
+      // which — and since the group freeze there are two reasons a field can be
+      // refused, both of which they can act on.
+      //
+      // Held in state rather than shown as a toast: it is a statement about the
+      // record now in front of them, and it should still be readable after they
+      // have finished reading the history rows it refers to.
+      setSkipped(outcome.skippedFields.length ? outcome : null)
       // Reverting writes is_reverted on the row and moves the revertable
       // entry one step back, so re-read rather than patching state locally.
       await load()
@@ -199,6 +218,37 @@ export function ImportsChangeHistory() {
         <div className="flex items-center gap-3 rounded-lg bg-risk-bg px-3 py-2 text-sm text-risk">
           <span>{error}</span>
           <button type="button" onClick={() => void load()} className="underline">Retry</button>
+        </div>
+      )}
+
+      {/* A PARTIAL REVERT SAYS SO. Amber, not red: the revert SUCCEEDED and
+          everything else is back — this is the part that could not be, with the
+          server's own reason per field. */}
+      {skipped && (
+        <div className="rounded-lg border border-[var(--color-watch)]/40 bg-[var(--color-watch)]/10 px-3 py-2.5 text-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-medium text-ink">
+                Reverted, except {skipped.skippedFields.length} field
+                {skipped.skippedFields.length === 1 ? '' : 's'}. Everything else was restored.
+              </div>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted">
+                {skipped.skippedFields.map((key) => (
+                  <li key={key}>
+                    <span className="font-medium text-ink">{fieldLabel(key)}</span>
+                    {' — '}{skipped.skippedDetail[key] ?? 'could not be restored'}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSkipped(null)}
+              className="shrink-0 text-xs text-muted underline"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 

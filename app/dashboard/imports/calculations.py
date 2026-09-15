@@ -7,7 +7,7 @@ from app.enums import Status
 from app.imports.demand_dates import earliest_required_date
 from app.imports.order_view import (
     line_category, line_item_master, line_item_name,
-    line_unit_price, order_branch_name, order_exchange_rate, order_origin,
+    line_effective_unit_price, order_branch_name, order_exchange_rate, order_origin,
     order_supplier_id, order_supplier_name, reference_label,
     reference_label_from,
     order_type,
@@ -55,8 +55,9 @@ def computed_value_pkr(consignment):
     for item in consignment.items:
         if item.is_deleted:
             continue
-        if item.quantity is not None and line_unit_price(item) is not None:
-            foreign_total += item.quantity * line_unit_price(item)
+        rate_per_unit = line_effective_unit_price(item)
+        if item.quantity is not None and rate_per_unit is not None:
+            foreign_total += item.quantity * rate_per_unit
             priced = True
 
     if not priced or order_exchange_rate(consignment) is None:
@@ -511,11 +512,12 @@ def shafts_value(consignments, page=None, page_size=None):
         missing = False
 
         for item in shaft_lines:
-            if (item.quantity is None or line_unit_price(item) is None
+            if (item.quantity is None or line_effective_unit_price(item) is None
                     or order_exchange_rate(consignment) is None):
                 missing = True
                 continue
-            total += item.quantity * line_unit_price(item) * order_exchange_rate(consignment)
+            total += (item.quantity * line_effective_unit_price(item)
+                      * order_exchange_rate(consignment))
 
         if missing:
             incomplete += 1

@@ -51,6 +51,16 @@ const SECTION_LABELS: Record<string, string> = {
  *  the form does. */
 const SECTION_ORDER = Object.keys(SECTION_LABELS)
 
+/** What a payload key is CALLED on screen.
+ *
+ *  Exported so the revert notice can say "Country of origin" rather than
+ *  "origin" — the same words the change-history rows beside it use, because a
+ *  notice that names a field differently from the table under it makes the
+ *  reader hunt for a third thing. */
+export function fieldLabel(key: string): string {
+  return FIELD_META[key]?.label ?? ITEM_META[key]?.label ?? PAYMENT_META[key]?.label ?? key
+}
+
 const FIELD_META: Record<string, FieldMeta> = {
   // --- 1. consignment ---
   branch_id: { section: 'consignment', label: 'Branch', kind: 'master', master: 'branch' },

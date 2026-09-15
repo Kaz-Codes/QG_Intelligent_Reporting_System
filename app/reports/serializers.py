@@ -11,7 +11,7 @@ from app.imports.order_view import (
     line_category, line_hs_code, line_item_code,
     line_item_master, line_item_name, line_job_number,
     line_mo_number, line_reference_number, line_requisition_type,
-    line_unit_price, line_uom, order_branch_name,
+    line_effective_unit_price, line_unit_price, line_uom, order_branch_name,
     order_currency, order_exchange_rate, order_incoterm,
     order_origin, order_payment_instrument, reference_label,
     order_supplier_name, order_type,
@@ -87,9 +87,9 @@ def _line_value_pkr(ci, c):
     5-line consignment's full total on each of its 5 rows would 5x it the
     moment someone sums the Value column."""
     rate = order_exchange_rate(c)
-    if ci.quantity is None or line_unit_price(ci) is None or rate is None:
+    if ci.quantity is None or line_effective_unit_price(ci) is None or rate is None:
         return None
-    return ci.quantity * line_unit_price(ci) * rate
+    return ci.quantity * line_effective_unit_price(ci) * rate
 
 
 #-------------------------------------
