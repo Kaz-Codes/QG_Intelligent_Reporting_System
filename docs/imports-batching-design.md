@@ -31,6 +31,94 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 17 (the allocation screen could not split anything)
+
+Two problems reported from the browser after revision 16 shipped. **They were
+one bug**, and the second was the first wearing a different face.
+
+### What was actually wrong
+
+`resolve_ordered_quantity` makes the ORDER's quantity follow the line's while
+an order holds one batch — which is what let the existing wizard work unchanged
+through step 7. The consequence nobody had followed through: **a client that
+sends only `quantity` can never leave anything outstanding.** Entering 15000 in
+Step 1 set ordered 15000 AND allocated 15000, so the allocation table read
+
+```
+Ordered 15000 Kg   Allocated 15000 Kg   Outstanding 0 Kg
+```
+
+and "Create next batch" was correctly disabled, for ever, on every order in the
+system.
+
+**The second report — "the create control does nothing" — was that.** Driven
+before anything was changed: the button was `disabled: true`, fired **no
+request**, logged **no error**, and its own hint said *"Everything this order
+bought is allocated to a batch."* It was refusing because there was genuinely
+nothing to allocate. Establishing that first is what stopped a second, wrong
+fix being written for it.
+
+§3.7b predicted this in as many words — *"If the UI is to let anyone raise or
+lower the order quantity afterwards — and it must — it has to send
+`ordered_quantity` explicitly."* Revision 16 read that section, built against
+it, and still missed it, because **every test bumped `ordered_quantity` by SQL
+to create something to allocate.** The workaround was the evidence: a fixture
+that has to reach past the UI to produce the state the UI exists to produce is
+a fixture saying the UI cannot produce it. That should have been reported at
+the time rather than worked around.
+
+### The fix
+
+**Step 3's allocation table gains an editable "This batch" column**, bound to
+the draft line's own quantity and matched to its order line by `orderItemId`
+rather than by position — a batch carries SOME of an order's lines, not all of
+them in the same order.
+
+**Editing it pins `ordered_quantity` first.** Until the operator distinguishes
+the two, the server keeps deriving the order's quantity from the line, so
+lowering the line would shrink the ORDER and still leave nothing outstanding.
+The first edit writes the order's current figure into `orderedQuantity`, which
+`itemToPayload` then sends; after that the two move independently. A
+consignment nobody splits sends nothing new and behaves exactly as before.
+
+**The panel refreshes after every save, and the refresh lives in `saveDraft`.**
+Allocated and outstanding are server state and a save is what moves them. There
+are three save paths — save, save-and-next, submit — and putting the refresh at
+one call site is how a panel ends up fresh on one button and stale on another.
+A `reloadKey` prop carries it into the provider, which renders inside the
+component that performs the save and has no other way to observe one.
+
+The column header explains which figures are live and which follow a save,
+because three of the five columns come from the server and one does not.
+
+### Driven end to end, on an untouched consignment
+
+```
+Step 1 quantity          15000
+Step 3 before            Ordered 15000 | Allocated 15000 | Outstanding 0
+type 9000 in "This batch", save   -> PUT 200
+Step 3 after             Ordered 15000 | Allocated  9000 | Outstanding 6000
+create button                     -> enabled
+modal                             -> "183 -> 183-1", new batch 183-2
+after create             header "Edit Consignment 183-1"
+                         "183 is now 183-1" / "183-2 - new"
+                         Ordered 15000 | Allocated 15000 | Outstanding 0
+```
+
+and in the database, which is the part a screenshot cannot vouch for:
+
+```
+ id  | seq | this_batch | ordered  | allocated
+ 183 |  1  |   9000.000 | 15000.000| 15000.000
+ 184 |  2  |   6000.000 | 15000.000| 15000.000
+```
+
+Suite: 194 pytest, `check_dashboard_consistency.py` 94/0,
+`check_group_freeze.py` 32/0, `check_batch_allocation.py` 50/0,
+`configure_mappers()` clean, `tsc -b` clean.
+
+---
+
 ## Changelog — revision 16 (step 8b-1 BUILT: the allocation screen)
 
 Step 7's API has been live with no way in. This is the way in: an operator can

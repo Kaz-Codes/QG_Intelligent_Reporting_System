@@ -106,6 +106,9 @@ function ImportsStatusWizardInner() {
   // purpose - it produces what the FORM edits - and the batching screens need
   // what the form does not hold: the allocation, the freeze and the sequence.
   const [record, setRecord] = useState<ApiConsignment | null>(null)
+  // Bumped after every successful save so the allocation panel re-reads what
+  // the server now holds. See BatchProvider.
+  const [batchReloadKey, setBatchReloadKey] = useState(0)
 
   const loadRecord = useCallback(() => {
     if (!id) return
@@ -237,6 +240,10 @@ function ImportsStatusWizardInner() {
       methods.setValue('items', syncItemBackendIds(currentItems, response.items), { shouldDirty: false })
       methods.setValue('payments', syncPaymentBackendIds(currentPayments, response.payments), { shouldDirty: false })
 
+      // IN saveDraft, NOT AT ITS CALL SITES. There are three of them - save,
+      // save-and-next, and submit - and putting it at one is how the panel
+      // ends up fresh on one button and stale on another.
+      setBatchReloadKey((k) => k + 1)
       return { id: response.id, isLocked: response.is_locked }
     } catch (err) {
       setSaveErrorMsg(err instanceof Error ? err.message : 'Could not save')
@@ -390,7 +397,7 @@ function ImportsStatusWizardInner() {
 
       <Card>
         <CardContent className="p-6">
-          <BatchProvider record={record}>
+          <BatchProvider record={record} reloadKey={batchReloadKey}>
       <FormProvider {...methods}>
             <form onSubmit={(e) => e.preventDefault()}>
               <StepComponent />

@@ -385,6 +385,15 @@ allocated_quantity = SUM(quantity) over every LIVE line on every LIVE batch
   **after a split, posting `quantity` alone can never change what was ordered**;
   a client that wants to must send `ordered_quantity`. Both are optional fields
   on `ConsignmentItemSchema` and both are published per item.
+  - **AND A CLIENT THAT SENDS ONLY `quantity` CAN NEVER LEAVE ANYTHING
+    OUTSTANDING**, which is the same rule read from the other end and is worth
+    stating separately because it cost a release. Entering 15000 on an unsplit
+    order sets ordered 15000 *and* allocated 15000 → outstanding 0 → the
+    allocation screen's "Create next batch" is correctly disabled and no order
+    can be split from the UI at all. The wizard therefore **pins
+    `ordered_quantity`** the first time Step 3's "This batch" input is touched,
+    after which the two move independently. A consignment nobody splits sends
+    nothing new.
 - **A line that allocates against something the order already bought MUST send
   `order_item_id`**, and since 8b-1 the server **refuses** the alternative:
   a line with no `id` and no `order_item_id` on an order that has split raises

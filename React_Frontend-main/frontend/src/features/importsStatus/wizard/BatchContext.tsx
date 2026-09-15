@@ -59,7 +59,8 @@ const EMPTY: BatchState = {
 const BatchCtx = createContext<BatchState>(EMPTY)
 
 export function BatchProvider(
-  { record, children }: { record: ApiConsignment | null; children: ReactNode },
+  { record, reloadKey = 0, children }:
+  { record: ApiConsignment | null; reloadKey?: number; children: ReactNode },
 ) {
   const [batches, setBatches] = useState<ApiConsignment[]>([])
   const [loading, setLoading] = useState(false)
@@ -97,7 +98,16 @@ export function BatchProvider(
       .finally(() => setLoading(false))
   }, [id])
 
-  useEffect(() => { refresh() }, [refresh])
+  // REFRESHED AFTER EVERY SAVE, not only on mount.
+  //
+  // The allocation table shows SERVER state - ordered, allocated, outstanding -
+  // and a save is what moves it. Without this, changing how much of an order
+  // goes into this batch and pressing save left the table showing the figures
+  // from before the save, which is the same stale-screen defect that shipped
+  // and had to be fixed for the split. The wizard bumps `reloadKey`; the
+  // provider has no way to observe a save otherwise, because it renders INSIDE
+  // the component that performs one.
+  useEffect(() => { refresh() }, [refresh, reloadKey])
 
   const live = batches.filter((b) => !b.is_deleted)
 

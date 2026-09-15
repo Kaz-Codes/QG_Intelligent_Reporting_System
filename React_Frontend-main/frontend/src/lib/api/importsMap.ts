@@ -454,9 +454,20 @@ function itemToPayload(item: DraftItem): ConsignmentItemPayload {
     // the backend guard existed — one added line on batch 2 took an order from
     // 33.523 to 38.523 with a 200 response (design §3.7b finding 3).
     order_item_id: item.orderItemId ?? null,
-    // Only when the operator actually changed it. On an unsplit order the
-    // server keeps `ordered_quantity` in step with `quantity` on its own, and
-    // sending a stale copy back would freeze it at whatever was last fetched.
+    // SENT WHENEVER THE LINE HAS ONE, AND THAT IS WHAT MAKES A SPLIT POSSIBLE.
+    //
+    // `resolve_ordered_quantity` makes the ORDER's quantity follow the line's
+    // while an order holds one batch. So a wizard that sends only `quantity`
+    // can never leave anything outstanding: entering 15000 in Step 1 set
+    // ordered 15000 AND allocated 15000, the allocation table read
+    // "Outstanding 0", and "Create next batch" was correctly disabled for ever.
+    // Measured in the browser - the button fired no request and logged no
+    // error, because there was genuinely nothing to allocate.
+    //
+    // Sending it PINS what the order bought, so lowering this batch's quantity
+    // in Step 3 leaves a remainder instead of shrinking the order. It is unset
+    // until Step 3's allocation input is touched, so a consignment nobody
+    // splits behaves exactly as before and the server keeps deriving it.
     ordered_quantity: numGt0(item.orderedQuantity),
     item_name: strOrUndef(item.itemName),
     placeholder_name: strOrUndef(item.placeholderName),
