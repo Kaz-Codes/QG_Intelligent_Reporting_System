@@ -1,5 +1,7 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { backendLogin, backendLogout } from '@/lib/api/auth'
+import { startIdleTimeoutWatcher } from './idleTimeout'
+import { forceLogout, STORAGE_KEY } from './forceLogout'
 import type { Permission } from '@/lib/roleAccess'
 
 export interface User {
@@ -19,15 +21,8 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-// Versioned: older sessions (roles, then the 5 coarse permissions, then the
-// mock directory) aren't compatible with the backend's permission names, so
-// this starts fresh (logged out) instead of gating the UI on stale values.
-//
-// What's cached here is only WHO the session belongs to and what the UI may
-// show — the actual credential is the backend's httpOnly cookie, which
-// JavaScript can't read. Clearing this key logs you out of the UI; the cookie
-// is cleared by /auth/logout.
-const STORAGE_KEY = 'qgirs-user-v4'
+// STORAGE_KEY now lives in ./forceLogout, since that module needs it too and
+// has no dependency on this one (see its own comment for why).
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
@@ -68,6 +63,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.localStorage.removeItem(STORAGE_KEY)
     setUser(null)
   }
+
+  // Idle-timeout auto-logout - only while actually signed in, so no watching
+  // machinery runs on the login screen itself. forceLogout (a hard redirect,
+  // not this component's own setUser/navigate) is what runs on the 30-minute
+  // mark - see forceLogout.ts for why a hard redirect is used here rather
+  // than the SPA-style clear-and-navigate this component's own logout()
+  // above uses for an explicit "Log out" click.
+  useEffect(() => {
+    if (!user) return
+    return startIdleTimeoutWatcher(forceLogout)
+  }, [user])
 
   return (
     <AuthContext.Provider value={{ user, loading: false, login, logout }}>

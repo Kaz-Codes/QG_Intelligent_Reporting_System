@@ -28,4 +28,11 @@ export async function backendLogout() {
   return apiFetch<unknown>('/auth/logout', { method: 'POST' })
 }
 
+/** The only thing that extends an idle session server-side — see
+ * features/auth/idleTimeout.ts, which calls this in response to real
+ * interaction events only, throttled, never on a timer of its own. */
+export async function sendHeartbeat() {
+  return apiFetch<{ status: number }>('/auth/heartbeat', { method: 'POST' })
+}
+
 export { ApiError }

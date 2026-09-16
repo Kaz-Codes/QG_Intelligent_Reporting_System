@@ -1,5 +1,6 @@
 from app.accounts.models import User
 from app.auth.create_token import create_token
+from app.auth import session_activity
 from app.auth.router import router
 from app.database import SessionLocal
 from app.enums import LogAction
@@ -58,11 +59,14 @@ async def login(credentials: LoginSchema, response: Response):
                 detail="Account is inactive"
             )
 
-        token = create_token(
+        token, jti = create_token(
             {
-                "id": user.id, 
+                "id": user.id,
             }
         )
+        # A freshly-issued session needs a starting point, or it would read as
+        # already-idle before its first heartbeat ever fires.
+        session_activity.seed(jti)
 
         response.set_cookie(
             key="access_token",

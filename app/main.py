@@ -45,11 +45,12 @@ from app.reports.routes import router as reports_router
 from app.notifications.routes import router as notifications_router
 from app.chatbot_proxy import router as chatbot_proxy_router
 
-# The auth package has no populated __init__, so its two route files are
+# The auth package has no populated __init__, so its route files are
 # imported by hand to attach them to the auth router.
 from app.auth.router import router as auth_router
 import app.auth.login
 import app.auth.logout
+import app.auth.heartbeat
 
 from app.logs.middleware import log_requests
 from app.notifications.worker import background_loop, liveness as worker_liveness

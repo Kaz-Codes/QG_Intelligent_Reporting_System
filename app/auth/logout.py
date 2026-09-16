@@ -1,5 +1,6 @@
 from app.accounts.models import User
-from app.auth.authenticate_user import authenticate
+from app.auth.verify_token import verify_token
+from app.auth import session_activity
 from app.auth.router import router
 from app.database import SessionLocal
 from app.enums import LogAction
@@ -17,6 +18,14 @@ logger = logging.getLogger(__name__)
 # so the token can no longer be used from this
 # browser. The token itself just expires on
 # its own an hour after it was made.
+#
+# DELIBERATELY NOT authenticate() here, unlike every other route. That call
+# now 401s on an idle session (see authenticate_user.py) - going through it
+# here would mean a user who is past the idle threshold and clicks "Log out"
+# gets a 401 instead of a clean logout, and the cookie is never cleared
+# (response.delete_cookie below would never run). verify_token() only checks
+# the JWT signature/expiry, so logout always succeeds for any token this app
+# ever issued, idle or not - which is what "log out" should mean.
 #-------------------------------------------
 
 @router.post("/logout")
@@ -24,12 +33,14 @@ async def logout(request: Request, response: Response):
     db = SessionLocal()
 
     try:
-        request_user_data = authenticate(request)
+        token = request.cookies.get("access_token")
+        payload = verify_token(token) if token else None
 
-        if isinstance(request_user_data, dict):
-            user_id = request_user_data.get("id")
-        else:
-            user_id = getattr(request_user_data, "id", None)
+        user_id = payload.get("id") if payload else None
+        jti = payload.get("jti") if payload else None
+
+        if jti:
+            session_activity.forget(jti)
 
         user = db.get(User, user_id) if user_id is not None else None
 
