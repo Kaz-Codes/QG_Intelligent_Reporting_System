@@ -112,21 +112,69 @@ function AssistantChat({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const { messages, isSending, status, error, send, clearConversation } = useChat()
   const { status: connection } = useChatHealth()
   const [input, setInput] = useState('')
+  // Declared early (rather than below, where it's only otherwise needed) so
+  // the ResizeObserver effect can depend on it — see that effect for why.
+  const empty = messages.length === 0
   // An empty sentinel at the end of the message list, scrolled into view
   // rather than scrolling the container directly — works whichever element
   // ends up being the actual scroll parent.
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  // MEASURED, not assumed. The sticky bottom bar's real height isn't fixed —
+  // it grows when the error message above it renders, or when the input
+  // wraps — so scrollIntoView needs the bar's actual footprint, not a guessed
+  // pixel value, to stop bottomRef short of it instead of flush against it
+  // (both pin to the same viewport edge otherwise, so the sticky bar visually
+  // covers whatever just scrolled "into view").
+  const inputBarRef = useRef<HTMLDivElement>(null)
+  const [inputBarHeight, setInputBarHeight] = useState(0)
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, status])
+    const el = inputBarRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setInputBarHeight(entry.contentRect.height)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+    // `empty` is the dependency that matters here, not a leftover: the sticky
+    // bar this observes doesn't exist at all on the landing screen (see the
+    // `if (empty) return (...)` branch below) — with an empty deps array this
+    // effect ran once on mount, found inputBarRef.current still null, and
+    // never got another chance to attach once the bar actually rendered after
+    // the first message was sent. Re-running on the empty -> full-chat
+    // transition (and back, if "Clear" is used) is what lets it actually find
+    // the element and start observing it.
+  }, [empty])
+
+  // Re-scroll only when a message is actually ADDED or a new query starts -
+  // not on every `status` text update mid-request (the backend streams
+  // several status events per query; see useChat.ts). Compared by LENGTH
+  // rather than by the `messages` array reference, since a streaming token
+  // update to the last message's content can produce a new array reference
+  // without an actual message being added — the loading box's on-screen
+  // position must stay put while its status text cycles through several
+  // values before the final answer arrives.
+  const prevMessagesLengthRef = useRef(messages.length)
+  const prevIsSendingRef = useRef(isSending)
+
+  useEffect(() => {
+    const messageAdded = messages.length !== prevMessagesLengthRef.current
+    const sendingStarted = isSending !== prevIsSendingRef.current
+
+    if (messageAdded || sendingStarted) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
+
+    prevMessagesLengthRef.current = messages.length
+    prevIsSendingRef.current = isSending
+  }, [messages, isSending, status])
 
   function handleSend(question: string) {
     setInput('')
     void send(question)
   }
-
-  const empty = messages.length === 0
 
   const inputBar = (
     <form
@@ -299,16 +347,28 @@ function AssistantChat({ onOpenDrawer }: { onOpenDrawer: () => void }) {
             </div>
           </div>
         )}
-        {/* Scrolled into view on every new message. */}
-        <div ref={bottomRef} />
+        {/* Scrolled into view on every new message. scroll-margin-bottom
+            (inputBarHeight, measured above) stops this short of the sticky
+            bar below instead of flush against it — see the ResizeObserver
+            effect for why that height can't be a guessed constant. */}
+        <div ref={bottomRef} style={{ scrollMarginBottom: inputBarHeight }} />
       </div>
 
-      {error && <p className="mb-2 mt-2 text-xs text-risk">{error}</p>}
       {/* Sticky, not fixed: pins to the bottom of the app's one shared scroll
           region as it scrolls (see AppLayout's min-h-full), rather than to
           the browser viewport — a `fixed` bar would sit on top of that
-          region regardless of scroll position and ignore its own padding. */}
-      <div className="fixed bottom-0 left-0 right-0 z-50  px-8 pb-4 pt-3">
+          region regardless of scroll position and ignore its own padding.
+          The error message lives INSIDE this same div (not a sibling wrapped
+          around it) deliberately: giving the sticky element its own new
+          parent div, just to measure the two together, leaves that parent
+          barely taller than the sticky child itself — sticky positioning
+          needs room to move within its containing block, and a parent that
+          short gives it none, so the bar stops sticking and just scrolls
+          away with the rest of the page. Keeping this div as the sticky
+          element AND the thing inputBarRef measures avoids that
+          entirely: no new containing block is introduced. */}
+      <div ref={inputBarRef} className="sticky bottom-0 z-50  px-8 pb-4 pt-3">
+        {error && <p className="mb-2 text-xs text-risk">{error}</p>}
         {inputBar}
       </div>
     </div>
