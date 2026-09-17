@@ -101,6 +101,9 @@ export function ImportsChangeHistory() {
           paymentLabels: new Map(
             c.payments.map((p) => [p.id, p.bank_reference || `Payment #${p.id}`]),
           ),
+          addendumLabels: new Map(
+            (c.addenda ?? []).map((a) => [a.id, a.reference || `Addendum #${a.id}`]),
+          ),
         }))
       })
       .catch(() => { /* the history list below reports a real failure */ })

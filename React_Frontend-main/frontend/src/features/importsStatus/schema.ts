@@ -107,6 +107,17 @@ const optionalNumber = z.preprocess(
   z.coerce.number().nonnegative().optional(),
 )
 
+/** THE SIGNED TWIN of `optionalNumber`, for the one field that may go below
+ *  zero: an addendum's `value` is a DELTA to the LC amount, and a reduction is
+ *  negative. `optionalNumber`'s `.nonnegative()` would reject it — the same
+ *  trap as copying `ConsignmentPaymentSchema`'s `gt=0` on the backend, and it
+ *  is a SEPARATE trap in a separate language, so both halves had to be caught
+ *  independently. */
+const signedOptionalNumber = z.preprocess(
+  (v) => (v === '' || v === null || Number.isNaN(v) ? undefined : v),
+  z.coerce.number().optional(),
+)
+
 const optionalDate = z.string().optional().or(z.literal(''))
 const optionalText = z.string().optional().or(z.literal(''))
 
@@ -330,8 +341,35 @@ export const paymentSchema = z.object({
 })
 export type Payment = z.infer<typeof paymentSchema>
 
+/**
+ * An addendum — an amendment to the LC.
+ *
+ * `value` IS A SIGNED DELTA, NOT THE REVISED LC AMOUNT. Increase positive,
+ * reduction negative; the current LC value is the original plus the live
+ * addenda. See `PaymentAddendum.value` on the backend for why it is a delta
+ * rather than a revised total.
+ *
+ * NOTHING HERE ENTERS ANY TOTAL — not `value`, and not `bankCharges` either,
+ * which is the one that looks like it should: `bankChargesTotal` below sums
+ * PAYMENT charges, which do carry into actual landed cost. An addendum's
+ * charges are not those and must not join that sum. Addenda are stored and
+ * displayed, and that is all, until the arithmetic is wired up in a change of
+ * its own.
+ */
+export const addendumSchema = z.object({
+  id: z.string(),
+  backendId: z.number().optional(),
+  date: optionalDate,
+  reference: optionalText,
+  value: signedOptionalNumber,
+  description: optionalText,
+  bankCharges: optionalNumber,
+})
+export type Addendum = z.infer<typeof addendumSchema>
+
 export const paymentsStepSchema = z.object({
   payments: z.array(paymentSchema).default([]),
+  addenda: z.array(addendumSchema).default([]),
   /** LC-level, entered beside the payments. Optional and often blank — an
    *  order can genuinely carry no insurance, which is why 0 and "not entered"
    *  stay distinguishable. */
@@ -437,6 +475,11 @@ export const emptyPayment = (id: string): Payment => ({
   status: 'Unpaid', reference: '', bankCharges: undefined,
 })
 
+export const emptyAddendum = (id: string): Addendum => ({
+  id, backendId: undefined, date: '', reference: '', value: undefined,
+  description: '', bankCharges: undefined,
+})
+
 export const DRAFT_DEFAULT_VALUES: ConsignmentDraft = {
   systemId: '', consignmentNumber: '',
   branch: '', supplier: '', origin: '', currency: '',
@@ -449,7 +492,7 @@ export const DRAFT_DEFAULT_VALUES: ConsignmentDraft = {
   modeOfShipment: '', portOfLoading: '', portOfDelivery: '',
   readinessDate: '', etd: '', eta: '', etaWorks: '', etaRevisions: [],
 
-  payments: [], insuranceAmount: undefined,
+  payments: [], addenda: [], insuranceAmount: undefined,
 
   status: '', statusHistory: [], systemRemarks: '', userRemarks: '',
 

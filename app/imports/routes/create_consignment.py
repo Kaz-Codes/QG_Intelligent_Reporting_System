@@ -7,7 +7,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_ADD_IMPORTS
-from app.imports.helpers import legacy_payment_consignment_id, has_something_to_save, EMPTY_DRAFT_MESSAGE, create_consignment_item_object, create_consignment_object, create_payment_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload, reconcile_allocation, AllocationError
+from app.imports.helpers import legacy_payment_consignment_id, has_something_to_save, EMPTY_DRAFT_MESSAGE, create_consignment_item_object, create_consignment_object, create_payment_object, create_addendum_object, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, new_batch_group, sync_order_items, split_consignment_payload, reconcile_allocation, AllocationError
 
 from app.imports.serializers import serialize_consignment
 import logging
@@ -49,12 +49,13 @@ def create_consignment(
         # an operator thinks of one; splitting it is the server's job now that a
         # batch, its order and its order lines are separate rows.
         header_payload = consignment_data.model_dump(
-            exclude_none=True, exclude={"items", "payments"}
+            exclude_none=True, exclude={"items", "payments", "addenda"}
         )
         _header, group_fields, order_item_header = split_consignment_payload(header_payload)
 
         consignment = create_consignment_object(consignment_data, user)
         consignment_payments = create_payment_object(consignment_data)
+        consignment_addenda = create_addendum_object(consignment_data)
 
         # Pairs, not objects: each line carries the order-line half of its own
         # payload until sync_order_items writes it.
@@ -93,6 +94,13 @@ def create_consignment(
                 # The orphaned NOT NULL column, written by its single writer.
                 payment.consignment_id = legacy_payment_consignment_id(group) or consignment.id
                 group.payments.append(payment)
+
+            # ADDENDA GO ON THE ORDER TOO, and are simpler than payments here:
+            # there is no orphaned NOT NULL column to fill, because the table is
+            # new. Nothing like `legacy_payment_consignment_id` exists for them
+            # and none should be invented.
+            for addendum in consignment_addenda:
+                group.addenda.append(addendum)
 
             # One order line per shipment line, written from the PAYLOAD -
             # the line no longer holds the thirteen columns it used to be
