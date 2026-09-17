@@ -125,12 +125,28 @@ class TestTheTwoTiers:
 
 class TestCoverage:
 
-    def test_the_two_tiers_cover_EVERY_payload_reachable_group_column(self):
-        """No gap and no overlap. A column added to GROUP_SHARED_FIELDS without
-        being placed in a tier would be editable on a closed order for ever, and
-        nothing would say so — the save returns 200."""
-        reachable = set(PAYLOAD_TO_GROUP.values())
-        assert (HARD_FROZEN | ADMIN_FROZEN) == reachable
+    def test_the_tiers_cover_every_reachable_group_column_EXCEPT_THE_EXEMPT(self):
+        """No gap and no overlap, over the columns the freeze governs.
+
+        A column added to GROUP_SHARED_FIELDS without being placed in a tier
+        would be editable on a closed order for ever, and nothing would say
+        so — the save returns 200.
+
+        THE EXEMPT SET IS SUBTRACTED, not special-cased. §3.9 exempts the
+        payment process, so `insurance_amount` became payload-reachable in step
+        9 while staying in neither tier — which is correct and which this
+        assertion would otherwise have called a hole. Subtracting names the
+        exemption rather than weakening the check: a column that is neither in
+        a tier nor declared exempt still fails."""
+        governed = set(PAYLOAD_TO_GROUP.values()) - FREEZE_EXEMPT_GROUP_COLUMNS
+        assert (HARD_FROZEN | ADMIN_FROZEN) == governed
+
+    def test_insurance_is_reachable_from_the_payload_AND_exempt(self):
+        """Both halves matter. Reachable, or Step 4 cannot save it; exempt, or
+        the freeze would lock the payment screen at exactly the point it starts
+        being used (§3.9)."""
+        assert "insurance_amount" in set(PAYLOAD_TO_GROUP.values())
+        assert "insurance_amount" in FREEZE_EXEMPT_GROUP_COLUMNS
 
     def test_the_tiers_do_not_overlap(self):
         assert HARD_FROZEN & ADMIN_FROZEN == frozenset()

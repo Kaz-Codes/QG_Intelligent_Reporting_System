@@ -332,6 +332,10 @@ export type Payment = z.infer<typeof paymentSchema>
 
 export const paymentsStepSchema = z.object({
   payments: z.array(paymentSchema).default([]),
+  /** LC-level, entered beside the payments. Optional and often blank — an
+   *  order can genuinely carry no insurance, which is why 0 and "not entered"
+   *  stay distinguishable. */
+  insuranceAmount: optionalNumber,
 })
 
 /* ------------------------------------------------------------------ */
@@ -445,7 +449,7 @@ export const DRAFT_DEFAULT_VALUES: ConsignmentDraft = {
   modeOfShipment: '', portOfLoading: '', portOfDelivery: '',
   readinessDate: '', etd: '', eta: '', etaWorks: '', etaRevisions: [],
 
-  payments: [],
+  payments: [], insuranceAmount: undefined,
 
   status: '', statusHistory: [], systemRemarks: '', userRemarks: '',
 

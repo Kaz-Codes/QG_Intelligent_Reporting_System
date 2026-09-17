@@ -31,6 +31,203 @@ called and does nothing.
 
 ---
 
+## Changelog — revision 19 (step 9, part 1: payments move to the order)
+
+Payments, insurance, and Step 4's batch-1-only rule. **The addenda table and
+the Advance-vs-other fetch rule are deliberately NOT built** — see the end.
+
+### The move — Alembic `b4d18e05c7a2`
+
+`payments.consignment_id` pointed at a BATCH while the requirements put payments
+once per consignment, so two arrivals of one LC could each carry a full payment
+history. Expand-and-contract: add nullable → back-fill → `SET NOT NULL`, and
+`consignment_id` stays for Revision B.
+
+**The orphan check ran before `SET NOT NULL` and earned its keep on the first
+try.** It reported *"1 rows, 1 on soft-deleted batches (back-filled normally — a
+deleted batch still belongs to its order)"* — the single payment in the database
+is on consignment 180, which is **already soft-deleted**. Back-filling it is
+correct and a bare `NotNullViolation` would have said nothing about why.
+
+`§4.4`'s own correction is why the check exists at all: the row count is low
+because staff have not started using the screen, not because the screen is dead.
+
+### Correction A — what goes in the orphaned NOT NULL column
+
+`consignment_id` is `nullable=False` and stays until Revision B, so **every
+payment inserted from now on must still populate it**, including one entered
+while batch 2 is on screen. §4.4 does not say what.
+
+**`group.founding_consignment_id`.** It is the row the order's identity already
+derives from — the consignment NUMBER is built from it, and
+`reference_label_from` falls back to it — so a payment written from any batch
+points at the consignment the order is NAMED after rather than at whichever
+arrival happened to be open. Writing the batch on screen would leave the
+orphaned column disagreeing between two payments on one order for a reason
+nobody could reconstruct. `helpers.legacy_payment_consignment_id` is its single
+writer, and Revision B deletes the question along with the column. Driven:
+`p.consignment_id = g.founding_consignment_id` → **true**.
+
+### Correction B — `Consignment.payments` is REMOVED, not left
+
+The correction was right and it is the most important line in this change.
+`Consignment.payments` was a real relationship with `back_populates`, so leaving
+it while adding `ConsignmentBatchGroup.payments` would have left **both
+working** — the orphaned `consignment_id` is still populated, so the serializer
+would have gone on returning correct data and every test would have passed. The
+omission would have surfaced when Revision B dropped the column: weeks later, in
+a different change, with nothing connecting it to this one.
+
+Removing it made `helpers.updated_payments` raise `AttributeError` immediately —
+the loud failure the correction was written to get.
+
+### The readers, which are the actual work
+
+| | |
+|---|---|
+| `serializers.py` | reads `consignment.batch_group.payments`; **every batch of an order publishes the same list**, which is what makes Step 4 read-only on a later batch honest rather than merely disabled |
+| `helpers.add_or_delete`, `revert_old_values` | **take the owner COLUMN and value** instead of assuming `consignment_id`. Left alone they matched nothing for payments, so a revert would have restored none and reported success — the `skipped_fields` failure with no report attached. Six call sites |
+| `helpers.delete_missing` | same shape, third reader. Left alone, removing a payment deleted nothing |
+| eager loads ×3 + `get_batches` | chained off the existing `joinedload`, not a second strategy — SQLAlchemy refuses two on one path (*"Loader strategies … conflict"*), which is what a fresh `selectinload` produced |
+| `create_consignment`, `update_consignment` | write to the group, with the legacy column filled by its one writer |
+| `export_consignments` | see below |
+| `notifications/scanner` | joins the order directly; `ConsignmentBatchGroup.is_deleted` replaces the batch's, which also fixes a latent bug — deleting one arrival of a three-batch LC used to silence its payment alerts |
+| `chatbot_backend/backend/metadata/schema.py:289, :609` | **stale, not edited.** Separate service, its own branch |
+
+**The `state_key` does NOT change** — `scanner.py:651` keys on
+`payment_overdue:<payment.id>`, not the consignment. The spec flagged this as a
+live-data decision; it is not one. No state migration, no re-notification of
+payments staff have already cleared. Driven: with the state cleared, the scan
+raises a crossing and the event reads *entity consignment 21, ref lc67792, 257
+days overdue* — the founding consignment, resolved through the new join.
+
+### The export blanks after batch 1
+
+Decided rather than repeated. Driven on the split order:
+
+```
+Consignment   Batch  Payments recorded   Total paid
+21-2          2      None                None
+21-1          1      2                   1500
+```
+
+The sheet is read in Excel, where a column gets summed and a note does not get
+read: repeating the order's total on each of its batches gives a wrong total
+silently, and blanking cannot.
+
+### Insurance — wiring, not a move
+
+`insurance_amount` has been on `consignment_batch_groups` since revision A with
+its own comment saying nothing writes it. It was absent from
+`GROUP_SHARED_FIELDS`, so the payload could not reach it. Added there (a plain
+passthrough — the payload key and the column are the same word, unlike
+`branch_id`), plus the schema, the serializer and a field on Step 4.
+
+**Correction C's assertion change.** `test_group_freeze.py` asserted
+`(HARD_FROZEN | ADMIN_FROZEN) == set(PAYLOAD_TO_GROUP.values())`, which the
+wiring would have broken — correctly, since insurance is deliberately in neither
+tier. It now subtracts `FREEZE_EXEMPT_GROUP_COLUMNS`, which **names** the
+exemption rather than weakening the check: a column in neither a tier nor the
+exempt set still fails.
+
+### Step 4 and the freeze — the first group-level screen since §3.9
+
+**Fully editable on a frozen order**, and now asserted rather than incidental.
+Driven, with the order frozen by batch 21-2 having arrived:
+
+- insurance edited on the frozen order → **PUT 200**, `12345` after reload;
+- a payment added on the frozen order → **row written**;
+- `exchange_rate` on the same payload → **423**, *"Cannot change the exchange
+  rate on this order. Batch 21-2 has arrived at works."*
+
+That is §3.9 exactly: the payment process is exempt, the valuation inputs are
+not.
+
+**An interaction worth knowing, which the test had to work around.** Freezing by
+closing batch 1 also LOCKS batch 1, and Step 4 belongs to batch 1 — so on an
+order frozen that way Step 4 is unreachable: the founding batch 423s on the lock
+and the later batch is not the founding one. It is the CLOSED LOCK doing that,
+not the freeze, and it is pre-existing behaviour. The test therefore freezes by
+closing batch 2, which leaves batch 1 open. Worth stating because "payments are
+never frozen" is true and still leaves a shape where nobody can reach them.
+
+### Step 4 is the LOWEST LIVE batch's, on the server as well as the screen
+
+`EnteredOnBatchOne` covers it on the front end, and the move makes it honest:
+batch 2 now displays the ORDER's payments read-only rather than its own empty
+list. Driven — **13 of 13 controls `:disabled`**, showing `PAY-B-ON-FROZEN` and
+`PAY-A`, the order's own.
+
+The server **ignores** the posted array on a later batch rather than accepting
+it. Accepting is only safe while the values happen to match; a client bug would
+otherwise rewrite an order's payment history from batch 2. Driven: a PUT from
+batch 2 carrying a rogue payment returns 200 and writes **nothing**, and the
+order's existing payment survives — the empty-array path does not run
+`delete_missing` either.
+
+**The predicate is "is this the lowest live sequence", NOT "is this sequence
+1"** (`helpers.payments_belong_to_this_batch`). The two agree until the founding
+batch is soft-deleted and more than one batch survives — and then `== 1` matches
+NOTHING, because no live row has sequence 1. Driven before the fix: an order with
+batch 1 deleted and batches 2 and 3 alive took a `PUT` on batch 2 with **200 and
+0 payment rows written**, on both of them. A save that succeeds and does nothing
+is worse than one that refuses, because nothing on screen says so.
+
+That state is reachable, not hypothetical: `delete_consignment` requires an admin
+and then soft-deletes whatever id it is given, with no guard on the founding batch
+and no check that a later one survives. Repointing `founding_consignment_id`
+instead is not the fix — the consignment NUMBER derives from it, so moving it
+renumbers a live order, which §3.5a/A3 forbids. "The row the number derives from"
+and "the batch that owns Step 4" are two different questions.
+
+Counted over LIVE batches, not `batches_ever`, which never decrements — and it
+must still be permissive on a single-batch order, which is all of them today.
+
+**`export_consignments._is_first_batch` and `BatchContext.tsx`'s
+`isFoundingBatch` still test `batch_sequence == 1`** and carry the same hole.
+Deliberately not fixed here: unifying them needs
+`ConsignmentBatchGroup.batches` eager-loaded on `fetch_consignments_page`, or the
+export lazy-loads a collection per row on a 341-row sheet — a different-shaped
+change. Their failure mode is also the opposite one: the export makes figures
+ABSENT and the wizard makes a step unreachable, both of which get noticed, while
+this one made a save succeed.
+
+### Deliberately NOT built
+
+- **The addenda table.** `grep -rni "addend|amendment"` across `app/`, `tests/`,
+  the frontend and `alembic/` returns one line of requirements and nothing else.
+  The fixed "1st addendum"/"2nd addendum" sections the requirement contrasts
+  against are in the Excel sheet this system replaces, not in this app, so there
+  are no fields to derive columns from and §4.4 writes `...` because it did not
+  know either. **Nothing built and nothing stubbed** — no table, no model, no
+  empty route. Waiting on the sheet's column list.
+- **The Advance-vs-other fetch rule.** Requirements line 118 says Advance
+  fetches "the rates", and which rates is undefined — the consignment exchange
+  rate, the `rate_booked_on`/`rate_source` triple, or per-item rates. Today's
+  behaviour (value only) is left for every mode.
+
+### Verified
+
+`configure_mappers()` against the scratch database · **pytest 225** (was 215;
++10 in `tests/test_payments_on_the_order.py`) · `check_dashboard_consistency.py`
+94/0 · `check_batch_allocation.py` 50/0 · `check_group_freeze.py` 32/0 ·
+`tsc -b` clean. Migration up, down and up again against a clone of the
+183-consignment database.
+
+**Driven over HTTP and in the browser:** a payment added on batch 1 lands on the
+group with the founding consignment in the legacy column; batch 2 sees it
+read-only and cannot write; a payment edited and then **reverted comes back**
+(1000 / PAY-A) — the path that would silently have restored nothing; insurance
+round-trips; Step 4 stays editable on a frozen order while Tier 1 still refuses;
+the export blanks after batch 1; the scanner still finds the payment.
+
+**NOT driven:** the revert path has no pytest coverage — it needs a session and
+real rows, so it is covered by the HTTP drive only, and
+`tests/test_payments_on_the_order.py` says so rather than leaving the gap
+implicit.
+
+---
+
 ## Changelog — revision 18 (step 8b-2 BUILT: skipped fields, per-batch sections, price basis)
 
 The second half of step 8, plus price basis, which had dropped out of 8a twice.
@@ -5037,10 +5234,46 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    setattr, a partial revert that reports what it skipped, and `group_frozen` on
    the detail payload for 8b to render from. `Order Cancelled` is left as a
    recorded open question in §3.9.
-9. **Payments:** the group move (§4.4), insurance, the addenda table.
+9. **Payments — PART 1 BUILT, revision 19.** The group move (§4.4) and every
+   reader, insurance wiring (no migration — revision A had already created the
+   column), and Step 4's batch-1-only rule on the server as well as the screen.
+   Alembic `b4d18e05c7a2`; `payments.consignment_id` stays for Revision B.
+   - **DEFERRED — the addenda table.** There is nothing to derive the columns
+     from: the fixed "1st addendum"/"2nd addendum" sections the requirement
+     contrasts against are in the Excel sheet this system replaces, not in this
+     app, and §4.4 writes `...` for the same reason. Nothing built and nothing
+     stubbed. Waiting on the sheet's column list.
+   - **DEFERRED — the Advance-vs-other fetch rule.** Requirements line 118 says
+     Advance fetches "the rates" and does not say which — the consignment
+     exchange rate, the `rate_booked_on`/`rate_source` triple, or per-item
+     rates. Today's behaviour (value only) is left for every mode.
 10. **Chatbot metadata**, verified by importing `backend.*` from inside
     `chatbot_backend/`.
 11. **CLAUDE.md**, same PR — rules 1, 2 and 11 (§5.1), the frozen `batch_no`
     column (§3.6), and the group freeze (§3.9).
 12. **Alembic Revision B — contract** (§4), a release later, once batching has
     run in production. Backup first.
+
+    **WHAT REVISION B OWES, reconciled at revision 19.** Every one of these is a
+    column or relationship that still exists, still works, and is scheduled to
+    go — which is exactly the shape that makes a contract migration dangerous,
+    because nothing fails while they are there.
+
+    | | |
+    |---|---|
+    | `consignments` | `supplier_id`, `branch_id`, `origin`, `currency`, `consignment_type`, `incoterm`, `payment_instrument`, `instrument_number`, `exchange_rate`, `rate_booked_on`, `rate_source`, `works`, `po_date` — orphaned by revision A, no mapped attribute since step 6 |
+    | `consignment_items` | the thirteen identity / price / requisition columns that moved to `consignment_order_items` in part 4 |
+    | **`payments.consignment_id`** | **added to this list at revision 19.** Still NOT NULL, so it is still WRITTEN — by `helpers.legacy_payment_consignment_id` and nothing else. Dropping it deletes that function, its two call sites, and the question of what a group-level write puts in it |
+
+    **Two things that are NOT on the list and could have been.**
+    `Consignment.payments` was removed in revision 19 rather than left as a
+    convenience, precisely so it could not join it: a relationship that works
+    today and is scheduled for deletion is what makes this migration dangerous,
+    and removing it turned a Revision B surprise into an immediate
+    `AttributeError`. And the two semantic views in `chatbot_backend` remain
+    Muhtasham's to repoint (§4.6) — Revision B still cannot be written by this
+    project alone.
+
+    **`chatbot_backend/backend/metadata/schema.py:289` and `:609`** describe
+    `payments` as hanging off `consignments`. Stale since revision 19, in a
+    separate service, flagged rather than edited.

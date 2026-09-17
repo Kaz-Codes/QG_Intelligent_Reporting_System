@@ -141,7 +141,26 @@ def serialize_consignment(consignment, db, include_change_history=True,
         "items" : serialize_items(consignment.items),
         "eta_revisions" : serialize_many(consignment.eta_revisions),
         "status_updates" : serialize_many(consignment.status_updates),
-        "payments" : serialize_many(consignment.payments),
+        # THE ORDER'S PAYMENTS, not the batch's - step 9, section 4.4.
+        #
+        # `Consignment.payments` was REMOVED rather than left working, so this
+        # line had to move or fail to compile. That is the point: the orphaned
+        # `payments.consignment_id` is still populated, so the old relationship
+        # would have gone on returning correct data until Revision B dropped the
+        # column, weeks later and in a different change.
+        #
+        # One LC, one payment history: every batch of an order publishes the
+        # same list, which is what the requirements ask for and what makes
+        # Step 4 read-only on a later batch honest rather than merely disabled.
+        # LC-LEVEL, beside the payments it belongs with. Read off the group
+        # rather than the batch - insurance is taken out on the order.
+        "insurance_amount" : (
+            consignment.batch_group.insurance_amount
+            if consignment.batch_group else None
+        ),
+        "payments" : serialize_many(
+            consignment.batch_group.payments if consignment.batch_group else []
+        ),
 
         "created_by" : consignment.created_by.username if consignment.created_by else None,
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,

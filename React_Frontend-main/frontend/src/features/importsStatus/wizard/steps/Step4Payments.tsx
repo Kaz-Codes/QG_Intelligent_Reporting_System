@@ -42,6 +42,26 @@ export function Step4Payments() {
         { label: 'Outstanding', value: fx(Math.max(outstanding, 0), currency) },
       ]} />
 
+      {/* LC-LEVEL, ABOVE THE PAYMENT ROWS. Insurance is taken out on the
+          ORDER, not on each shipment, so it sits with the other order-level
+          figure on this step rather than on any one payment. The freeze does
+          NOT cover it (§3.9 exempts the payment process), so it stays editable
+          on a closed order — which is the point: an LC is retired after the
+          goods arrive. */}
+      <section className="rounded-xl border border-line bg-surface">
+        <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Insurance — taken out once, on the order
+        </h3>
+        <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label={`Insurance amount (${currency || 'foreign'})`} htmlFor="insuranceAmount"
+                 hint="Blank means nobody has entered one; 0 means there is none">
+            <Input id="insuranceAmount" type="number" min="0" step="any"
+                   className="tabular-nums" placeholder="0.00"
+                   {...register('insuranceAmount')} />
+          </Field>
+        </div>
+      </section>
+
       <section className="rounded-xl border border-line bg-surface">
         <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
           {wording ? `${wording.paymentNoun[0].toUpperCase()}${wording.paymentNoun.slice(1)}s` : 'Payments'} — record each one separately

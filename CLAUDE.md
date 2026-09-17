@@ -1390,8 +1390,45 @@ slippage = current ETA − first ETA ever promised.
 history, read-only) and user `remarks` (free text) — displayed together, never
 one input.
 
-**7. Payments are a child table.** Partial payments are normal; instrument
-drives the number/date labels (LC→LC number/Retirement; Adv/DP/CAD→reference/Opening).
+**7. Payments are a child table OF THE ORDER, not of the batch.** Partial
+payments are normal; instrument drives the number/date labels (LC→LC
+number/Retirement; Adv/DP/CAD→reference/Opening).
+
+- **`payments.batch_group_id` is the link** (step 9, Alembic `b4d18e05c7a2`).
+  One LC, one payment history — while they hung off a batch, two arrivals of one
+  LC could each carry a full history. Every batch of an order publishes the same
+  list, which is what makes Step 4 read-only on a later batch honest rather than
+  merely disabled.
+- **`payments.consignment_id` still exists and is still NOT NULL** until
+  Revision B. `helpers.legacy_payment_consignment_id` is its ONLY writer and
+  puts the order's `founding_consignment_id` there — the row the order is named
+  after — so two payments on one order agree whichever batch recorded them.
+  **`Consignment.payments` was REMOVED rather than left working**: the orphaned
+  column would have kept it returning correct data until Revision B dropped it.
+- **Step 4 belongs to the LOWEST LIVE batch sequence**, on the server as well as
+  the screen, and the update route IGNORES a posted payments array on any other
+  batch — a disabled fieldset stops typing, not posting.
+  `helpers.payments_belong_to_this_batch` is the rule. **It is not
+  `batch_sequence == 1`**, and the difference is reachable: `delete_consignment`
+  soft-deletes the founding batch with no guard, and `founding_consignment_id` is
+  never repointed afterwards (it must not be — the consignment NUMBER derives from
+  it, §3.5a/A3). Under `== 1` an order in that state had NO batch owning Step 4,
+  so a `PUT` from every live batch returned **200 having written nothing**.
+  **`export_consignments._is_first_batch` and the wizard's `isFoundingBatch`
+  still ask the old question** and carry the same hole — the export blanks the
+  order's payment figures on every row of such an order, the wizard disables Step
+  4 on every batch. Both are visible absences rather than silent successes, which
+  is why they were left to a follow-up rather than done here.
+- **`insurance_amount` is LC-level, on the group**, and is in
+  `FREEZE_EXEMPT_GROUP_COLUMNS`: §3.9 exempts the whole payment process, because
+  an LC is retired AFTER the goods arrive. **Step 4 stays editable on a frozen
+  order** while Tier 1 still refuses — but note the CLOSED LOCK is separate: if
+  the order froze because batch 1 closed, batch 1 is also locked and Step 4 is
+  unreachable from either batch.
+- **The export prints the order's payment figures on the FIRST batch only** and
+  blanks them after, so summing the column in Excel gives the total once.
+- **Addenda are NOT built** — nothing in this app holds addendum fields to
+  derive a schema from, and nothing is stubbed for them.
 
 **8. Draft vs submitted + the closed lock. IMPORTS HAS NO SUBMIT RULE SET.**
 

@@ -246,7 +246,11 @@ def fetch_consignment(db, consignment_id):
         # one query at a time - an N+1 on every detail fetch, introduced by
         # repointing the reads without repointing the load beside them.
         selectinload(Consignment.items).selectinload(ConsignmentItem.order_item),
-        selectinload(Consignment.payments),
+        # CHAINED OFF THE EXISTING joinedload, not a second strategy for the
+        # same path - SQLAlchemy refuses two loader strategies on one ORM path
+        # ("Loader strategies ... conflict"), which is what a fresh
+        # `selectinload(Consignment.batch_group)` here produced.
+        joinedload(Consignment.batch_group).selectinload(ConsignmentBatchGroup.payments),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
         selectinload(Consignment.change_history),
@@ -460,7 +464,11 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         # As in fetch_consignment: the list serializes every line through
         # `item.order_item`, so one query per LINE per PAGE without this.
         selectinload(Consignment.items).selectinload(ConsignmentItem.order_item),
-        selectinload(Consignment.payments),
+        # CHAINED OFF THE EXISTING joinedload, not a second strategy for the
+        # same path - SQLAlchemy refuses two loader strategies on one ORM path
+        # ("Loader strategies ... conflict"), which is what a fresh
+        # `selectinload(Consignment.batch_group)` here produced.
+        joinedload(Consignment.batch_group).selectinload(ConsignmentBatchGroup.payments),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
 
@@ -717,6 +725,104 @@ def new_payments_to_add(update_consignment_data):
 # HAS DELETED THEM)
 #--------------------------------------
 
+def payments_belong_to_this_batch(consignment):
+    """May Step 4 be edited from THIS batch?
+
+    THE ANSWER IS "IS THIS THE LOWEST LIVE SEQUENCE", NOT "IS THIS SEQUENCE 1".
+
+    The two agree until the founding batch is soft-deleted and more than one
+    batch survives, and then `== 1` matches NOTHING: no live row has sequence 1,
+    so the route ignored the payments array on EVERY batch of the order and
+    returned 200 having written nothing. Driven before this was fixed - an order
+    with batch 1 deleted and batches 2 and 3 alive took a PUT on batch 2 with
+    `200` and `0` payment rows written. A save that succeeds and does nothing is
+    worse than one that refuses, because nothing on screen says so.
+
+    Deleting a founding batch is not hypothetical: `delete_consignment` requires
+    an admin and then soft-deletes whatever id it is given, with no guard on the
+    founding batch and no check that a later one survives.
+
+    WHY NOT REPOINT `founding_consignment_id` INSTEAD. The consignment NUMBER
+    derives from it, so moving it would renumber a live order - which section
+    3.5a/A3 forbids, because a number that has been on an invoice must not come
+    to mean a different shipment. "The row the number derives from" and "the
+    batch that owns Step 4" are two different questions; this answers the second
+    only.
+
+    THE SAME CONDITION THE FRONT END USES for the ordinary cases, deliberately.
+    `EnteredOnBatchOne` engages when the order is SPLIT and this is not the
+    founding batch, so on an unsplit order Step 4 stays fully editable and the
+    server must agree - keying off the sequence alone, with no regard to how
+    many batches are live, would refuse payments on a single-batch order, which
+    is every order today.
+
+    **THE EXPORT AND THE WIZARD STILL ASK THE OLD QUESTION.**
+    `export_consignments._is_first_batch` and `BatchContext.tsx`'s
+    `isFoundingBatch` both test `batch_sequence == 1` and both carry this same
+    hole - the export blanks the order's payment figures on every row of it, and
+    the wizard disables Step 4 on every batch. They are deliberately NOT fixed
+    here: unifying them needs `ConsignmentBatchGroup.batches` eager-loaded on
+    `fetch_consignments_page`, or the export lazy-loads a collection per row on
+    a 341-row sheet, which is a different-shaped change. **Do not read this
+    function being correct as the rule holding system-wide.** The export's
+    version makes figures ABSENT, which gets noticed; this one made a save
+    succeed, which does not - which is why they were separated rather than done
+    together.
+
+    IT IS A SERVER RULE, NOT A UI ONE. `<fieldset disabled>` stops typing, not
+    posting: the wizard still holds the payments array and still sends it. The
+    route therefore IGNORES it on a later batch rather than trusting that the
+    values happen to match - accepting is only safe while they do, and a client
+    bug would otherwise write the order's payment history from batch 2.
+
+    Counted over LIVE batches rather than `batches_ever`, which never
+    decrements - an order that split and lost a batch would otherwise keep
+    refusing payments on its only remaining one.
+
+    THE EDGES, and which of them are real:
+
+    * **No live batches at all** (every batch soft-deleted while the group is
+      still marked alive). REAL: `sync_group_deleted_state` marks the group
+      deleted when the last batch goes, but it runs inside the delete route, so
+      the state exists mid-transaction. Returns **False** - there is no batch to
+      own Step 4, and refusing a write to an order whose every shipment has been
+      removed is the safe direction. Note this is the opposite answer from the
+      `group is None` case above, and deliberately: no group means a record
+      being CREATED, which must be able to record a payment.
+
+    * **`batch_sequence` NULL on a live batch.** DEFENSIVE - it is assigned at
+      creation by `claim_batch_sequence` and never cleared. A NULL ranks LAST
+      rather than first, so it cannot sort ahead of a real sequence and take
+      Step 4 away from a batch that has one. The old "an unknown sequence reads
+      as founding" intent survives where it matters: a lone NULL-sequenced batch
+      is still the lowest live one and still owns the step.
+
+    * **Ties.** There should be none - `uq_consignments_group_sequence` makes
+      the sequence unique per group. If two live batches somehow shared the
+      lowest, BOTH would own Step 4 rather than neither. That is the deliberate
+      direction: two batches able to write the order's payments is the degraded
+      state this function was already guarding against, while "neither" is
+      exactly the silent 200 it exists to remove. A broken unique constraint
+      should not also take the payment screen away.
+    """
+    group = getattr(consignment, "batch_group", None)
+    if group is None:
+        return True
+
+    live = [b for b in group.batches if not b.is_deleted]
+    if not live:
+        return False
+
+    # Rank on the SEQUENCE, not on identity: `(is None, value)` sorts a NULL
+    # after every real sequence. Comparing ranks rather than rows is what makes
+    # a tie resolve to "both" rather than to `min()`'s arbitrary first row.
+    def rank(sequence):
+        return (sequence is None, sequence if sequence is not None else 0)
+
+    lowest = min(rank(batch.batch_sequence) for batch in live)
+    return rank(consignment.batch_sequence) == lowest
+
+
 def delete_missing(consignment, present_ids, id_column,db, model):
     # SCOPED TO THIS CONSIGNMENT, which is what makes it safe on a split order:
     # a save of batch 2 can only ever soft-delete batch 2's own lines, so a line
@@ -724,7 +830,12 @@ def delete_missing(consignment, present_ids, id_column,db, model):
     # ORDER line above them survives either way - `reconcile_allocation` retires
     # one only when the last live line across the whole order goes.
     query = select(model).where(
-            model.consignment_id == consignment.id
+            # THE OWNER, which is not the consignment for every child any
+            # more: payments hang off the ORDER since step 9. Left as
+            # `consignment_id` this matched nothing for payments, so a save
+            # that removed one silently deleted none.
+            (model.batch_group_id == consignment.batch_group_id
+             if model is Payment else model.consignment_id == consignment.id)
     ).where(
         model.is_deleted == False
     )
@@ -886,7 +997,13 @@ def updated_items(consignment, update_consignment_data, db):
 def updated_payments(consignment, update_consignment_data, db):
     updated_payments_list = []
     payments_in_updated_data = update_consignment_data.payments
-    payments_in_consignment = consignment.payments
+    # THE ORDER'S PAYMENTS. `Consignment.payments` is gone (step 9) and this
+    # line raised AttributeError the moment it went - which is the loud failure
+    # correction B was written to get, rather than a relationship that keeps
+    # working off the orphaned column until Revision B drops it.
+    payments_in_consignment = (
+        consignment.batch_group.payments if consignment.batch_group else []
+    )
 
     serialized_consignment_payments = serialize_many(payments_in_consignment)
 
@@ -1184,23 +1301,29 @@ def revert(consignment_history, consignment, db, user=None):
     skipped = dict(revert_local_fields(consignment, fields, user))
 
     # Deletig new items added in update
-    add_or_delete(new_items, ConsignmentItem, consignment.id, ConsignmentItem.id, db, delete=True)
+    add_or_delete(new_items, ConsignmentItem, ConsignmentItem.consignment_id,
+                  consignment.id, ConsignmentItem.id, db, delete=True)
 
     # Deleting new payments added in update
-    add_or_delete(new_payments, Payment, consignment.id, Payment.id, db, delete=True)
+    add_or_delete(new_payments, Payment, Payment.batch_group_id,
+                  consignment.batch_group_id, Payment.id, db, delete=True)
 
     # Adding deleted items back
-    add_or_delete(deleted_items, ConsignmentItem, consignment.id, ConsignmentItem.id, db, delete=False)
+    add_or_delete(deleted_items, ConsignmentItem, ConsignmentItem.consignment_id,
+                  consignment.id, ConsignmentItem.id, db, delete=False)
 
     # Adding deleted payments back
-    add_or_delete(deleted_payments, Payment, consignment.id, Payment.id, db, delete=False)
+    add_or_delete(deleted_payments, Payment, Payment.batch_group_id,
+                  consignment.batch_group_id, Payment.id, db, delete=False)
 
     # Reverting already existing items updates
-    skipped.update(revert_old_values(items_updates, ConsignmentItem, consignment.id,
+    skipped.update(revert_old_values(items_updates, ConsignmentItem,
+                                     ConsignmentItem.consignment_id, consignment.id,
                                      ConsignmentItem.id, db))
 
     # Reverting already existing payments updates
-    skipped.update(revert_old_values(payments_updates, Payment, consignment.id,
+    skipped.update(revert_old_values(payments_updates, Payment,
+                                     Payment.batch_group_id, consignment.batch_group_id,
                                      Payment.id, db))
 
     # WHAT COULD NOT BE RESTORED GOES BACK TO THE CALLER, and from there into
@@ -1346,13 +1469,42 @@ def revert_local_fields(consignment, fields, user=None):
     return skipped
 
 
-def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
+def legacy_payment_consignment_id(group):
+    """What goes in the orphaned `payments.consignment_id` until Revision B.
+
+    THE ORDER'S FOUNDING BATCH, never the one on screen. See the column comment
+    on `Payment.consignment_id`: it is the row the order's identity already
+    derives from, so two payments recorded on one order from different batches
+    agree about it. The alternative - whichever arrival the operator happened to
+    have open - would leave the orphaned column disagreeing for no recoverable
+    reason.
+
+    THE SINGLE WRITER. When Revision B drops the column, this function and its
+    two call sites are the whole of what has to go.
+    """
+    return getattr(group, "founding_consignment_id", None)
+
+
+def add_or_delete(data, model, owner_column, owner_id, id_column, db, delete = False):
+    """Re-add or soft-delete child rows a revert has to put back or take away.
+
+    IT TAKES THE OWNER COLUMN, NOT A CONSIGNMENT ID. It used to hard-code
+    `model.consignment_id == consignment_id`, which stopped being true for
+    payments in step 9: they hang off the ORDER now, so that filter matched
+    nothing and a revert quietly re-added no payments and removed none. No
+    error anywhere - the revert reported success having done half its job,
+    which is the failure `skipped_fields` exists to make impossible and which
+    this path would have walked straight round.
+
+    Items are still owned by the consignment; payments by the group. Passing
+    the column makes the caller say which, rather than this function assuming.
+    """
     for data in data:
         data_id = data.get("id")
         if data_id:
             consignment_data = db.execute(
                     select(model).where(
-                        model.consignment_id == consignment_id
+                        owner_column == owner_id
                     ).where(
                         id_column == data_id
                 )
@@ -1366,7 +1518,7 @@ def add_or_delete(data, model, consignment_id, id_column, db, delete = False):
                     consignment_data.deleted_at = None
 
 
-def revert_old_values(updated_data, model, consignment_id, id_column, db):
+def revert_old_values(updated_data, model, owner_column, owner_id, id_column, db):
     """Restore child rows, routing each key to whichever table now owns it.
 
     Returns the keys it deliberately could not restore, like its header twin.
@@ -1387,9 +1539,13 @@ def revert_old_values(updated_data, model, consignment_id, id_column, db):
         if not data_id:
             continue
 
+        # THE OWNER COLUMN, passed in. Same reason as `add_or_delete` above:
+        # payments moved to the order in step 9 and a hard-coded
+        # `consignment_id` filter matched nothing, so a payment revert restored
+        # nothing and said it had worked.
         row = db.execute(
             select(model)
-            .where(model.consignment_id == consignment_id)
+            .where(owner_column == owner_id)
             .where(id_column == data_id)
         ).scalar_one_or_none()
 
@@ -2059,6 +2215,14 @@ GROUP_SHARED_FIELDS = [
     "exchange_rate",
     "rate_booked_on",
     "rate_source",
+    # STEP 4's LC-LEVEL FIGURE. Insurance is taken out on the order, not on each
+    # shipment, and the column has been on the group since revision A with
+    # nothing able to write it - it was absent from this list, so the payload
+    # could not reach it. Wiring only; no migration.
+    #
+    # PLAIN PASSTHROUGH, unlike `branch_id`: the payload key and the column are
+    # the same word, so it needs no entry in the rename below.
+    "insurance_amount",
 ]
 
 

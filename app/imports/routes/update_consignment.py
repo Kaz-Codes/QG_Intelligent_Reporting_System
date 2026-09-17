@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import assert_group_writable, GroupFrozenError, SERVER_RESOLVED_ITEM_FIELDS, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
+from app.imports.helpers import assert_group_writable, GroupFrozenError, SERVER_RESOLVED_ITEM_FIELDS, legacy_payment_consignment_id, payments_belong_to_this_batch, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
 
 from app.imports.helpers import (
     fetch_consignment, is_closed, CLOSED_STATUS_VALUE,
@@ -262,8 +262,17 @@ def update_consignment(
         )
         new_items = new_items_to_add(consignment, consignment_data)
         item_updates = updated_items(consignment, consignment_data, db)
-        new_payments = new_payments_to_add(consignment_data)
-        payment_updates = updated_payments(consignment, consignment_data, db)
+        # STEP 4 IS BATCH 1's - see helpers.payments_belong_to_this_batch, and
+        # the note at `posted_payments` below. Computed here because the new
+        # payments and the payment diff have to be suppressed too: a later batch
+        # posting the order's list back would otherwise show up as "no change"
+        # only by luck.
+        payments_editable = payments_belong_to_this_batch(consignment)
+
+        new_payments = new_payments_to_add(consignment_data) if payments_editable else []
+        payment_updates = (
+            updated_payments(consignment, consignment_data, db) if payments_editable else []
+        )
 
         # Deleting missing items and payments
 
@@ -273,14 +282,30 @@ def update_consignment(
             if item.id is not None
         ]
 
+        # STEP 4 IS BATCH 1's - the requirements say payments are done once per
+        # consignment, on the founding batch. The wizard disables the step on a
+        # later batch, but a disabled fieldset stops typing and not posting, so
+        # the array still arrives. IGNORED here rather than accepted: accepting
+        # is only safe while the posted values happen to match what the order
+        # already holds, and a client bug would otherwise rewrite an order's
+        # payment history from batch 2. Same condition the front end uses -
+        # see helpers.payments_belong_to_this_batch.
+        posted_payments = list(consignment_data.payments) if payments_editable else []
+
         present_payment_ids = [
             payment.id
-            for payment in consignment_data.payments
+            for payment in posted_payments
             if payment.id is not None
         ]
 
         deleted_items = delete_missing(consignment, present_item_ids, ConsignmentItem.id, db, ConsignmentItem)
-        deleted_payments = delete_missing(consignment, present_payment_ids, Payment.id, db, Payment)
+        # Only when this batch owns the step. On a later batch nothing was
+        # posted and nothing may be removed - passing the empty list through
+        # `delete_missing` would soft-delete the ORDER's whole payment history.
+        deleted_payments = (
+            delete_missing(consignment, present_payment_ids, Payment.id, db, Payment)
+            if payments_editable else []
+        )
 
 
         # Adding new items and payments
@@ -306,7 +331,12 @@ def update_consignment(
         for payment_schema in new_payments:
             payment_dict = payment_schema.model_dump()
             payment = Payment(**payment_dict)
-            consignment.payments.append(payment)
+            # ON THE ORDER, with the orphaned column filled by its one writer.
+            payment.consignment_id = (
+                legacy_payment_consignment_id(consignment.batch_group)
+                or consignment.id
+            )
+            consignment.batch_group.payments.append(payment)
             created_payments.append(payment)
 
         db.flush()
@@ -349,7 +379,10 @@ def update_consignment(
 
         consignment_items_map = {item.id : item for item in consignment.items}
 
-        consignment_payments_map = {payment.id : payment for payment in consignment.payments}
+        consignment_payments_map = {
+            payment.id: payment
+            for payment in (consignment.batch_group.payments if consignment.batch_group else [])
+        }
 
         # The id is read, not popped, so the change history's copy of these
         # dicts keeps its id and a revert can still find the line.

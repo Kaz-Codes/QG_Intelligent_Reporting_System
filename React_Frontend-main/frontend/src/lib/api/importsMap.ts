@@ -551,6 +551,8 @@ export function draftToPayload(draft: ConsignmentDraft, masters: WizardMasters):
     exchange_rate: numGe0(draft.exchangeRate),
     rate_booked_on: strOrUndef(draft.rateDate),
     rate_source: strOrUndef(draft.rateSource),
+    // LC-level; routed to the group by PAYLOAD_TO_GROUP as a plain passthrough.
+    insurance_amount: numGe0(draft.insuranceAmount),
 
     mode_of_shipment: strOrUndef(draft.modeOfShipment),
     loading_port_id: nameToId(masters.ports, draft.portOfLoading),
@@ -704,6 +706,7 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
     exchangeRate: toNumber(c.exchange_rate) ?? undefined,
     rateDate: c.rate_booked_on ?? '',
     rateSource: c.rate_source ?? '',
+    insuranceAmount: toNumber(c.insurance_amount) ?? undefined,
 
     modeOfShipment: (c.mode_of_shipment ?? '') as ConsignmentDraft['modeOfShipment'],
     portOfLoading: c.loading_port?.name ?? '',

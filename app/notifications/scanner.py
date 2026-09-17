@@ -648,6 +648,12 @@ def check_demurrage_risk(db, today):
 
 
 def check_payment_overdue(db, today):
+    # THE STATE KEY IS THE PAYMENT'S OWN ID AND DID NOT CHANGE when payments
+    # moved to the order in step 9. Worth stating, because the move looked like
+    # it might: a key built from the consignment would have stopped matching
+    # every existing `notification_state` row and re-notified staff about
+    # payments they had already seen and cleared. It is not - so no state
+    # migration, and no re-notification.
     key = _state_key_sql("payment_overdue", cast(Payment.id, String))
     cutoff = today - timedelta(days=PAYMENT_OVERDUE_DAYS)
 
@@ -657,7 +663,10 @@ def check_payment_overdue(db, today):
     rows = db.execute(
         select(
             key.label("state_key"),
-            Payment.id, Payment.retirement_date, Payment.consignment_id,
+            Payment.id, Payment.retirement_date,
+            # The order's founding batch - what the notification links to now
+            # that a payment belongs to no single arrival.
+            ConsignmentBatchGroup.founding_consignment_id.label("consignment_id"),
             ConsignmentBatchGroup.instrument_number,
             ConsignmentBatchGroup.payment_instrument,
             # The three values the consignment number derives from - the
@@ -670,12 +679,23 @@ def check_payment_overdue(db, today):
             entering.label("is_overdue"),
         )
         .select_from(Payment)
-        .join(Consignment, Consignment.id == Payment.consignment_id)
+        # STRAIGHT TO THE ORDER - a payment is the ORDER's since step 9, so the
+        # hop through a batch is gone. It was never only a hop: it decided WHICH
+        # batch's deletion suppressed the alert, and on a split order that was
+        # whichever one the payment happened to be attached to.
         .join(ConsignmentBatchGroup,
-              ConsignmentBatchGroup.id == Consignment.batch_group_id)
+              ConsignmentBatchGroup.id == Payment.batch_group_id)
+        # The FOUNDING batch, for the sequence the reference label needs. A
+        # payment belongs to no particular arrival now, and the founding one is
+        # what the order is named after everywhere else (order_view).
+        .join(Consignment,
+              Consignment.id == ConsignmentBatchGroup.founding_consignment_id)
         .outerjoin(NotificationState, NotificationState.state_key == key)
         .where(Payment.is_deleted == False)  # noqa: E712
-        .where(Consignment.is_deleted == False)  # noqa: E712
+        # THE ORDER'S deletion, not a batch's. Deleting one arrival of a
+        # three-batch LC does not retire the LC's payments, and under the old
+        # join it silenced them.
+        .where(ConsignmentBatchGroup.is_deleted == False)  # noqa: E712
         .where(Payment.retirement_date.isnot(None))
         .where(func.lower(func.coalesce(Payment.status, "")) != "paid")
         .where(_crossing_filter(NotificationState.state_value, entering, leaving, OPEN))
