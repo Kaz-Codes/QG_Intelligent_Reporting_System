@@ -7,7 +7,7 @@ from app.models_mixins import TimestampMixin
 
 from sqlalchemy import (
     JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, String, text,
+    Numeric, String, Text, text,
 )
 from sqlalchemy.orm import (
     Mapped, mapped_column, relationship, declarative_mixin,
@@ -236,6 +236,13 @@ class ConsignmentBatchGroup(Base, TimestampMixin):
         back_populates="batch_group",
         cascade="all, delete-orphan",
         foreign_keys="Payment.batch_group_id",
+    )
+
+    # AMENDMENTS TO THE LC, and they belong here for the same reason payments
+    # do: an LC is amended once, not once per arrival.
+    addenda: Mapped[list["PaymentAddendum"]] = relationship(
+        back_populates="batch_group",
+        cascade="all, delete-orphan",
     )
 
     order_items: Mapped[list["ConsignmentOrderItem"]] = relationship(
@@ -1173,6 +1180,102 @@ class Payment(Base, TimestampMixin):
     batch_group: Mapped["ConsignmentBatchGroup"] = relationship(
         back_populates="payments",
         foreign_keys=[batch_group_id],
+    )
+
+
+#--------------------------------
+# ADDENDA - AMENDMENTS TO THE LC
+#
+# The requirements ask for an "Add addendum" button rather than fixed "1st
+# addendum" / "2nd addendum" sections, so the count is open and this is a child
+# table rather than two more columns on the order.
+#
+# ON THE GROUP, like payments and for the same reason (section 4.4): an LC is
+# amended once, not once per arrival.
+#--------------------------------
+
+class PaymentAddendum(Base, TimestampMixin):
+    __tablename__ = "payment_addenda"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    batch_group_id: Mapped[int] = mapped_column(
+        ForeignKey("consignment_batch_groups.id"),
+        nullable=False,
+        index=True,
+    )
+
+    addendum_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True
+    )
+
+    reference: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    # THIS IS THE CHANGE TO THE LC AMOUNT. IT IS NOT THE REVISED TOTAL.
+    #
+    # Signed: an increase is positive, a reduction NEGATIVE. The current LC
+    # value is the original plus the sum of the live addenda.
+    #
+    # WHY A DELTA RATHER THAN A REVISED TOTAL, which is the more obvious
+    # column and is wrong in two ways that only show up later:
+    #
+    #   - a revised total makes the current figure depend on WHICH ROW IS
+    #     NEWEST, so the answer changes if two addenda are entered out of order
+    #     or if `addendum_date` is left blank, which it may be;
+    #   - soft-deleting one would then be silently wrong. Everything in this
+    #     module soft-deletes (CLAUDE.md), so removing a middle addendum is
+    #     ordinary work - and under a revised total it would leave the figure
+    #     reading whatever the deleted row had superseded. As a delta, deleting
+    #     a row simply drops its term and the arithmetic stays correct whatever
+    #     order the rest were entered in.
+    #
+    # NOTHING SUMS THIS COLUMN YET, deliberately - see the class comment below
+    # and `tests/test_addenda.py`.
+    value: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 4),
+        nullable=True
+    )
+
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+
+    # SEPARATE FROM `value`, exactly as `Payment.bank_charges` is separate from
+    # `Payment.value`: a charge is a cost of the transaction, not a change to
+    # what the goods are worth. Folding it into `value` would move the LC
+    # amount by the bank's fee.
+    #
+    # AND IT ENTERS NO TOTAL. This one needs saying out loud because the
+    # neighbouring `bankChargesTotal` exists on the front end and payment bank
+    # charges genuinely do carry into landed cost - so "sum these with those"
+    # is a reasonable-looking change that would restate a printed figure. An
+    # addendum's charges are not payment charges. They are stored and
+    # displayed, and that is all, until somebody decides otherwise in a change
+    # of its own.
+    bank_charges: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2),
+        nullable=True
+    )
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True
+    )
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    batch_group: Mapped["ConsignmentBatchGroup"] = relationship(
+        back_populates="addenda",
     )
 
 

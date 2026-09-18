@@ -15,11 +15,12 @@ import {
   type ConsignmentPayload,
 } from '@/lib/api/imports'
 import {
-  draftToPayload, apiToDraft, syncItemBackendIds, syncPaymentBackendIds, type WizardMasters,
+  draftToPayload, apiToDraft, syncItemBackendIds, syncPaymentBackendIds,
+  syncAddendumBackendIds, type WizardMasters,
 } from '@/lib/api/importsMap'
 import {
   consignmentDraftSchema, DRAFT_DEFAULT_VALUES, WIZARD_STEPS, CLOSED_STATUS,
-  type ConsignmentDraft, type ConsignmentItem, type Payment,
+  type ConsignmentDraft, type ConsignmentItem, type Payment, type Addendum,
 } from '../schema'
 import { MastersProvider, useMasters } from './MastersContext'
 import { BatchProvider } from './BatchContext'
@@ -237,8 +238,12 @@ function ImportsStatusWizardInner() {
       // wizard's handleSaveAndMove documented).
       const currentItems = (methods.getValues('items') ?? []) as ConsignmentItem[]
       const currentPayments = (methods.getValues('payments') ?? []) as Payment[]
+      const currentAddenda = (methods.getValues('addenda') ?? []) as Addendum[]
       methods.setValue('items', syncItemBackendIds(currentItems, response.items), { shouldDirty: false })
       methods.setValue('payments', syncPaymentBackendIds(currentPayments, response.payments), { shouldDirty: false })
+      // Addenda too, or every save re-inserts the whole list. `?? []` because
+      // a response from before this change carries no addenda key.
+      methods.setValue('addenda', syncAddendumBackendIds(currentAddenda, response.addenda ?? []), { shouldDirty: false })
 
       // IN saveDraft, NOT AT ITS CALL SITES. There are three of them - save,
       // save-and-next, and submit - and putting it at one is how the panel

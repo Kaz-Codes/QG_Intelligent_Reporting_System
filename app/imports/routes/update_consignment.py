@@ -5,13 +5,13 @@ from app.database import SessionLocal
 from app.auth.authenticate_user import authenticate
 from app.auth.authorize_user import authorize
 from app.accounts.permissions import CAN_EDIT_IMPORTS
-from app.imports.helpers import assert_group_writable, GroupFrozenError, SERVER_RESOLVED_ITEM_FIELDS, legacy_payment_consignment_id, payments_belong_to_this_batch, updated_fields, updated_payments, updated_items, new_items_to_add, new_payments_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
+from app.imports.helpers import assert_group_writable, GroupFrozenError, SERVER_RESOLVED_ITEM_FIELDS, legacy_payment_consignment_id, payments_belong_to_this_batch, updated_fields, updated_payments, updated_addenda, updated_items, new_items_to_add, new_payments_to_add, new_addenda_to_add, apply_updates, add_in_consignment_change_history,add_in_eta_revision_history, add_in_status_change_history, delete_missing, stamp_landed_cost_audit, recompute_derived, apply_item_master_values, sync_order_items, split_item_payload, apply_item_updates, apply_group_updates, reconcile_allocation, AllocationError
 
 from app.imports.helpers import (
     fetch_consignment, is_closed, CLOSED_STATUS_VALUE,
     item_current_values,
 )
-from app.imports.models import ConsignmentItem, Payment
+from app.imports.models import ConsignmentItem, Payment, PaymentAddendum
 from app.imports.serializers import serialize_consignment, serialize_many
 from app.notifications.emit import emit
 from app.notifications.lifecycle import notify_status_changed, notify_completed
@@ -274,6 +274,15 @@ def update_consignment(
             updated_payments(consignment, consignment_data, db) if payments_editable else []
         )
 
+        # ADDENDA RIDE THE SAME PREDICATE. They are LC-level like payments, they
+        # sit inside the same step, and they arrive in the same payload from the
+        # same disabled fieldset - so a later batch posting the order's addenda
+        # back must be ignored for exactly the reason its payments are.
+        new_addenda = new_addenda_to_add(consignment_data) if payments_editable else []
+        addenda_updates = (
+            updated_addenda(consignment, consignment_data, db) if payments_editable else []
+        )
+
         # Deleting missing items and payments
 
         present_item_ids = [
@@ -298,12 +307,32 @@ def update_consignment(
             if payment.id is not None
         ]
 
-        deleted_items = delete_missing(consignment, present_item_ids, ConsignmentItem.id, db, ConsignmentItem)
+        posted_addenda = list(consignment_data.addenda or []) if payments_editable else []
+
+        present_addendum_ids = [
+            addendum.id
+            for addendum in posted_addenda
+            if addendum.id is not None
+        ]
+
+        deleted_items = delete_missing(present_item_ids, ConsignmentItem,
+                                       ConsignmentItem.consignment_id, consignment.id,
+                                       ConsignmentItem.id, db)
         # Only when this batch owns the step. On a later batch nothing was
         # posted and nothing may be removed - passing the empty list through
         # `delete_missing` would soft-delete the ORDER's whole payment history.
         deleted_payments = (
-            delete_missing(consignment, present_payment_ids, Payment.id, db, Payment)
+            delete_missing(present_payment_ids, Payment,
+                           Payment.batch_group_id, consignment.batch_group_id,
+                           Payment.id, db)
+            if payments_editable else []
+        )
+        # Same guard, same reason: an empty list from a batch that may not edit
+        # the step would erase the ORDER's whole addenda history.
+        deleted_addenda = (
+            delete_missing(present_addendum_ids, PaymentAddendum,
+                           PaymentAddendum.batch_group_id, consignment.batch_group_id,
+                           PaymentAddendum.id, db)
             if payments_editable else []
         )
 
@@ -339,13 +368,31 @@ def update_consignment(
             consignment.batch_group.payments.append(payment)
             created_payments.append(payment)
 
+        created_addenda = []
+        for addendum_schema in new_addenda:
+            addendum = PaymentAddendum(**addendum_schema.model_dump())
+            # ON THE ORDER, and with no orphaned column to fill - the table is
+            # new, so nothing like `legacy_payment_consignment_id` applies.
+            consignment.batch_group.addenda.append(addendum)
+            created_addenda.append(addendum)
+
         db.flush()
 
         # Adding changes in consignment change history and eta revisions and status updates
         # created_items goes through item_current_values for the same reason
         # deleted_items does (app/imports/helpers.py) - serialize_many walks the
         # mapper and the item fields have left it. Payments keep serialize_many.
-        add_in_consignment_change_history(updation_dict, [item_current_values(i) for i in created_items], serialize_many(created_payments), deleted_items, deleted_payments, item_updates, payment_updates, consignment, user, db, group_updates=group_updates)
+        add_in_consignment_change_history(
+            updation_dict, [item_current_values(i) for i in created_items],
+            serialize_many(created_payments), deleted_items, deleted_payments,
+            item_updates, payment_updates, consignment, user, db,
+            group_updates=group_updates,
+            # Keyword-only, so the three cannot be swapped with the unlabelled
+            # run above them - see the note on the function.
+            new_addenda_added=serialize_many(created_addenda),
+            deleted_addenda=deleted_addenda,
+            addenda_updates=addenda_updates,
+        )
 
         add_in_eta_revision_history(updation_dict, consignment, user, db)
         add_in_status_change_history(updation_dict, consignment, user, db)
@@ -400,6 +447,16 @@ def update_consignment(
             old_payment = consignment_payments_map.get(payment_id)
             if old_payment:
                 apply_updates(updated_payment, old_payment)
+
+        consignment_addenda_map = {
+            addendum.id: addendum
+            for addendum in (consignment.batch_group.addenda if consignment.batch_group else [])
+        }
+
+        for updated_addendum in addenda_updates:
+            old_addendum = consignment_addenda_map.get(updated_addendum.get("id"))
+            if old_addendum:
+                apply_updates(updated_addendum, old_addendum)
 
         # A line whose code is in the item master takes its name and
         # specification from there, whatever the payload said — applied after

@@ -1,6 +1,6 @@
 from app.imports.models import (
-    Consignment, ConsignmentItem, Payment, ConsignmentChangeHistory,
-    ConsignmentBatchGroup, ConsignmentOrderItem,
+    Consignment, ConsignmentItem, Payment, PaymentAddendum,
+    ConsignmentChangeHistory, ConsignmentBatchGroup, ConsignmentOrderItem,
 )
 from sqlalchemy import select, func, or_, and_, not_, update, literal
 from sqlalchemy.orm import joinedload, selectinload
@@ -131,8 +131,13 @@ def create_consignment_object(consignment_data, user):
     the same shape. They are not any more: twelve of these keys now belong to
     the order and two to the order line, and passing them here is a TypeError.
     """
+    # THE CHILD COLLECTIONS ARE EXCLUDED - see the same exclusion in
+    # `updated_fields`. There are TWO of these `model_dump` calls, one per write
+    # path, and adding a collection to one and not the other is a 500 on that
+    # path alone: `addenda` was missed here after being fixed there, and CREATE
+    # kept failing while UPDATE worked.
     payload = consignment_data.model_dump(
-        exclude_none=True, exclude={"items", "payments"}
+        exclude_none=True, exclude={"items", "payments", "addenda"}
     )
 
     consignment_fields, _group, _order_item = split_consignment_payload(payload)
@@ -217,6 +222,23 @@ def create_payment_object(consignment_data):
 
     return objects
 
+def create_addendum_object(consignment_data):
+    """The addenda posted at CREATE, as model objects.
+
+    No ownership predicate and no legacy column, unlike payments: the order is
+    this consignment's own brand-new group, so there is no sibling batch to
+    decide between and nothing orphaned to populate.
+    """
+    objects = []
+
+    for addendum in (consignment_data.addenda or []):
+        objects.append(
+            PaymentAddendum(**addendum.model_dump())
+        )
+
+    return objects
+
+
 #-------------------------------------
 # FETCH CONSIGNMENT FROM DB BASED ON
 # ON ID (SPECIFIC CONSIGNMENT)
@@ -251,6 +273,7 @@ def fetch_consignment(db, consignment_id):
         # ("Loader strategies ... conflict"), which is what a fresh
         # `selectinload(Consignment.batch_group)` here produced.
         joinedload(Consignment.batch_group).selectinload(ConsignmentBatchGroup.payments),
+        joinedload(Consignment.batch_group).selectinload(ConsignmentBatchGroup.addenda),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
         selectinload(Consignment.change_history),
@@ -469,6 +492,7 @@ def fetch_consignments_page(db, include_deleted, include_closed, status, stage,
         # ("Loader strategies ... conflict"), which is what a fresh
         # `selectinload(Consignment.batch_group)` here produced.
         joinedload(Consignment.batch_group).selectinload(ConsignmentBatchGroup.payments),
+        joinedload(Consignment.batch_group).selectinload(ConsignmentBatchGroup.addenda),
         selectinload(Consignment.status_updates),
         selectinload(Consignment.eta_revisions),
 
@@ -639,8 +663,15 @@ def updated_fields(consignment, update_consignment_data, db):
     and giving new rows a second shape would leave revert two formats to parse.
     Where a key lands is decided at REVERT time by the same maps used here.
     """
+    # THE CHILD COLLECTIONS ARE EXCLUDED, not routed. They are not header
+    # fields and have their own diffs; `split_consignment_payload` below
+    # refuses any key that belongs to no table, so a collection left in here
+    # is a 500 on every save - which is how the omission of `addenda` was
+    # caught, loudly, on the first drive of step 9 part 2. Add the next child
+    # collection to this set in the same change that adds the collection.
     payload = update_consignment_data.model_dump(
-        exclude_none=True, exclude={"items", "payments", "consignment_id"}
+        exclude_none=True,
+        exclude={"items", "payments", "addenda", "consignment_id"},
     )
 
     consignment_fields, group_fields, order_item_fields = \
@@ -716,6 +747,14 @@ def new_payments_to_add(update_consignment_data):
             new_payments.append(payment)
 
     return new_payments
+
+
+def new_addenda_to_add(update_consignment_data):
+    return [
+        addendum
+        for addendum in (update_consignment_data.addenda or [])
+        if addendum.id is None
+    ]
 
 
 #--------------------------------------
@@ -823,19 +862,30 @@ def payments_belong_to_this_batch(consignment):
     return rank(consignment.batch_sequence) == lowest
 
 
-def delete_missing(consignment, present_ids, id_column,db, model):
-    # SCOPED TO THIS CONSIGNMENT, which is what makes it safe on a split order:
-    # a save of batch 2 can only ever soft-delete batch 2's own lines, so a line
-    # absent from batch 2's payload cannot take a sibling's line with it. The
-    # ORDER line above them survives either way - `reconcile_allocation` retires
-    # one only when the last live line across the whole order goes.
+def delete_missing(present_ids, model, owner_column, owner_id, id_column, db):
+    """Soft-delete the rows of one collection that the payload no longer names.
+
+    IT TAKES THE OWNER COLUMN, like `add_or_delete` and `revert_old_values`
+    already do. It used to hard-code `model.consignment_id`, then - in step 9 -
+    a `model is Payment` conditional, which was a two-case switch inside a
+    function that exists to be generic. Addenda are the third child with an
+    owner, and a third branch is where that shape stops being a special case
+    and starts being a lookup table written in `if`s. A model the switch had
+    never heard of would have fallen through to `consignment_id` and matched
+    nothing, soft-deleting none of what the user removed and saying so
+    nowhere - the same silent half-success step 9 spent its whole budget on.
+
+    SCOPED TO ONE OWNER, which is what makes it safe on a split order: a save of
+    batch 2 can only ever soft-delete batch 2's own lines, so a line absent from
+    batch 2's payload cannot take a sibling's with it. The ORDER line above them
+    survives either way - `reconcile_allocation` retires one only when the last
+    live line across the whole order goes. For the group-owned collections
+    (payments, addenda) the owner is the ORDER, which is exactly why the caller
+    must also decide whether this batch may edit them at all
+    (`payments_belong_to_this_batch`) before calling.
+    """
     query = select(model).where(
-            # THE OWNER, which is not the consignment for every child any
-            # more: payments hang off the ORDER since step 9. Left as
-            # `consignment_id` this matched nothing for payments, so a save
-            # that removed one silently deleted none.
-            (model.batch_group_id == consignment.batch_group_id
-             if model is Payment else model.consignment_id == consignment.id)
+            owner_column == owner_id
     ).where(
         model.is_deleted == False
     )
@@ -1037,6 +1087,45 @@ def updated_payments(consignment, update_consignment_data, db):
     return updated_payments_list
 
 
+def updated_addenda(consignment, update_consignment_data, db):
+    """Field-level diff of the posted addenda against the ORDER's stored ones.
+
+    The same shape as `updated_payments` above, and it can stay that simple for
+    the same reason: nothing has moved out of `payment_addenda`, so
+    `serialize_many`'s mapper walk is the whole truth about an addendum. (Items
+    need `item_current_values` instead, because thirteen of their fields live on
+    the order line and a mapper walk cannot see them.)
+    """
+    updated_addenda_list = []
+
+    stored = serialize_many(
+        consignment.batch_group.addenda if consignment.batch_group else []
+    )
+    stored_by_id = {addendum["id"]: addendum for addendum in stored}
+
+    for addendum in (update_consignment_data.addenda or []):
+        posted = addendum.model_dump()
+
+        if posted["id"] is None:
+            continue
+
+        current = stored_by_id.get(posted["id"])
+        if current is None:
+            continue
+
+        updation_dict = {
+            field: {"old_value": current[field], "new_value": posted[field]}
+            for field in posted
+            if posted[field] != current[field]
+        }
+
+        if updation_dict:
+            updation_dict["id"] = posted["id"]
+            updated_addenda_list.append(updation_dict)
+
+    return updated_addenda_list
+
+
 #------------------------------------
 # APPLY ALL THE UPDATES
 #------------------------------------
@@ -1155,6 +1244,16 @@ def add_in_consignment_change_history(
         user,
         db,
         group_updates=None,
+        # ADDENDA ARRIVE KEYWORD-ONLY, and the seven positional parameters
+        # above are deliberately left as they are. This call is already one
+        # unlabelled run of seven collections at the call site; extending it to
+        # ten is how two of them get swapped in a later edit, and the swap is
+        # silent - "new payments" and "deleted addenda" are both lists of
+        # dicts. Converting the existing seven is a separate diff, on purpose:
+        # mixing it into this one would make neither reviewable.
+        new_addenda_added=None,
+        deleted_addenda=None,
+        addenda_updates=None,
 ):
     """Record what this save changed, across all three rows.
 
@@ -1204,7 +1303,16 @@ def add_in_consignment_change_history(
         "new_items": new_items_added,
         "new_payments" : new_payments_added,
         "deleted_items" : serialized_deleted_items,
-        "deleted_payments" : serialized_deleted_payments 
+        "deleted_payments" : serialized_deleted_payments,
+        # ADDENDA, on serialize_many for the same reason payments are: nothing
+        # has moved out of `payment_addenda`, so the mapper is the whole truth
+        # about one. Written on EVERY update from now on, including saves that
+        # changed no addendum - the lists are simply empty - which is what lets
+        # `revert` tell "this row predates addenda" from "this row changed
+        # none". See the `.get` in `revert`.
+        "addenda" : addenda_updates or [],
+        "new_addenda" : new_addenda_added or [],
+        "deleted_addenda" : serialize_many(deleted_addenda or []),
     }
 
     change_history = ConsignmentChangeHistory(
@@ -1294,6 +1402,25 @@ def revert(consignment_history, consignment, db, user=None):
     deleted_items = history["deleted_items"]
     deleted_payments = history["deleted_payments"]
 
+    # THE THREE ADDENDA KEYS ARE READ WITH `.get`, THE SEVEN ABOVE BY
+    # SUBSCRIPT, AND THE ASYMMETRY IS THE POINT RATHER THAN SLOPPINESS.
+    #
+    # Every history row in the database predates step 9 part 2, so none of them
+    # carries an addenda key. A direct subscript here would raise KeyError on
+    # the revert of ANY older record - a 500 on a consignment that has nothing
+    # to do with addenda, reachable the moment this deploys, on the most
+    # ordinary action the change-history screen offers.
+    #
+    # The other seven are present on every row that exists and stay as
+    # subscripts: a missing one of those would mean a history row written by
+    # code that no longer exists, and failing loudly is the right answer to
+    # that. Match this shape for the NEXT collection added here - and do not
+    # "tidy" these three into subscripts once new rows all carry them, because
+    # the old rows never will.
+    addenda_updates = history.get("addenda", [])
+    new_addenda = history.get("new_addenda", [])
+    deleted_addenda = history.get("deleted_addenda", [])
+
     # Reverting local fields. Returns {key: reason} for whatever it could not
     # restore - a retired column, or a group field a closed batch has frozen.
     # `user` decides Tier 2: an admin may restore a supplier, nobody may
@@ -1316,6 +1443,13 @@ def revert(consignment_history, consignment, db, user=None):
     add_or_delete(deleted_payments, Payment, Payment.batch_group_id,
                   consignment.batch_group_id, Payment.id, db, delete=False)
 
+    # Addenda, both directions - owned by the ORDER, like payments.
+    add_or_delete(new_addenda, PaymentAddendum, PaymentAddendum.batch_group_id,
+                  consignment.batch_group_id, PaymentAddendum.id, db, delete=True)
+
+    add_or_delete(deleted_addenda, PaymentAddendum, PaymentAddendum.batch_group_id,
+                  consignment.batch_group_id, PaymentAddendum.id, db, delete=False)
+
     # Reverting already existing items updates
     skipped.update(revert_old_values(items_updates, ConsignmentItem,
                                      ConsignmentItem.consignment_id, consignment.id,
@@ -1325,6 +1459,12 @@ def revert(consignment_history, consignment, db, user=None):
     skipped.update(revert_old_values(payments_updates, Payment,
                                      Payment.batch_group_id, consignment.batch_group_id,
                                      Payment.id, db))
+
+    # Reverting already existing addenda updates
+    skipped.update(revert_old_values(addenda_updates, PaymentAddendum,
+                                     PaymentAddendum.batch_group_id,
+                                     consignment.batch_group_id,
+                                     PaymentAddendum.id, db))
 
     # WHAT COULD NOT BE RESTORED GOES BACK TO THE CALLER, and from there into
     # the response. A revert that quietly does less than it says is the bug this

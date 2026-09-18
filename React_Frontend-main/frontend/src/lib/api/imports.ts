@@ -88,6 +88,18 @@ export interface ApiPayment {
   is_deleted: boolean
 }
 
+/** An amendment to the LC. `value` is a SIGNED DELTA to the LC amount, not the
+ *  revised total — a reduction is negative. Nothing sums it. */
+export interface ApiAddendum {
+  id: number
+  addendum_date: string | null
+  reference: string | null
+  value: string | number | null
+  description: string | null
+  bank_charges: string | number | null
+  is_deleted: boolean
+}
+
 export interface ApiConsignment {
   /** The row's PRIMARY KEY. A link target and a React key — never a display
    *  number. On a later batch the id and the number are different integers
@@ -166,6 +178,10 @@ export interface ApiConsignment {
   container_detention: string | number | null
   items: ApiConsignmentItem[]
   payments: ApiPayment[]
+  /** The ORDER's addenda, published on every batch like `payments`. Optional
+   *  because a list row's serializer emits it too but an older cached payload
+   *  may not carry it. */
+  addenda?: ApiAddendum[]
   /** DETAIL PAYLOAD ONLY — both read `batch_group` collections the list query
    *  does not load, so they are absent (undefined) on a list row. */
   allocation?: ApiAllocationLine[]
@@ -213,6 +229,12 @@ export interface ApiChangeHistoryPayload {
   new_payments?: Record<string, unknown>[]
   deleted_items?: Record<string, unknown>[]
   deleted_payments?: Record<string, unknown>[]
+  /** ADDENDA — optional like the rest, and genuinely absent on every history
+   *  row written before step 9 part 2. The backend reads these three with
+   *  `.get` for that reason. */
+  addenda?: ApiChildChange[]
+  new_addenda?: Record<string, unknown>[]
+  deleted_addenda?: Record<string, unknown>[]
 }
 
 export interface ApiChangeHistoryEntry {
@@ -414,6 +436,17 @@ export interface ConsignmentPaymentPayload {
   bank_reference?: string | null
 }
 
+export interface ConsignmentAddendumPayload {
+  id?: number | null
+  addendum_date?: string | null
+  reference?: string | null
+  /** SIGNED — no `numGt0`/`numGe0` on the way out, or a reduction never
+   *  reaches the server. */
+  value?: number | null
+  description?: string | null
+  bank_charges?: number | null
+}
+
 export interface ConsignmentPayload {
   branch_id?: number | null
   supplier_id?: number | null
@@ -457,6 +490,7 @@ export interface ConsignmentPayload {
 
   items: ConsignmentItemPayload[]
   payments: ConsignmentPaymentPayload[]
+  addenda: ConsignmentAddendumPayload[]
 }
 
 interface SubmitErrorBody {

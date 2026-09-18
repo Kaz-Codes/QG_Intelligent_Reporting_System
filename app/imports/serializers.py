@@ -162,6 +162,17 @@ def serialize_consignment(consignment, db, include_change_history=True,
             consignment.batch_group.payments if consignment.batch_group else []
         ),
 
+        # THE ORDER'S ADDENDA - step 9 part 2. Same rule as payments: an LC is
+        # amended once, not once per arrival, so every batch publishes the same
+        # list and a later batch shows it read-only rather than empty.
+        #
+        # Deleted rows are published too, exactly as payments are, and the front
+        # end filters them - a divergence here would make the change-history
+        # screen and the wizard disagree about what an order holds.
+        "addenda" : serialize_many(
+            consignment.batch_group.addenda if consignment.batch_group else []
+        ),
+
         "created_by" : consignment.created_by.username if consignment.created_by else None,
         "created_by_id" : consignment.created_by_id if consignment.created_by_id else None,
         "created_at" : consignment.created_at,

@@ -99,6 +99,29 @@ class ConsignmentPaymentSchema(BaseModel):
     bank_reference : Optional[str] = Field(None, max_length=100)
 
 
+class ConsignmentAddendumSchema(BaseModel):
+    """An amendment to the LC. Shaped like a payment, with one deliberate
+    difference.
+
+    `value` CARRIES NO `gt=0`, AND THAT IS THE POINT OF THIS COMMENT.
+    `ConsignmentPaymentSchema.value` above is `Field(None, gt=0)`, and copying
+    this schema from it - the obvious move - would reject every REDUCTION
+    addendum, which is precisely what the signed-delta design exists to record.
+    A negative value here is not bad data; it is a decrease in the LC amount.
+    See `PaymentAddendum.value` for why it is a delta rather than a revised
+    total.
+
+    `bank_charges` keeps `ge=0`: a charge is a cost and a negative one is not a
+    thing this records.
+    """
+    id : Optional[int] = None
+    addendum_date : Optional[date] = None
+    reference : Optional[str] = Field(None, max_length=100)
+    value : Optional[Decimal] = None
+    description : Optional[str] = None
+    bank_charges : Optional[Decimal] = Field(None, ge=0)
+
+
 #------------------------------------
 # CONSIGNMENS
 #------------------------------------
@@ -152,6 +175,10 @@ class ConsignmentSchema(BaseModel):
     #---items and payments---
     items : Optional[list[ConsignmentItemSchema]] = []
     payments : Optional[list[ConsignmentPaymentSchema]] = []
+    # ON THE ORDER, like payments, and governed by the same ownership rule -
+    # `helpers.payments_belong_to_this_batch` decides whether this array is
+    # read or ignored.
+    addenda : Optional[list[ConsignmentAddendumSchema]] = []
 
 
 #------------------------------------

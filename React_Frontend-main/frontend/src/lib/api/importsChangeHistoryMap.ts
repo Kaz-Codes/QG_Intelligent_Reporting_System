@@ -139,6 +139,17 @@ const PAYMENT_META: Record<string, { label: string; kind: Kind }> = {
   bank_reference: { label: 'Reference', kind: 'text' },
 }
 
+const ADDENDUM_META: Record<string, { label: string; kind: Kind }> = {
+  addendum_date: { label: 'Date', kind: 'date' },
+  reference: { label: 'Reference', kind: 'text' },
+  // "Change to LC value", not "Value" — the column is a signed delta, and a
+  // history card reading "Value: 5,000 -> 8,000" would be read as the LC
+  // amount by anyone who did not write the schema.
+  value: { label: 'Change to LC value', kind: 'money' },
+  description: { label: 'Description', kind: 'text' },
+  bank_charges: { label: 'Bank charges', kind: 'money' },
+}
+
 /** The master lists the FK fields resolve against, plus per-row labels for
  *  child collections (the diff itself carries only an id). */
 export interface HistoryLookups {
@@ -151,11 +162,12 @@ export interface HistoryLookups {
    *  is then shown instead, which is still better than nothing. */
   itemLabels: Map<number, string>
   paymentLabels: Map<number, string>
+  addendumLabels: Map<number, string>
 }
 
 export const EMPTY_LOOKUPS: HistoryLookups = {
   branches: [], suppliers: [], ports: [], agents: [],
-  itemLabels: new Map(), paymentLabels: new Map(),
+  itemLabels: new Map(), paymentLabels: new Map(), addendumLabels: new Map(),
 }
 
 const DATE_FMT = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -316,6 +328,13 @@ function paymentSummary(row: Record<string, unknown>): string {
   return [value, status, ref].filter(Boolean).join(' · ')
 }
 
+function addendumSummary(row: Record<string, unknown>): string {
+  const value = row.value != null ? formatMoney(row.value) : ''
+  const ref = row.reference ? String(row.reference) : ''
+  const desc = row.description ? String(row.description) : ''
+  return [value, ref, desc].filter(Boolean).join(' · ')
+}
+
 function buildCollections(
   history: ApiChangeHistoryEntry['history'],
   lookups: HistoryLookups,
@@ -334,6 +353,17 @@ function buildCollections(
       updated: buildChildDiffs(history.payments, PAYMENT_META, 'Payment', lookups.paymentLabels, lookups),
       added: buildChildSummaries(history.new_payments, 'Payment', paymentSummary, 'payment-add'),
       removed: buildChildSummaries(history.deleted_payments, 'Payment', paymentSummary, 'payment-rm'),
+    },
+    {
+      // WITHOUT THIS THE WHOLE COLLECTION IS INVISIBLE. An addendum add, edit
+      // or removal is recorded and is revertable either way; the change-history
+      // screen simply would not mention it, which is the worst of the three
+      // states - stored, undoable and unreadable.
+      key: 'addenda',
+      label: 'Addenda',
+      updated: buildChildDiffs(history.addenda, ADDENDUM_META, 'Addendum', lookups.addendumLabels, lookups),
+      added: buildChildSummaries(history.new_addenda, 'Addendum', addendumSummary, 'addendum-add'),
+      removed: buildChildSummaries(history.deleted_addenda, 'Addendum', addendumSummary, 'addendum-rm'),
     },
   ]
 

@@ -81,6 +81,8 @@ def get_batches(request: Request, consignment_id: int):
                 .selectinload(ConsignmentItem.order_item),
                 joinedload(Consignment.batch_group)
                 .selectinload(ConsignmentBatchGroup.payments),
+                joinedload(Consignment.batch_group)
+                .selectinload(ConsignmentBatchGroup.addenda),
                 selectinload(Consignment.status_updates),
                 selectinload(Consignment.eta_revisions),
                 joinedload(Consignment.created_by),

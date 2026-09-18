@@ -1,13 +1,14 @@
 import type {
   ApiConsignment, ApiConsignmentItem, ConsignmentPayload,
-  ConsignmentItemPayload, ConsignmentPaymentPayload,
+  ConsignmentItemPayload, ConsignmentPaymentPayload, ConsignmentAddendumPayload,
 } from './imports'
 import type { MasterOption } from './masters'
 import { nameToId } from './masters'
 import {
   CONSIGNMENT_STATUSES, CLOSED_STATUS, DRAFT_DEFAULT_VALUES, SUBMITTED,
-  emptyItem, emptyPayment,
+  emptyItem, emptyPayment, emptyAddendum,
   type ConsignmentDraft, type ConsignmentItem as DraftItem, type Payment as DraftPayment,
+  type Addendum as DraftAddendum,
 } from '@/features/importsStatus/schema'
 
 /**
@@ -512,6 +513,21 @@ function paymentToPayload(payment: DraftPayment): ConsignmentPaymentPayload {
   }
 }
 
+function addendumToPayload(addendum: DraftAddendum): ConsignmentAddendumPayload {
+  return {
+    id: addendum.backendId ?? null,
+    addendum_date: strOrUndef(addendum.date),
+    // NOT `numGe0` AND NOT `numGt0`. An addendum's value is a signed delta and
+    // a reduction is negative; either guard would silently drop it on the way
+    // out, which is the frontend half of the `gt=0` trap the backend schema
+    // avoids. `toFiniteNumber` still keeps blanks and NaN out.
+    value: toFiniteNumber(addendum.value),
+    description: strOrUndef(addendum.description),
+    bank_charges: numGe0(addendum.bankCharges),
+    reference: strOrUndef(addendum.reference),
+  }
+}
+
 export interface WizardMasters {
   branches: MasterOption[]
   suppliers: MasterOption[]
@@ -579,6 +595,7 @@ export function draftToPayload(draft: ConsignmentDraft, masters: WizardMasters):
 
     items: draft.items.map(itemToPayload),
     payments: draft.payments.map(paymentToPayload),
+    addenda: draft.addenda.map(addendumToPayload),
   }
 }
 
@@ -616,6 +633,10 @@ export function syncItemBackendIds(items: DraftItem[], responseItems: ApiConsign
 
 export function syncPaymentBackendIds(payments: DraftPayment[], responsePayments: { id: number }[]): DraftPayment[] {
   return syncBackendIds(payments, responsePayments)
+}
+
+export function syncAddendumBackendIds(addenda: DraftAddendum[], responseAddenda: { id: number }[]): DraftAddendum[] {
+  return syncBackendIds(addenda, responseAddenda)
 }
 
 /**
@@ -739,6 +760,20 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
       status: (payment.status === 'Paid' ? 'Paid' : 'Unpaid'),
       reference: payment.bank_reference ?? '',
       bankCharges: toNumber(payment.bank_charges) ?? undefined,
+    })),
+
+    // THE ORDER'S ADDENDA. Deleted rows are filtered here, exactly as payments
+    // are — the serializer publishes both.
+    addenda: (c.addenda ?? []).filter((a) => !a.is_deleted).map((addendum, i) => ({
+      ...emptyAddendum(`add-${c.id}-${addendum.id ?? i}`),
+      backendId: addendum.id,
+      date: addendum.addendum_date ?? '',
+      reference: addendum.reference ?? '',
+      // `toNumber`, not a positive-only coercion: a reduction is stored
+      // negative and must read back negative.
+      value: toNumber(addendum.value) ?? undefined,
+      description: addendum.description ?? '',
+      bankCharges: toNumber(addendum.bank_charges) ?? undefined,
     })),
 
     status: (c.current_status ?? '') as ConsignmentDraft['status'],

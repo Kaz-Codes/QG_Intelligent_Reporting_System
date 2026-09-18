@@ -1,6 +1,6 @@
 # Imports batching — design
 
-**Status: approved; PHASE 1 AND STEPS 1, 2, 2b, 6 AND 7 ARE BUILT.** Alembic
+**Status: approved; STEPS 1 THROUGH 9 ARE BUILT — the imports module is complete.** Step 9 part 2 (addenda and the Advance rates, revision 20 below) is the last of them; what remains is listed under *What is left in imports after step 9* at the end of section 9. Revision B (the contract migration) is still outstanding and still cannot be written by this project alone. Alembic
 revision `a1c4f27b93de` (revision A — expand), the model changes it needs, the
 loaders and the `post_load` checks are written and verified against a scratch
 database. **Step 2b** (submission rules removed, closing decoupled from
@@ -28,6 +28,122 @@ freeze is what constrains it. **Nothing has been stubbed for it** — no flag, n
 dead parameter, no uncalled hook — deliberately, because this document records
 twice that a hook which is never called cannot be told apart from one that is
 called and does nothing.
+
+---
+
+## Changelog — revision 20 (step 9, part 2: addenda and the Advance rates)
+
+**Step 9 closes here, and with it the imports module.** The two things revision
+19 deferred are built: the `payment_addenda` table and the Advance-mode rate
+fetch. Neither was blocked by code — one waited on a column list, the other on
+what "the rates" meant.
+
+### Addenda — Alembic `a7c2e94f5b31`
+
+The full column list, the signed-delta reasoning and why the sheet never needed
+to produce it are in **§4.4**, which no longer carries a `...` sketch. The short
+version: on the GROUP like payments, an "Add addendum" button so the count is
+open, `value` a SIGNED delta so order does not matter and a soft delete leaves
+the arithmetic correct.
+
+**The constraint, which is most of what this change is.** Nothing is wired into
+any total. Not `value`, and **not `bank_charges` either** — the one that does not
+look like a mistake, because payment bank charges genuinely do carry into landed
+cost and `bankChargesTotal` is sitting right there.
+`tests/test_addenda.py::TestNothingIsWiredIntoTheArithmetic` is what holds the
+line, and its docstring says it is meant to be **deleted deliberately** when the
+arithmetic is wired up rather than weakened until it passes.
+
+Driven both ways it can be measured: the backend totals through a control save
+with no addenda and then the same save with three (1,000,000 / -250,000 / 0 plus
+78,700 of bank charges) — `foreign_total` 98,795.82 and `pkr_total` 4,064,460.03
+both times — and the two figures pytest cannot reach, "Consignment total" and
+"Outstanding", read off the rendered Step 4 with and without. The export is
+identical across **all 342 rows x 81 columns**, no column added.
+
+### The Advance rates — frontend only
+
+"The rates" is the whole triple (`exchange_rate`, `rate_booked_on`,
+`rate_source`), on `Adv` only, displayed and not re-entered — they are Tier 1
+frozen and Step 2 owns them. It needed **no backend change at all**: all three
+were already on the detail payload (`serializers.py`) and already in the draft
+(`importsMap.ts`, where `rate_booked_on` is called `rateDate`). Three `watch()`
+calls and three `CarriedContext` items, labelled exactly as Step 2 labels them.
+
+### What the survey found that the spec did not ask about
+
+- **`Payment.batch_group_id` had no index.** The model has said `index=True`
+  since `b4d18e05c7a2`, but `op.add_column` does not honour that flag and the
+  migration never issued the `CREATE INDEX` — so the FK every payment read
+  filters on is unindexed on every deployed database. Found by `alembic check`
+  while verifying this revision, not by a slow query. Created in
+  `a7c2e94f5b31` with `IF NOT EXISTS`; `b4d18e05c7a2` is not edited, having
+  already run on the server.
+- **The `.get` trap.** `revert()` reads its collections by direct subscript, and
+  no history row written before today carries an addenda key — a subscript would
+  have turned the revert of an unrelated older record into a 500. The three new
+  keys use `.get(..., [])`, the existing seven stay subscripts, and the
+  asymmetry is commented at the site because it looks like sloppiness.
+- **Two `gt=0`-shaped traps, in two languages.** `ConsignmentPaymentSchema.value`
+  is `Field(None, gt=0)` and the shared zod `optionalNumber` is
+  `.nonnegative()`. Copying either — the obvious move on both sides — rejects
+  every REDUCTION addendum. Caught separately; the frontend needed its own
+  `signedOptionalNumber`.
+- **`delete_missing` is parameterised.** It carried a `model is Payment`
+  two-case switch; addenda made it a third, and a model the switch had not heard
+  of would have fallen through to `consignment_id` and deleted nothing.
+
+### The guard that caught the same omission twice
+
+`split_consignment_payload` refuses any payload key belonging to no table. It
+fired on `addenda` in **both** write paths, separately: `updated_fields` first
+(a 500 on the first PUT of the drive) and `create_consignment_object` after —
+where UPDATE worked and CREATE failed, found by `check_batch_allocation.py`
+rather than by the drive, which only ever PUT. Both `model_dump` exclusions now
+name the collection, and CLAUDE.md says to add the next one to both.
+
+### Two things left as they are
+
+- **The three `batch_sequence == 1` readers are still not unified.** Part 1
+  changed the server predicate to the lowest LIVE sequence; the export's
+  `_is_first_batch` and `BatchContext.tsx`'s `isFoundingBatch` still ask the old
+  question. Addenda inherit the divergence because they sit inside Step 4.
+  **Driven rather than asserted**, and the first attempt found nothing: with the
+  founding batch deleted and ONE survivor the wizard reads the order as unsplit
+  (`isSplit: live.length > 1`, from the LIVE siblings) and agrees with the server
+  by a different route. It takes **two** survivors — founding deleted, sequences
+  2 and 3 alive — for the server to accept an addendum on sequence 2 while the
+  wizard shows the read-only banner and a disabled button on that same batch.
+  Reported as a gap, not a pass.
+- **`check_group_freeze.py` and `check_dashboard_consistency.py` are not
+  re-runnable.** Both mutate as they go — the first closes a batch, the second
+  needs exactly two batches on the fixture order — so a second run against the
+  same database fails on its own leftovers. Both are 32/0 and 94/0 on a freshly
+  rebuilt clone. Not fixed here; named so the next failure is not mistaken for a
+  regression.
+
+### Verified
+
+pytest **243** (was 231; +12 in `tests/test_addenda.py`) · `configure_mappers()`
+against the scratch database **after** `alembic upgrade head` · migration up,
+down and up again on a clone of the 183-consignment database ·
+`check_dashboard_consistency.py` 94/0 · `check_batch_allocation.py` 50/0 ·
+`check_group_freeze.py` 32/0 · `tsc -b` clean.
+
+**Driven over HTTP** (14/14 and 11/11): three addenda written, one soft-deleted
+with two remaining and the deleted row still present; a negative value stored and
+read back negative; no total moved; an addendum edit reverted; a pre-addenda
+history row reverted without a 500; addenda published on every batch of a split
+order; a save from the non-owning batch writing nothing while the order's
+existing addendum survives; addenda still writable on a frozen order while
+`exchange_rate` 423s; the export identical cell for cell.
+
+**Driven in the browser** (11/11 and 8/8): the Addenda section and its button;
+three rows added through the UI; a negative accepted by the input; Consignment
+total, Outstanding and Bank charges all unchanged; the Advance triple shown with
+no input for it on that step; a non-Advance order showing the value alone; the
+change-history screen rendering an addendum add, edit ("Change to LC value",
+not the raw column) and removal.
 
 ---
 
@@ -3417,8 +3533,21 @@ removes that problem rather than mitigating it.
 
 | | What it does | Reversibility |
 |---|---|---|
-| **Revision A — expand** | Creates `consignment_batch_groups`, `consignment_order_items`, `payment_addenda`; adds the FK columns; **copies** the shared and per-order values onto the new rows. Original columns stay in place, populated, and unread by the new code. | **Purely additive. `downgrade()` drops what it added and nothing else.** Trivially and genuinely reversible. |
+| **Revision A — expand** | Creates `consignment_batch_groups` and `consignment_order_items`; adds the FK columns; **copies** the shared and per-order values onto the new rows. Original columns stay in place, populated, and unread by the new code. | **Purely additive. `downgrade()` drops what it added and nothing else.** Trivially and genuinely reversible. |
 | **Revision B — contract** | Drops the twelve orphaned columns from `consignments`, thirteen from `consignment_items`, and `payments.consignment_id`. A release later, once batching has run in production. | Reversible only in the sense revision 2 described. But by then nothing reads them, so rolling back the *code* no longer needs the columns. |
+
+**This row said `payment_addenda` and that was WRONG.** Revision A created no
+such table — `a7c2e94f5b31` does, in step 9 part 2, and `b4d18e05c7a2` moved
+payments onto the group before it. The error mattered because the table below is
+the inventory anyone planning **Revision B** works from: it listed a table that
+did not exist, which makes every other line in it less trustworthy. Corrected
+rather than annotated.
+
+**What actually exists now, in order:** Revision A (groups + order lines) →
+`d5e81b6a2c07` (enum repair) → `f3a91c60d28b` (ISO origins) → `b4d18e05c7a2`
+(payments move to the group) → `a7c2e94f5b31` (`payment_addenda`, plus the
+`ix_payments_batch_group_id` index `b4d18e05c7a2` declared in the model and never
+created).
 
 The gap between them is the point: the risky deploy is Revision A, and Revision A
 is the one that can be undone with a single `alembic downgrade`.
@@ -3668,16 +3797,61 @@ screen is dead. The migration is cheap *today*; it is not a reason to treat
 payments as a minor part of the change, and the insurance and addenda work in
 this section is built as specified regardless.
 
-The new addenda table from finding 10 hangs off the group for the same reason:
+The new addenda table from finding 10 hangs off the group for the same reason.
+**BUILT in step 9 part 2, Alembic `a7c2e94f5b31`** — the `...` above was written
+because the columns were unknown, and they are no longer:
 
-```
+```sql
 create table payment_addenda (
     id              serial primary key,
-    batch_group_id  integer not null references consignment_batch_groups(id),
-    ...
-    created_at, updated_at, is_deleted, deleted_at
+    batch_group_id  integer not null references consignment_batch_groups(id),  -- indexed
+    addendum_date   date,
+    reference       varchar(100),
+    value           numeric(14,4),   -- SIGNED DELTA, see below
+    description     text,
+    bank_charges    numeric(14,2),
+    is_deleted      boolean not null default false,                            -- indexed
+    deleted_at      timestamptz,
+    created_at      timestamptz not null default now(),
+    updated_at      timestamptz not null default now()
 )
 ```
+
+**Where the columns came from, since it is not the usual answer.** They were
+agreed with the business rather than derived from an existing artefact: the
+Excel sheet this system replaces has no addendum columns today, and the system
+carries them going forward. That is why revision 3 deferred this table and why
+the deferral ended without the sheet ever turning up.
+
+**`value` IS THE CHANGE TO THE LC AMOUNT, NOT THE REVISED TOTAL.** Signed —
+increase positive, reduction negative — so the current LC value is the original
+plus the sum of the live rows. Two properties follow, and both are the reason
+for the choice rather than consequences of it:
+
+- **Row order cannot matter.** Deltas commute, so two addenda entered out of
+  sequence, or with `addendum_date` left blank (it is nullable), still give the
+  same answer. A revised-total column would make the current figure depend on
+  which row is newest.
+- **Soft-deleting one leaves the arithmetic correct.** Everything in this module
+  soft-deletes, so removing a middle addendum is ordinary work; as a delta it
+  simply drops its term. Under a revised total it would leave the figure reading
+  whatever the deleted row had superseded, silently.
+
+**NOTHING SUMS IT YET, and that is the constraint this change was built under.**
+Addenda are stored and displayed; `foreignTotal`, `paidTotal`, `unpaidTotal`,
+`bankChargesTotal`, `_payment_total`, `recompute_derived`, the dashboards and the
+export all compute exactly what they computed before.
+`tests/test_addenda.py::TestNothingIsWiredIntoTheArithmetic` asserts it and is
+**meant to be deleted deliberately** when the LC-value arithmetic is wired up —
+that is its own change, with its own drive against the export and the dashboards,
+because it restates a figure already on screen and in printed sheets (rule 4).
+
+`bank_charges` is separate from `value` for the reason `Payment` separates them
+— a charge is a cost of the transaction, not a change to what the goods are
+worth — and it enters **no total either**. That one needs saying out loud:
+`bankChargesTotal` already exists on Step 4 and payment bank charges genuinely do
+carry into actual landed cost, so summing an addendum's charges with them is a
+reasonable-looking one-line change that would move a printed number.
 
 and `insurance_amount` is a column on `consignment_batch_groups` (§4.1) —
 LC-level, like the rest of Step 4.
@@ -5234,19 +5408,28 @@ Not a commitment — the sequence I would follow, so you can see the shape.
    setattr, a partial revert that reports what it skipped, and `group_frozen` on
    the detail payload for 8b to render from. `Order Cancelled` is left as a
    recorded open question in §3.9.
-9. **Payments — PART 1 BUILT, revision 19.** The group move (§4.4) and every
-   reader, insurance wiring (no migration — revision A had already created the
-   column), and Step 4's batch-1-only rule on the server as well as the screen.
-   Alembic `b4d18e05c7a2`; `payments.consignment_id` stays for Revision B.
-   - **DEFERRED — the addenda table.** There is nothing to derive the columns
-     from: the fixed "1st addendum"/"2nd addendum" sections the requirement
-     contrasts against are in the Excel sheet this system replaces, not in this
-     app, and §4.4 writes `...` for the same reason. Nothing built and nothing
-     stubbed. Waiting on the sheet's column list.
-   - **DEFERRED — the Advance-vs-other fetch rule.** Requirements line 118 says
-     Advance fetches "the rates" and does not say which — the consignment
-     exchange rate, the `rate_booked_on`/`rate_source` triple, or per-item
-     rates. Today's behaviour (value only) is left for every mode.
+9. **Payments — FULLY BUILT. Part 1 revision 19, part 2 revision 20. STEP 9
+   CLOSES THE IMPORTS MODULE.**
+   - **Part 1 (revision 19)** — the group move (§4.4) and every reader,
+     insurance wiring (no migration — revision A had already created the
+     column), and Step 4's owning-batch rule on the server as well as the
+     screen. Alembic `b4d18e05c7a2`; `payments.consignment_id` stays for
+     Revision B. The predicate was corrected in the same branch from
+     `batch_sequence == 1` to the **lowest LIVE sequence**, after driving an
+     order whose founding batch had been deleted and finding a `PUT` that
+     returned 200 and wrote nothing from every batch.
+   - **Part 2 (revision 20) — the addenda table**, Alembic `a7c2e94f5b31`. Both
+     deferrals ended without the Excel sheet ever producing anything: the
+     columns were **agreed with the business** rather than derived, because the
+     sheet has none today and the system carries them going forward. On the
+     group, "Add addendum" so the count is open, `value` a **signed delta** so
+     order cannot matter and a soft delete leaves the arithmetic correct — and
+     **nothing wired into any total**, `bank_charges` included, held by
+     `tests/test_addenda.py` until that is built deliberately.
+   - **Part 2 — the Advance fetch rule.** "The rates" is the whole triple
+     (`exchange_rate`, `rate_booked_on`, `rate_source`), on `Adv` only,
+     displayed and not re-entered. **Frontend only** — all three were already
+     on the payload and in the draft.
 10. **Chatbot metadata**, verified by importing `backend.*` from inside
     `chatbot_backend/`.
 11. **CLAUDE.md**, same PR — rules 1, 2 and 11 (§5.1), the frozen `batch_no`
@@ -5254,7 +5437,7 @@ Not a commitment — the sequence I would follow, so you can see the shape.
 12. **Alembic Revision B — contract** (§4), a release later, once batching has
     run in production. Backup first.
 
-    **WHAT REVISION B OWES, reconciled at revision 19.** Every one of these is a
+    **WHAT REVISION B OWES, reconciled at revision 20.** Every one of these is a
     column or relationship that still exists, still works, and is scheduled to
     go — which is exactly the shape that makes a contract migration dangerous,
     because nothing fails while they are there.
@@ -5276,4 +5459,48 @@ Not a commitment — the sequence I would follow, so you can see the shape.
 
     **`chatbot_backend/backend/metadata/schema.py:289` and `:609`** describe
     `payments` as hanging off `consignments`. Stale since revision 19, in a
-    separate service, flagged rather than edited.
+    separate service, flagged rather than edited. **`payment_addenda` is not
+    described there at all** — new at revision 20, and the chatbot cannot answer
+    a question about an LC amendment until somebody adds it. Also that service's
+    call, not this one's.
+
+    **REVISION 20 ADDS NOTHING TO THE LIST.** `payment_addenda` is a new table
+    with one FK and no orphaned twin, so it owes Revision B nothing — which is
+    worth stating, because every other table touched in step 9 does owe it
+    something.
+
+---
+
+### What is left in imports after step 9
+
+Step 9 closes the module. Three things are knowingly outstanding, none of them
+blocking, all of them driven or measured rather than suspected:
+
+1. **The three `batch_sequence == 1` readers, unified with the export's eager
+   load.** The server predicate is the lowest LIVE sequence;
+   `export_consignments._is_first_batch` and `BatchContext.tsx`'s
+   `isFoundingBatch` still test `== 1`. Unifying them needs
+   `ConsignmentBatchGroup.batches` eager-loaded on `fetch_consignments_page`, or
+   the export lazy-loads a collection per row on a 341-row sheet — which is why
+   it is a change of its own rather than a line in this one. **The divergence is
+   reachable and has been driven**: it takes a deleted founding batch and TWO
+   survivors (with one survivor the wizard reads the order as unsplit and agrees
+   by a different route), after which the server accepts a payment or addendum on
+   the batch that owns Step 4 while the wizard shows that same batch read-only.
+   Both failure modes are visible absences, not silent successes, which is why
+   they have been allowed to wait.
+
+2. **`check_group_freeze.py` and `check_dashboard_consistency.py` are not
+   re-runnable.** Each mutates as it goes — the first closes a batch, the second
+   needs the fixture order to have exactly two — so a second run against the same
+   database fails on its own leftovers and looks like a regression. Both pass
+   32/0 and 94/0 against a freshly rebuilt clone. Making them idempotent (or
+   having them rebuild their own fixture) is small and has not been done.
+
+3. **The addenda arithmetic.** The current LC value is the original plus the sum
+   of the live addenda, and nothing computes it yet — by instruction, because it
+   restates a figure already on screen and in printed sheets (rule 4). When it is
+   built it needs its own drive against the export and the dashboards, and it
+   **deletes `tests/test_addenda.py::TestNothingIsWiredIntoTheArithmetic`** as a
+   deliberate act rather than weakening it. Note `bank_charges` is NOT part of
+   that sum: it is a cost of amending the LC, not a change to the LC amount.

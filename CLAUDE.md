@@ -1426,9 +1426,56 @@ number/Retirement; Adv/DP/CAD→reference/Opening).
   the order froze because batch 1 closed, batch 1 is also locked and Step 4 is
   unreachable from either batch.
 - **The export prints the order's payment figures on the FIRST batch only** and
-  blanks them after, so summing the column in Excel gives the total once.
-- **Addenda are NOT built** — nothing in this app holds addendum fields to
-  derive a schema from, and nothing is stubbed for them.
+  blanks them after, so summing the column in Excel gives the total once. It
+  carries **no addenda column** — addenda are stored and displayed, and a sheet
+  column would be the arithmetic change this deliberately defers.
+- **Addenda ARE built** (step 9 part 2, Alembic `a7c2e94f5b31`) — `payment_addenda`,
+  on the GROUP like payments, because an LC is amended once and not once per
+  arrival. An **"Add addendum" button**, per the requirements: the count is open,
+  so it is a child table rather than two fixed sections. The columns were agreed
+  with the business rather than derived from the Excel sheet — the sheet has no
+  such columns today and the system carries them going forward.
+  - **`value` IS A SIGNED DELTA, NOT A REVISED TOTAL.** Increase positive,
+    reduction negative; the current LC value is the original plus the sum of the
+    live rows. **Row order therefore cannot matter and soft-deleting one leaves
+    the arithmetic correct** — a revised-total column would make the current
+    figure depend on which row is newest, and deleting a middle row would break
+    it in silence. The Pydantic schema deliberately carries **no `gt=0`** (unlike
+    `ConsignmentPaymentSchema.value`, which it would otherwise have been copied
+    from) and the zod schema needs its own `signedOptionalNumber`, because the
+    shared `optionalNumber` is `.nonnegative()`. Two languages, two separate
+    traps, each of which would have rejected every reduction.
+  - **NOTHING IS WIRED INTO ANY TOTAL.** `foreignTotal`, `paidTotal`,
+    `unpaidTotal`, `bankChargesTotal`, `_payment_total`, `recompute_derived`, the
+    dashboards and the export all compute exactly what they computed before.
+    **`bank_charges` on an addendum enters no total either** — the one that does
+    not look like a mistake, since payment bank charges genuinely do carry into
+    landed cost. `tests/test_addenda.py::TestNothingIsWiredIntoTheArithmetic`
+    holds that line and is **meant to be deleted deliberately** when the LC-value
+    arithmetic is wired up, which is its own change (rule 4: it restates a figure
+    already on screen and in printed sheets).
+  - **Governed by `payments_belong_to_this_batch`**, the same predicate and the
+    same server-side ignore as payments — they sit inside Step 4 and arrive in
+    the same payload from the same disabled fieldset. **Freeze-exempt** like the
+    rest of the payment process: the freeze reads group COLUMNS and addenda are a
+    table, so exemption is structural, and `check_group_freeze.py` asserts it
+    rather than assuming it.
+  - **The three history keys are read with `.get(..., [])` while the other seven
+    stay direct subscripts**, and the asymmetry is load-bearing: every history row
+    written before this change lacks an addenda key, so a subscript would 500 on
+    the revert of any older record. Match that shape for the next collection; do
+    not tidy these three into subscripts once new rows carry them, because the
+    old rows never will.
+- **`helpers.delete_missing` takes an OWNER COLUMN**, like `add_or_delete` and
+  `revert_old_values`. It held a `model is Payment` two-case switch until addenda
+  made it a third; a model the switch had not heard of would have fallen through
+  to `consignment_id`, matched nothing, and deleted none of what the user removed.
+- **BOTH write paths exclude the child collections from their `model_dump`** —
+  `helpers.updated_fields` and `helpers.create_consignment_object`.
+  `split_consignment_payload` refuses any key belonging to no table, so a
+  collection left in either is a 500 on that path: `addenda` was missed in both,
+  separately, and the second one failed CREATE while UPDATE worked. **Add the
+  next child collection to both exclusions in the same change.**
 
 **8. Draft vs submitted + the closed lock. IMPORTS HAS NO SUBMIT RULE SET.**
 
