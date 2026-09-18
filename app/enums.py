@@ -340,6 +340,7 @@ class VehicleTrackingStatus(str, Enum):
 class ShipmentMode(str, Enum):
     EFS = "EFS"
     REGULAR = "Regular"
+    PENDING = "Pending"
 
 
 #--------------------------------

@@ -29,6 +29,10 @@ interface MastersEnvelope<T> {
   message: string
   data: T[]
   total: number
+  /** Only present on the paginated GET /masters/{master} list route — absent
+   *  on item-search/port-search (capped typeaheads, not pages) and on the
+   *  create response. */
+  pagination?: { page: number; page_size: number; total: number; total_pages: number }
 }
 
 const cache = new Map<string, Promise<unknown>>()
@@ -92,6 +96,39 @@ export function exactCodeMatch(
   if (!code?.trim()) return null
   const needle = code.trim().toLowerCase()
   return results.find((r) => r.item_code?.trim().toLowerCase() === needle) ?? null
+}
+
+/**
+ * One row of `GET /masters/port-search` — the shipping-step typeahead.
+ *
+ * Deliberately NOT cached/preloaded like fetchPorts above (which this
+ * replaces in the imports and logistics wizards' Step 3): the ports master
+ * grew to ~133,000 rows from its own dedicated workbook, the same reason the
+ * item catalogue has its own search endpoint rather than being preloaded.
+ */
+export interface PortSearchResult {
+  id: number
+  name: string
+  country: string | null
+  port_type: string
+  un_locode: string | null
+  used_as: string
+}
+
+export async function searchPorts(
+  q: string,
+  { portType, usedAs }: { portType?: string; usedAs?: string } = {},
+  limit = 10,
+): Promise<PortSearchResult[]> {
+  const params = new URLSearchParams()
+  if (q.trim()) params.set('q', q.trim())
+  if (portType) params.set('port_type', portType)
+  if (usedAs) params.set('used_as', usedAs)
+  params.set('limit', String(limit))
+  const res = await apiFetch<MastersEnvelope<PortSearchResult>>(
+    `/masters/port-search?${params.toString()}`,
+  )
+  return res.data ?? []
 }
 
 /** Exact, case-insensitive name -> id. A typed value that doesn't match
@@ -212,20 +249,33 @@ export const PORT_USED_AS = ['Loading', 'Delivery', 'Both'] as const
 interface ListParams {
   q?: string
   includeInactive?: boolean
+  page?: number
+  pageSize?: number
 }
 
-/** List one master's rows. Fresh call each time (not the wizard's cache) since
- *  the screen adds/edits and needs to see its own writes. */
+export interface MastersPage<T> {
+  rows: T[]
+  pagination: { page: number; page_size: number; total: number; total_pages: number }
+}
+
+/** List one page of one master's rows, searched server-side. Fresh call each
+ *  time (not the wizard's cache) since the screen adds/edits and needs to see
+ *  its own writes — and, now that the ports master runs to ~133,000 rows,
+ *  can no longer fetch the whole table to filter/page client-side anyway. */
 export async function listMasters<T extends MasterRow = MasterRow>(
   master: MasterKey,
-  { q, includeInactive }: ListParams = {},
-): Promise<T[]> {
+  { q, includeInactive, page = 1, pageSize = 20 }: ListParams = {},
+): Promise<MastersPage<T>> {
   const params = new URLSearchParams()
   if (q) params.set('q', q)
   if (includeInactive) params.set('include_inactive', 'true')
-  const qs = params.toString()
-  const res = await apiFetch<MastersEnvelope<T>>(`/masters/${master}${qs ? `?${qs}` : ''}`)
-  return res.data ?? []
+  params.set('page', String(page))
+  params.set('page_size', String(pageSize))
+  const res = await apiFetch<MastersEnvelope<T>>(`/masters/${master}?${params.toString()}`)
+  return {
+    rows: res.data ?? [],
+    pagination: res.pagination ?? { page, page_size: pageSize, total: res.total ?? 0, total_pages: 0 },
+  }
 }
 
 /** Create a master record. Lands verified (the proper Masters-screen path,

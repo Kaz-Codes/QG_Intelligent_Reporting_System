@@ -295,8 +295,12 @@ export type EtaRevision = z.infer<typeof etaRevisionSchema>
 export const shippingStepSchema = z.object({
   modeOfShipment: z.enum(SHIPMENT_MODES).optional().or(z.literal('')),
   portOfLoading: optionalText,
+  /** The real FK, captured at selection time from the async port search —
+   *  see SearchableSelect's onSelectOption in Step3Shipping. */
+  portOfLoadingId: z.number().optional(),
   /** "Port of delivery" — matches the sheet this replaces, not "discharge". */
   portOfDelivery: optionalText,
+  portOfDeliveryId: z.number().optional(),
   readinessDate: optionalDate,
   etd: optionalDate,
   eta: optionalDate,
@@ -446,7 +450,8 @@ export const DRAFT_DEFAULT_VALUES: ConsignmentDraft = {
   paymentInstrument: '', instrumentNo: '', instrumentDate: '',
   exchangeRate: undefined, rateDate: '', rateSource: '',
 
-  modeOfShipment: '', portOfLoading: '', portOfDelivery: '',
+  modeOfShipment: '', portOfLoading: '', portOfLoadingId: undefined,
+  portOfDelivery: '', portOfDeliveryId: undefined,
   readinessDate: '', etd: '', eta: '', etaWorks: '', etaRevisions: [],
 
   payments: [], insuranceAmount: undefined,

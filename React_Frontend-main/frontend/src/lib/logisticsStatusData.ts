@@ -262,6 +262,7 @@ function makeOrder(i: number, plan: OrderPlan): LogisticsOrder {
     batchNo: plan.batchNo,
     batchLabel: rng() > 0.7 ? `${department} run ${plan.batchNo}` : '',
     incoterm: rng() > 0.4 ? pick(INCOTERMS) : undefined,
+    importedFromExcel: false,
     items,
 
     packages,

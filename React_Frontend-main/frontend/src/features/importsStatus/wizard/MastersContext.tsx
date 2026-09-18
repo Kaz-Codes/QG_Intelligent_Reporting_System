@@ -1,22 +1,25 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import {
-  fetchBranches, fetchSuppliers, fetchClearingAgents, fetchPorts,
-  type MasterOption, type PortOption,
+  fetchBranches, fetchSuppliers, fetchClearingAgents,
+  type MasterOption,
 } from '@/lib/api/masters'
 
 /**
- * Branch / supplier / port / clearing-agent master lists, fetched once and
- * shared across every wizard step via context — Step1 needs branches +
- * suppliers, Step3 needs ports, Step6 needs clearing agents, and
- * draftToPayload (lib/api/importsMap.ts) needs all four to resolve the names
- * the form holds into the ids the backend's FK columns want.
+ * Branch / supplier / clearing-agent master lists, fetched once and shared
+ * across every wizard step via context — Step1 needs branches + suppliers,
+ * Step6 needs clearing agents, and draftToPayload (lib/api/importsMap.ts)
+ * needs all three to resolve the names the form holds into the ids the
+ * backend's FK columns want.
+ *
+ * Ports are NOT preloaded here — the ports master runs to ~133,000 rows, so
+ * Step3Shipping searches it live via GET /masters/port-search instead (see
+ * searchPorts in lib/api/masters.ts).
  */
 
 interface MastersState {
   branches: MasterOption[]
   suppliers: MasterOption[]
   agents: MasterOption[]
-  ports: PortOption[]
   loading: boolean
   error: string | null
 }
@@ -25,16 +28,16 @@ const MastersCtx = createContext<MastersState | null>(null)
 
 export function MastersProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<MastersState>({
-    branches: [], suppliers: [], agents: [], ports: [], loading: true, error: null,
+    branches: [], suppliers: [], agents: [], loading: true, error: null,
   })
 
   useEffect(() => {
     let cancelled = false
 
-    Promise.all([fetchBranches(), fetchSuppliers(), fetchClearingAgents(), fetchPorts()])
-      .then(([branches, suppliers, agents, ports]) => {
+    Promise.all([fetchBranches(), fetchSuppliers(), fetchClearingAgents()])
+      .then(([branches, suppliers, agents]) => {
         if (cancelled) return
-        setState({ branches, suppliers, agents, ports, loading: false, error: null })
+        setState({ branches, suppliers, agents, loading: false, error: null })
       })
       .catch((err: unknown) => {
         if (cancelled) return

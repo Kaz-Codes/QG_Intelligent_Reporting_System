@@ -149,7 +149,7 @@ function ImportsStatusWizardInner() {
   function buildPayload(): ConsignmentPayload {
     const wizardMasters: WizardMasters = {
       branches: masters.branches, suppliers: masters.suppliers,
-      ports: masters.ports, agents: masters.agents,
+      agents: masters.agents,
     }
     return draftToPayload(methods.getValues() as ConsignmentDraft, wizardMasters)
   }

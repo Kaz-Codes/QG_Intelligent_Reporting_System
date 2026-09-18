@@ -146,6 +146,26 @@ def serialize_item_for_entry(item):
 
 
 #--------------------------------
+# A PORT AS THE SHIPPING-STEP TYPEAHEAD NEEDS IT
+#
+# Mirrors serialize_item_for_entry — just what the wizard's SearchableSelect
+# needs to show and commit an option, no used-count or verified flag (not
+# needed to fill the form, and computing "used in" for a live-search result
+# would mean a query per keystroke instead of per page load).
+#--------------------------------
+
+def serialize_port_for_entry(port):
+    return {
+        "id": port.id,
+        "name": port.name,
+        "country": port.country,
+        "port_type": port.port_type,
+        "un_locode": port.un_locode,
+        "used_as": port.used_as,
+    }
+
+
+#--------------------------------
 # ONE ENTRY POINT, SO THE ROUTES DO NOT EACH
 # HOLD A MAP OF MASTER TO SERIALIZER
 #--------------------------------

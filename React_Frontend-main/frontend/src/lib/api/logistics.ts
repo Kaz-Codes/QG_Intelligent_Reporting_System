@@ -23,6 +23,7 @@ export interface ApiLogisticsItem {
   quantity: string | number | null
   unit_weight: string | number | null
   gross_weight: string | number | null
+  budgeted_packing_cost: string | number | null
   planned_rfd_date: string | null
   actual_rfd_date: string | null
   /** FE-driven nested collection, stored whole as JSON. */
@@ -67,11 +68,14 @@ export interface ApiLogisticsOrder {
   origin_country: string | null
   origin_city: string | null
   origin_province: string | null
+  mill: string | null
+  total_packages: number | null
   customer_name: string | null
   mo_no: string | null
   batch_no: number | null
   batch_label: string | null
   incoterm: string | null
+  customer_note: string | null
   pol: string | null
   pod: string | null
   shipping_line: string | null
@@ -140,6 +144,7 @@ export interface LogisticsItemPayload {
   quantity?: number
   unit_weight?: number
   gross_weight?: number
+  budgeted_packing_cost?: number
   planned_rfd_date?: string
   actual_rfd_date?: string
   rfd_history?: unknown[]
@@ -174,11 +179,14 @@ export interface LogisticsPayload {
   origin_country?: string
   origin_city?: string
   origin_province?: string
+  mill?: string
+  total_packages?: number
   customer_name?: string
   mo_no?: string
   batch_no?: number
   batch_label?: string
   incoterm?: string
+  customer_note?: string
 
   pol?: string
   pod?: string
@@ -318,6 +326,20 @@ export async function getLogisticsOrder(id: number | string): Promise<ApiLogisti
 export async function fetchLogisticsFilterOptions() {
   const res = await apiFetch<OptionsEnvelope>('/logistics/filter-options')
   return res.data
+}
+
+/**
+ * GET /logistics/check-mo — for the Step 1 Excel import feature only (see
+ * wizard/excelImport.ts). "An order with this MO already exists" is treated
+ * as a straight duplicate right now, since there's no real batching on the
+ * backend yet — see the comment on this endpoint server-side
+ * (app/logistics/routes/check_mo.py) before reusing this for anything else.
+ */
+export async function checkMoExists(moNo: string): Promise<boolean> {
+  const res = await apiFetch<{ status_code: number; detail: string; data: { exists: boolean } }>(
+    `/logistics/check-mo?mo_no=${encodeURIComponent(moNo)}`,
+  )
+  return res.data.exists
 }
 
 /* ---------------------------------------------------------------- writes */

@@ -1,8 +1,8 @@
+import { useCallback } from 'react'
 import { useFormContext, useWatch, Controller } from 'react-hook-form'
 import { type ConsignmentDraft, SHIPMENT_MODES, transitDays } from '../../schema'
 import { Field, Input, Select, Callout, CarriedContext, PendingBanner } from './fields'
-import { useMasters } from '../MastersContext'
-import type { PortOption } from '@/lib/api/masters'
+import { searchPorts, type PortSearchResult } from '@/lib/api/masters'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { toOptions } from '@/lib/api/useMasterOptions'
 import { AllocationPanel } from './AllocationPanel'
@@ -12,7 +12,7 @@ import { useBatchContext } from '../BatchContext'
 /** Which master port_type a shipment mode's ports are filtered to. Land and
  *  courier moves aren't tracked by a dedicated port_type on the master (only
  *  Sea/Air/Dry/Land exist) — 'Land' is the closest fit. */
-const PORT_TYPE_FOR_MODE: Record<string, PortOption['port_type']> = {
+const PORT_TYPE_FOR_MODE: Record<string, PortSearchResult['port_type']> = {
   'Sea freight FCL': 'Sea',
   'Sea freight LCL': 'Sea',
   'Air freight': 'Air',
@@ -29,17 +29,31 @@ const PORT_TYPE_FOR_MODE: Record<string, PortOption['port_type']> = {
  * the current ETA is changed.
  */
 export function Step3Shipping() {
-  const { register, control, watch, formState: { errors } } = useFormContext<ConsignmentDraft>()
+  const { register, control, watch, setValue, formState: { errors } } = useFormContext<ConsignmentDraft>()
   const mode = useWatch({ control, name: 'modeOfShipment' })
   const etd = watch('etd')
   const eta = watch('eta')
   const revisions = watch('etaRevisions') ?? []
-  const { ports: allPorts, loading: mastersLoading } = useMasters()
 
   const wantedType = mode ? PORT_TYPE_FOR_MODE[mode] : undefined
-  const byType = wantedType ? allPorts.filter((p) => p.port_type === wantedType) : allPorts
-  const loadingPorts = byType.filter((p) => p.used_as === 'Loading' || p.used_as === 'Both')
-  const deliveryPorts = byType.filter((p) => p.used_as === 'Delivery' || p.used_as === 'Both')
+
+  // Two loaders — loading needs used_as=Loading, delivery needs used_as=Delivery.
+  // Both depend on wantedType, so they must stay useCallbacks (module scope
+  // can't close over the currently-selected mode) — SearchableSelect requires
+  // a stable loadOptions identity except when it's actually meant to change.
+  const loadLoadingPorts = useCallback(
+    (query: string) =>
+      searchPorts(query, { portType: wantedType, usedAs: 'Loading' })
+        .then((rows) => toOptions(rows, (p) => p.port_type)),
+    [wantedType],
+  )
+  const loadDeliveryPorts = useCallback(
+    (query: string) =>
+      searchPorts(query, { portType: wantedType, usedAs: 'Delivery' })
+        .then((rows) => toOptions(rows, (p) => p.port_type)),
+    [wantedType],
+  )
+
   const transit = transitDays({ etd, eta })
   const batchCtx = useBatchContext()
 
@@ -93,8 +107,9 @@ export function Step3Shipping() {
                 <SearchableSelect
                   value={field.value ?? ''}
                   onChange={field.onChange}
-                  options={toOptions(loadingPorts, (p) => p.port_type)}
-                  disabled={!mode || mastersLoading}
+                  onSelectOption={(o) => o.data && setValue('portOfLoadingId', o.data.id, { shouldDirty: true })}
+                  loadOptions={loadLoadingPorts}
+                  disabled={!mode}
                   placeholder={mode ? 'Search ports…' : 'Select mode first'}
                   emptyMessage="No matching port for this mode"
                 />
@@ -110,8 +125,9 @@ export function Step3Shipping() {
                 <SearchableSelect
                   value={field.value ?? ''}
                   onChange={field.onChange}
-                  options={toOptions(deliveryPorts, (p) => p.port_type)}
-                  disabled={!mode || mastersLoading}
+                  onSelectOption={(o) => o.data && setValue('portOfDeliveryId', o.data.id, { shouldDirty: true })}
+                  loadOptions={loadDeliveryPorts}
+                  disabled={!mode}
                   placeholder={mode ? 'Search ports…' : 'Select mode first'}
                   emptyMessage="No matching port for this mode"
                 />

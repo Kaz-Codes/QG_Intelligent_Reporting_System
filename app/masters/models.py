@@ -285,7 +285,6 @@ class Port(Base, TimestampMixin):
 
     name : Mapped[str] = mapped_column(
         String(255),
-        unique = True,
         nullable = False
     )
 
@@ -305,10 +304,10 @@ class Port(Base, TimestampMixin):
         nullable = True
     )
 
-    used_as : Mapped[str] = mapped_column(
+    used_as : Mapped[Optional[str]] = mapped_column(
         String(20),
         default = "Both",
-        nullable = False
+        nullable = True
     )
 
     is_active : Mapped[bool] = mapped_column(

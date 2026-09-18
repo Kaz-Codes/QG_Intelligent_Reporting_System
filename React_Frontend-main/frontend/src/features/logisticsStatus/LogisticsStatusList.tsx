@@ -229,9 +229,10 @@ export function LogisticsStatusList() {
     systemId: (o) => o.systemId,
     orderType: (o) => orderTypeLabel(o.department, o.orderType),
     mode: (o) => o.shipmentMode ?? '',
+    mill: (o) => o.mill ?? '',
+    totalPackages: (o) => o.totalPackages ?? -1,
     customer: (o) => o.customerName,
     batch: (o) => o.batchNo,
-    packages: (o) => o.packages.length,
     net: (o) => totalNetWeight(o.items),
     gross: (o) => totalPackageGrossWeight(o.packages),
     incoterm: (o) => o.incoterm ?? '',
@@ -383,10 +384,11 @@ export function LogisticsStatusList() {
                 <SortHeader label="Order Type" sortKey="orderType" sort={sort} onToggle={toggle} />
                 <SortHeader label="Mode" sortKey="mode" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2 text-left">Job #</th>
+                <SortHeader label="Mill" sortKey="mill" sort={sort} onToggle={toggle} />
+                <SortHeader label="Total Packages" sortKey="totalPackages" sort={sort} onToggle={toggle} align="right" />
                 <SortHeader label="Customer" sortKey="customer" sort={sort} onToggle={toggle} />
                 <SortHeader label="Batch #" sortKey="batch" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2 text-left">Items</th>
-                <SortHeader label="Packages" sortKey="packages" sort={sort} onToggle={toggle} />
                 <SortHeader label="Net Wt (kg)" sortKey="net" sort={sort} onToggle={toggle} align="right" />
                 <SortHeader label="Gross Wt (kg)" sortKey="gross" sort={sort} onToggle={toggle} align="right" />
                 <th className="px-3 py-2 text-left">Works</th>
@@ -397,6 +399,7 @@ export function LogisticsStatusList() {
                 <SortHeader label="Arrival delay" sortKey="delay" sort={sort} onToggle={toggle} align="right" />
                 <SortHeader label="Actual RFD" sortKey="actualRfd" sort={sort} onToggle={toggle} />
                 <th className="px-3 py-2 text-left">Sent to Trucking</th>
+                <th className="px-3 py-2 text-left">Customer Note</th>
                 <th className="px-3 py-2 text-left"></th>
               </tr>
             </thead>
@@ -406,7 +409,6 @@ export function LogisticsStatusList() {
                 const itemsSummary = o.items.map((it) => `${it.itemDetail}${it.quantity !== undefined ? ` ×${it.quantity}` : ''}`)
                 const inMoGroup = !!o.moNo && (moCounts.get(o.moNo) ?? 0) > 1
                 const works = o.packages.find((p) => p.packingWorks)?.packingWorks
-                const colours = [...new Set(o.packages.map((p) => p.colourCode).filter(Boolean))]
                 const isOpen = expandedId === o.id
                 return (
                   <Fragment key={o.id}>
@@ -438,6 +440,8 @@ export function LogisticsStatusList() {
                     <td className="px-3 py-2 text-[13px] tabular-nums" title={jobNos.join(', ') || undefined}>
                       {jobNos.length === 0 ? '—' : jobNos.length <= 2 ? jobNos.join(', ') : `${jobNos.slice(0, 2).join(', ')} +${jobNos.length - 2}`}
                     </td>
+                    <td className="px-3 py-2 text-[13px]">{o.mill || '—'}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{o.totalPackages ?? '—'}</td>
                     <td className="px-3 py-2">{o.customerName || '—'}</td>
                     <td className="px-3 py-2">
                       <span className="text-[13px]">{batchDisplayLabel(o.batchNo, o.batchLabel)}</span>
@@ -447,9 +451,6 @@ export function LogisticsStatusList() {
                     </td>
                     <td className="px-3 py-2 max-w-[220px] truncate text-[13px]" title={itemsSummary.join(', ') || undefined}>
                       {itemsSummary.length === 0 ? '—' : itemsSummary.join(', ')}
-                    </td>
-                    <td className="px-3 py-2 text-[13px] text-muted">
-                      {o.packages.length === 0 ? '—' : `${o.packages.length} pkg${o.packages.length === 1 ? '' : 's'}${colours.length ? ` (${colours.join(', ')})` : ''}`}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{num(totalNetWeight(o.items))}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{num(totalPackageGrossWeight(o.packages))}</td>
@@ -484,6 +485,9 @@ export function LogisticsStatusList() {
                       {o.sentToTrucking
                         ? <span className="rounded border border-[var(--color-healthy)]/30 bg-[var(--color-healthy-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-healthy)]">Sent</span>
                         : <span className="text-xs text-muted">Not sent</span>}
+                    </td>
+                    <td className="px-3 py-2 max-w-[200px] truncate text-[13px] text-muted" title={o.customerNote || undefined}>
+                      {o.customerNote || '—'}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -536,7 +540,7 @@ export function LogisticsStatusList() {
                   </tr>
                   {isOpen && (
                     <tr className="border-t border-line bg-canvas-alt/60">
-                      <td colSpan={20} className="px-3 py-3">
+                      <td colSpan={24} className="px-3 py-3">
                         <LogisticsRowDetails order={o} />
                       </td>
                     </tr>
@@ -602,6 +606,7 @@ function LogisticsRowDetails({ order }: { order: LogisticsListRow }) {
                 <th className="py-1 pr-3 text-left">Job no.</th>
                 <th className="py-1 pr-3 text-left">Item</th>
                 <th className="py-1 pr-3 text-right">Qty</th>
+                <th className="py-1 pr-3 text-right">Budgeted Packing Cost</th>
               </tr>
             </thead>
             <tbody className="text-ink">
@@ -611,6 +616,9 @@ function LogisticsRowDetails({ order }: { order: LogisticsListRow }) {
                   <td className="py-1 pr-3 tabular-nums">{it.jobNo || '—'}</td>
                   <td className="py-1 pr-3 font-medium">{it.itemDetail || <span className="italic text-muted">Not named</span>}</td>
                   <td className="py-1 pr-3 text-right tabular-nums">{it.quantity ?? '—'}</td>
+                  <td className="py-1 pr-3 text-right tabular-nums">
+                    {it.budgetedPackingCost !== undefined ? num(it.budgetedPackingCost) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>

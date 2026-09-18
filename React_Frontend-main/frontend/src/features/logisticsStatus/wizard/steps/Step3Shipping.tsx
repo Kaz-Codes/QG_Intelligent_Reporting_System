@@ -4,13 +4,21 @@ import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { daysBetween, emptyContainer, type LogisticsDraft } from '../../schema'
 import { isContainerNumberTaken } from '@/lib/logisticsStatusData'
-import { SearchableSelect, NotInMasterNote } from '@/components/ui/SearchableSelect'
-import { fetchPorts } from '@/lib/api/masters'
-import { useMasterOptions, toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
+import { searchPorts } from '@/lib/api/masters'
+import { toOptions } from '@/lib/api/useMasterOptions'
 
 const normContainer = (s: string) => s.replace(/\s+/g, '').toUpperCase()
 
-const CONTAINER_TYPES = ["20' Dry", "40' Dry", "40' High Cube", "20' Reefer", "40' Reefer", "20' Open Top", "Flat Rack"]
+// No mode-based filtering here (unlike imports) — a logistics order has no
+// mode_of_shipment to narrow port_type/used_as against, so both POL and POD
+// share one loader over every active port. Module scope, since there's no
+// state to close over.
+function loadPortOptions(query: string) {
+  return searchPorts(query).then((rows) => toOptions(rows, (p) => p.port_type))
+}
+
+const CONTAINER_TYPES = ["20' Dry", "40' Dry", "40' High Cube", "20' Open Top", "40' Open Top", "Flat Rack", "Flat Rack OW", "LCL"]
 const selectClass =
   'flex h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink ' +
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50'
@@ -31,15 +39,10 @@ export function Step3Shipping() {
   const { register, control, formState: { errors } } = useFormContext<LogisticsDraft>()
   const { id } = useParams()
   const { fields: containerFields, append: appendContainer, remove: removeContainer } = useFieldArray({ control, name: 'containers' })
-  const [cro, actualArrival, orderType, watchedContainers, pol, pod] = useWatch({
+  const [cro, actualArrival, orderType, watchedContainers] = useWatch({
     control,
-    name: ['croArrivalDate', 'actualArrivalDate', 'orderType', 'containers', 'pol', 'pod'],
+    name: ['croArrivalDate', 'actualArrivalDate', 'orderType', 'containers'],
   })
-
-  // Not filtered by port_type the way imports filters them: a logistics order
-  // has no mode_of_shipment to filter against, so every port is offered.
-  const { rows: ports, loading: portsLoading } = useMasterOptions(fetchPorts)
-  const portOptions = toOptions(ports, (p) => p.port_type)
 
   const arrivalDelay = daysBetween(cro, actualArrival)
 
@@ -143,17 +146,13 @@ export function Step3Shipping() {
                 id="pol"
                 value={field.value ?? ''}
                 onChange={field.onChange}
-                options={portOptions}
+                loadOptions={loadPortOptions}
                 allowFreeText
-                disabled={portsLoading}
-                placeholder={portsLoading ? 'Loading ports…' : 'Search or type a port…'}
+                placeholder="Search or type a port…"
                 emptyMessage="No matching port — it will be kept as typed"
               />
             )}
           />
-          {!portsLoading && !isKnownMasterValue(ports, pol) && (
-            <NotInMasterNote master="port master" stored="text" />
-          )}
           {errors.pol && <p className="text-xs text-risk">{errors.pol.message}</p>}
         </div>
 
@@ -168,17 +167,13 @@ export function Step3Shipping() {
                 id="pod"
                 value={field.value ?? ''}
                 onChange={field.onChange}
-                options={portOptions}
+                loadOptions={loadPortOptions}
                 allowFreeText
-                disabled={portsLoading}
-                placeholder={portsLoading ? 'Loading ports…' : 'Search or type a port…'}
+                placeholder="Search or type a port…"
                 emptyMessage="No matching port — it will be kept as typed"
               />
             )}
           />
-          {!portsLoading && !isKnownMasterValue(ports, pod) && (
-            <NotInMasterNote master="port master" stored="text" />
-          )}
           {errors.pod && <p className="text-xs text-risk">{errors.pod.message}</p>}
         </div>
 

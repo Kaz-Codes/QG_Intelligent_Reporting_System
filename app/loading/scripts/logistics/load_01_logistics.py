@@ -19,6 +19,14 @@ rather than the sheet's own 'Primary Key' column.
 
 Packing rows with no export number are local sugar and cement work; each one
 becomes an order of its own (logistics_common.build_order_index).
+
+total_packages is the one header field that is SUMMED rather than merged by
+_Header's first-sheet-wins rule: it is a running total over every packing row
+an order has (see build_rows), sourced from the packing sheet's "Pkgs."
+column only — the shipment sheet has its own "Pkgs." too, but the two
+disagree on some orders, and the packing sheet is the more authoritative
+count of what was actually packed. An order the packing sheet never
+mentions loads with total_packages left NULL, not a shipment-sheet guess.
 """
 
 from psycopg2.extras import Json
@@ -164,7 +172,7 @@ def map_incoterm(value):
 CONSIGNMENT_COLUMNS = [
     "id", "order_type", "department",
     "origin_country", "origin_city", "origin_province",
-    "customer_name", "mo_no", "batch_no", "batch_label", "incoterm",
+    "customer_name", "total_packages", "mo_no", "batch_no", "batch_label", "incoterm",
     "pol", "pod", "shipping_line", "clearing_agent", "booking_no",
     "port_in_date", "etd_sailing_date", "cro_arrival_date", "actual_arrival_date",
     "packing_cost", "transportation_charges", "container_detention", "insurance",
@@ -484,6 +492,21 @@ def build_rows(created_by_id):
     packing = read_logistics_sheet(SHEET_PACKING)
     packed_orders = set()
 
+    # total_packages = SUM of "Pkgs." across every packing row an order has,
+    # not a header.set() field: 7 of 669 orders carry more than one packing
+    # record (different colour codes / dates), and each is a real, separate
+    # batch of packages, not a correction of the previous row — the
+    # first-sheet-wins semantics of _Header.set() would silently drop every
+    # row after the first instead of summing them.
+    #
+    # Packing sheet ONLY, by decision: the shipment sheet also has a "Pkgs."
+    # column, but the two sheets disagree on 14 of the 168 orders that carry
+    # a figure on both, and the packing sheet is the more authoritative count
+    # of what was actually packed. An order with no packing row (and there
+    # ARE some — see packed_orders below) is left with no total_packages at
+    # all rather than falling back to the shipment sheet's figure.
+    total_packages_by_order = {}
+
     for index, row in packing.iterrows():
         key = row_key(row, SHEET_PACKING)
         consignment_id = keyed[key] if key is not None else local.get(index)
@@ -493,6 +516,12 @@ def build_rows(created_by_id):
         header = header_for(consignment_id)
         _apply_packing(header, row)
         packed_orders.add(consignment_id)
+
+        pkgs = clean_int(row.get("Pkgs."))
+        if pkgs is not None:
+            total_packages_by_order[consignment_id] = (
+                total_packages_by_order.get(consignment_id, 0) + pkgs
+            )
 
         item = _item_from(
             row, consignment_id,
@@ -553,6 +582,7 @@ def build_rows(created_by_id):
             None,                                    # origin_city
             None,                                    # origin_province
             header.get("customer_name"),
+            total_packages_by_order.get(consignment_id),   # None where packing has no figure
             exp_no,                                  # mo_no: the export number
             clean_int(batch),                        # batch_no
             batch or None,                           # batch_label

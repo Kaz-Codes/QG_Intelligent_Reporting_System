@@ -14,10 +14,11 @@
 from app.masters.routes.router import router
 
 #--- reading ---
-# item_search and review_queue are imported before list_masters so their
-# literal paths win over the generic /masters/{master} list route.
+# item_search, port_search and review_queue are imported before list_masters
+# so their literal paths win over the generic /masters/{master} list route.
 from app.masters.routes import review_queue
 from app.masters.routes import item_search
+from app.masters.routes import port_search
 from app.masters.routes import list_masters
 from app.masters.routes import get_master
 

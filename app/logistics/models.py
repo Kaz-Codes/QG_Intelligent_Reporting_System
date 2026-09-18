@@ -118,6 +118,16 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=True
     )
 
+    mill: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True
+    )
+
+    total_packages: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True
+    )
+
     # Customer is stored BOTH ways, on purpose.
     #
     # customer_name came first: orders carried the customer as free text long
@@ -348,6 +358,11 @@ class LogisticsConsignment(Base, TimestampMixin):
         nullable=False
     )
 
+    customer_note: Mapped[Optional[str]] = mapped_column(
+        String(1000),
+        nullable=True
+    )
+
     # Draft vs submitted. Optional, opt-in from the front end: a draft saves
     # with anything filled (the normal create/update); submitting runs the
     # rule set (helpers.submission_errors) and only then flips this to
@@ -492,6 +507,11 @@ class LogisticsItem(Base, TimestampMixin):
     )
 
     gross_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 3),
+        nullable=True
+    )
+
+    budgeted_packing_cost: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 3),
         nullable=True
     )

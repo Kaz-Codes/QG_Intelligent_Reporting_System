@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { PageHeader } from '@/components/PageHeader'
+import { Pagination } from '@/components/Pagination'
 import { SegmentedControl } from '@/components/SegmentedControl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,6 +13,8 @@ import {
   CURRENCIES, PORT_TYPES, PORT_USED_AS,
   type MasterKey, type MasterRow,
 } from '@/lib/api/masters'
+
+const PAGE_SIZE = 20
 
 /**
  * Masters management — view and add the reference lists the operations screens
@@ -134,34 +137,43 @@ export function MastersPage() {
 
 function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
   const [rows, setRows] = useState<MasterRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [pageCount, setPageCount] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [includeInactive, setIncludeInactive] = useState(false)
+  const [page, setPage] = useState(1)
   const [showForm, setShowForm] = useState(false)
+
+  // Debounce the search box so every keystroke doesn't fire a request.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  // A changed filter can leave the current page past the end of the new result set.
+  useEffect(() => { setPage(1) }, [debouncedSearch, includeInactive])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await listMasters(def.key, { includeInactive })
+      const { rows: data, pagination } = await listMasters(def.key, {
+        q: debouncedSearch || undefined, includeInactive, page, pageSize: PAGE_SIZE,
+      })
       setRows(data)
+      setTotal(pagination.total)
+      setPageCount(Math.max(1, pagination.total_pages))
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not load this list.')
     } finally {
       setLoading(false)
     }
-  }, [def.key, includeInactive])
+  }, [def.key, debouncedSearch, includeInactive, page])
 
   useEffect(() => { void load() }, [load])
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter((r) =>
-      Object.values(r).some((v) => typeof v === 'string' && v.toLowerCase().includes(q)),
-    )
-  }, [rows, search])
 
   const columns = def.fields.filter((f) => f.column)
 
@@ -214,12 +226,12 @@ function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
             {loading && (
               <tr><td colSpan={columns.length + 2} className="px-3 py-8 text-center text-muted">Loading…</td></tr>
             )}
-            {!loading && filtered.length === 0 && (
+            {!loading && rows.length === 0 && (
               <tr><td colSpan={columns.length + 2} className="px-3 py-8 text-center text-muted">
                 {search ? 'Nothing matches your search.' : 'No records yet.'}
               </td></tr>
             )}
-            {!loading && filtered.map((r) => {
+            {!loading && rows.map((r) => {
               const row = r as unknown as Record<string, unknown>
               return (
                 <tr key={r.id} className={`border-t border-line ${r.is_active ? '' : 'opacity-50'}`}>
@@ -240,6 +252,8 @@ function MasterPanel({ def, canAdd }: { def: MasterDef; canAdd: boolean }) {
           </tbody>
         </table>
       </div>
+
+      <Pagination page={page} pageCount={pageCount} total={total} pageSize={PAGE_SIZE} onPage={setPage} />
     </div>
   )
 }

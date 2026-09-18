@@ -38,6 +38,7 @@ export interface LogisticsListItem {
   quantity?: number
   unitWeight?: number
   grossWeight?: number
+  budgetedPackingCost?: number
   plannedRfdDate?: string
   actualRfdDate?: string
   /** Stored whole as JSON in the FE's own shape (see CLAUDE.md) — passed
@@ -83,11 +84,16 @@ export interface LogisticsListRow {
   jobKind: JobKind
   /** Front-end-only today — see the note above. */
   shipmentMode: string | null
+  mill?: string
+  totalPackages?: number
   customerName: string
   moNo: string
   batchNo: number
   batchLabel?: string
   incoterm: string
+  /** Free-text note about the customer, its own section at the end of the
+   *  wizard's Step 1. */
+  customerNote?: string
   /** Server-reported submission gaps — drives the Submit button's tooltip. */
   missingFields: string[]
   createdBy?: string
@@ -175,6 +181,7 @@ function itemToRow(it: ApiLogisticsItem): LogisticsListItem {
     quantity: num(it.quantity),
     unitWeight: num(it.unit_weight),
     grossWeight: num(it.gross_weight),
+    budgetedPackingCost: num(it.budgeted_packing_cost),
     plannedRfdDate: str(it.planned_rfd_date),
     actualRfdDate: str(it.actual_rfd_date),
     rfdHistory: jsonArray<RfdChangeEvent>(it.rfd_history),
@@ -226,6 +233,8 @@ export function apiToRow(o: ApiLogisticsOrder): LogisticsListRow {
     department: (o.department ?? 'General') as Department,
     jobKind: (o.job_kind ?? 'standard') as JobKind,
     shipmentMode: str(o.shipment_mode) ?? null,
+    mill: str(o.mill),
+    totalPackages: o.total_packages ?? undefined,
     customerName: o.customer_name ?? '',
     missingFields: o.missing_fields ?? [],
     createdBy: str(o.created_by),
@@ -235,6 +244,7 @@ export function apiToRow(o: ApiLogisticsOrder): LogisticsListRow {
     batchNo: o.batch_no ?? 1,
     batchLabel: str(o.batch_label),
     incoterm: o.incoterm ?? '',
+    customerNote: str(o.customer_note),
     originCountry: str(o.origin_country),
     originCity: str(o.origin_city),
     originProvince: str(o.origin_province),
@@ -331,6 +341,7 @@ export function draftToPayload(draft: LogisticsDraft): LogisticsPayload {
     // No gross_weight here: the wizard tracks item NET weight (quantity ×
     // unit weight, derived) and gross weight only per PACKAGE. The column
     // exists server-side but the order form never captures it.
+    budgeted_packing_cost: outNum(it.budgetedPackingCost),
     planned_rfd_date: outStr(it.plannedRfdDate),
     actual_rfd_date: outStr(it.actualRfdDate),
     rfd_history: it.rfdHistory ?? [],
@@ -365,11 +376,14 @@ export function draftToPayload(draft: LogisticsDraft): LogisticsPayload {
     origin_country: outStr(draft.originCountry),
     origin_city: outStr(draft.originCity),
     origin_province: outStr(draft.originProvince),
+    mill: outStr(draft.mill),
+    total_packages: outNum(draft.totalPackages),
     customer_name: outStr(draft.customerName),
     mo_no: outStr(draft.moNo),
     batch_no: outNum(draft.batchNo),
     batch_label: outStr(draft.batchLabel),
     incoterm: outStr(draft.incoterm),
+    customer_note: outStr(draft.customerNote),
 
     pol: outStr(draft.pol),
     pod: outStr(draft.pod),
@@ -418,11 +432,18 @@ export function apiToDraft(o: ApiLogisticsOrder): LogisticsDraft {
     originCountry: row.originCountry ?? '',
     originCity: row.originCity ?? '',
     originProvince: row.originProvince ?? '',
+    mill: row.mill ?? '',
+    totalPackages: row.totalPackages,
     customerName: row.customerName,
     moNo: row.moNo,
     batchNo: row.batchNo,
     batchLabel: row.batchLabel ?? '',
     incoterm: row.incoterm as LogisticsDraft['incoterm'],
+    customerNote: row.customerNote ?? '',
+    // Excel import is a fresh-draft, current-session feature only — an
+    // existing order loaded for editing was never "imported this session",
+    // regardless of how it was originally created.
+    importedFromExcel: false,
 
     items: row.items.map((it) => ({
       id: it.id,
@@ -431,6 +452,7 @@ export function apiToDraft(o: ApiLogisticsOrder): LogisticsDraft {
       quantity: it.quantity,
       unitWeight: it.unitWeight,
       grossWeight: it.grossWeight,
+      budgetedPackingCost: it.budgetedPackingCost,
       plannedRfdDate: it.plannedRfdDate ?? '',
       actualRfdDate: it.actualRfdDate ?? '',
       rfdHistory: it.rfdHistory,

@@ -7,7 +7,7 @@ from app.imports.models import (
     Consignment, ConsignmentBatchGroup, ConsignmentItem, ConsignmentOrderItem,
 )
 from app.logistics.models import LogisticsConsignment
-from app.masters.models import HsCode, Item
+from app.masters.models import HsCode, Item, Port
 from app.trucking.models import TruckingConsignment
 
 #-----------------------------------------------------
@@ -84,6 +84,40 @@ def search_items(db, q, limit):
     ).order_by(Item.name).limit(limit)
 
     return db.execute(query).scalars().all()
+
+
+#--------------------------------
+# SEARCH PORTS FOR THE SHIPPING STEP'S TYPEAHEAD
+#
+# Feeds the loading/delivery port (imports) and pol/pod (logistics) dropdowns
+# on the wizards. Same shape as search_items above — a live, capped typeahead,
+# not a page of a list — because the ports master now holds ~133,000 rows
+# from its own dedicated workbook and can no longer be preloaded whole.
+#
+# port_type and used_as are separate filters, not folded into `q`: the
+# imports wizard narrows both (a sea consignment must not offer an airport,
+# and the loading field must not offer a delivery-only port) BEFORE the
+# operator types anything, so they have to be real WHERE clauses the caller
+# controls independently of the search text.
+#
+# A 'Both' port belongs in EITHER the Loading or the Delivery dropdown — this
+# replicates the imports wizard's client-side
+# `p.used_as === 'Loading' || p.used_as === 'Both'` check, now in SQL.
+#--------------------------------
+
+def search_ports(db, q, limit, port_type=None, used_as=None):
+    query = select(Port).where(Port.is_active == True)
+
+    if q:
+        query = query.where(Port.name.ilike("%" + q.strip() + "%"))
+
+    if port_type:
+        query = query.where(Port.port_type == port_type)
+
+    if used_as:
+        query = query.where(or_(Port.used_as == used_as, Port.used_as == "Both"))
+
+    return db.execute(query.order_by(Port.name).limit(limit)).scalars().all()
 
 
 #--------------------------------

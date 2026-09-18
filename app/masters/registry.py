@@ -40,6 +40,10 @@ MASTERS = {
         "noun": "supplier",
         "inline": True,
         "has_hs": False,
+        # Scalar columns only — the list route's search runs a real SQL ILIKE
+        # across these, replacing a Python scan over every serialized field.
+        "search_fields": ["name", "country", "city", "contact_name", "phone",
+                          "email", "default_currency", "default_payment_terms"],
     },
     "customer": {
         "model": Customer,
@@ -52,6 +56,7 @@ MASTERS = {
         # saved at all.
         "inline": True,
         "has_hs": False,
+        "search_fields": ["name"],
     },
     "branch": {
         "model": Branch,
@@ -60,6 +65,7 @@ MASTERS = {
         "noun": "branch",
         "inline": False,
         "has_hs": False,
+        "search_fields": ["name", "code", "city", "address"],
     },
     "port": {
         "model": Port,
@@ -68,6 +74,7 @@ MASTERS = {
         "noun": "port",
         "inline": True,
         "has_hs": False,
+        "search_fields": ["name", "country", "port_type", "un_locode"],
     },
     "agent": {
         "model": ClearingAgent,
@@ -76,6 +83,7 @@ MASTERS = {
         "noun": "clearing agent",
         "inline": True,
         "has_hs": False,
+        "search_fields": ["name", "licence_no", "contact_name", "phone"],
     },
     "transporter": {
         "model": Transporter,
@@ -87,6 +95,7 @@ MASTERS = {
         # has entered yet would otherwise block the job from being saved.
         "inline": True,
         "has_hs": False,
+        "search_fields": ["name", "contact_name", "phone", "ntn"],
     },
     "item": {
         "model": Item,
@@ -95,6 +104,8 @@ MASTERS = {
         "noun": "item",
         "inline": True,
         "has_hs": True,
+        "search_fields": ["item_code", "name", "default_specification",
+                          "default_unit_of_measurement", "category"],
     },
 }
 

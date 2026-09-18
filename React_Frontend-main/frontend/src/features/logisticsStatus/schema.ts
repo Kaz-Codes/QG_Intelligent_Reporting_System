@@ -42,7 +42,7 @@ export type Department = (typeof DEPARTMENTS)[number]
 // EFS = Export Facilitation Scheme (duty-suspended inputs for export
 // manufacturing); Regular = standard duty-paid. An attribute the Logistics
 // team sets on the order itself, like department.
-export const SHIPMENT_MODES = ['EFS', 'Regular'] as const
+export const SHIPMENT_MODES = ['EFS', 'Regular', 'Pending'] as const
 export type ShipmentMode = (typeof SHIPMENT_MODES)[number]
 
 // Distinguishes a standard export/local order from a customer-rework job —
@@ -90,6 +90,10 @@ export const logisticsItemSchema = z.object({
   itemDetail: z.string().default(''),
   quantity: optionalNumber,
   unitWeight: optionalNumber,
+  /** What packing was expected to cost for this item, entered up front — the
+   *  Packing step's quotedPackingCost/actualPackingCost are PER PACKAGE and
+   *  known later; this is the earlier, per-item budget figure. */
+  budgetedPackingCost: optionalNumber,
   plannedRfdDate: z.string().optional(),
   actualRfdDate: z.string().optional(),
   rfdHistory: z.array(rfdChangeEventSchema).default([]),
@@ -98,6 +102,7 @@ export type LogisticsItem = z.infer<typeof logisticsItemSchema>
 
 export const emptyItem = (id: string): LogisticsItem => ({
   id, jobNo: '', itemDetail: '', quantity: undefined, unitWeight: undefined,
+  budgetedPackingCost: undefined,
   plannedRfdDate: '', actualRfdDate: '', rfdHistory: [],
 })
 
@@ -111,6 +116,8 @@ export const consignmentSchema = z
     originCountry: z.string().optional(),
     originCity: z.string().optional(),
     originProvince: z.string().optional(),
+    mill: z.string().optional(),
+    totalPackages: optionalNumber,
     customerName: z.string().min(1, 'Customer name is required'),
     moNo: z.string().optional(),
     /** Auto-generated when the same MO number already exists in the system —
@@ -119,6 +126,11 @@ export const consignmentSchema = z
     batchNo: z.number().int().min(1).default(1),
     batchLabel: z.string().optional(), // user-renameable display label, defaults to "Batch {batchNo}"
     incoterm: z.enum(INCOTERMS).optional().or(z.literal('')),
+    /** Free-text note about the customer, its own section at the end of Step
+     *  1 — separate from the header grid above, since it doesn't fit the
+     *  "applies to the whole order" field grid pattern the way a single
+     *  short attribute does. */
+    customerNote: z.string().optional(),
     items: z.array(logisticsItemSchema).default([]),
   })
   .superRefine((val, ctx) => {
@@ -287,12 +299,19 @@ export const consignmentDraftSchema = z
     originCountry: z.string().optional(),
     originCity: z.string().optional(),
     originProvince: z.string().optional(),
+    mill: z.string().optional(),
+    totalPackages: optionalNumber,
     customerName: z.string().min(1, 'Customer name is required'),
     moNo: z.string().optional(),
     batchNo: z.number().int().min(1).default(1),
     batchLabel: z.string().optional(),
     incoterm: z.enum(INCOTERMS).optional().or(z.literal('')),
+    customerNote: z.string().optional(),
     items: z.array(logisticsItemSchema).default([]),
+    /** UI-only: true once a file has been successfully imported this wizard
+     *  session (see wizard/excelImport.ts). NOT sent to the backend —
+     *  draftToPayload in logisticsMap.ts deliberately never references it. */
+    importedFromExcel: z.boolean().optional().default(false),
   })
   .merge(packingSchema)
   .merge(shippingSchema)
@@ -309,12 +328,16 @@ export const DRAFT_DEFAULT_VALUES: LogisticsDraft = {
   originCountry: '',
   originCity: '',
   originProvince: '',
+  mill: '',
+  totalPackages: undefined,
   customerName: '',
   moNo: '',
   batchNo: 1,
   batchLabel: '',
   incoterm: undefined,
+  customerNote: '',
   items: [emptyItem('item-1')],
+  importedFromExcel: false,
   packages: [],
   containers: [],
   pol: '',
@@ -359,7 +382,7 @@ export const WIZARD_STEPS: WizardStepDef[] = [
     key: 'order',
     label: 'Order Details',
     fields: ['orderType', 'department', 'shipmentMode', 'jobKind', 'originCountry', 'originCity', 'originProvince',
-      'customerName', 'moNo', 'batchNo', 'batchLabel', 'incoterm', 'items'],
+      'mill', 'totalPackages', 'customerName', 'moNo', 'batchNo', 'batchLabel', 'incoterm', 'customerNote', 'items'],
   },
   { step: 2, key: 'packing', label: 'Packing', fields: ['packages'] },
   {
@@ -437,6 +460,13 @@ export const totalQuantity = (items: LogisticsItem[]) =>
 
 export const totalNetWeight = (items: LogisticsItem[]) =>
   items.reduce((s, it) => s + itemNetWeight(it), 0)
+
+/** Summed across items, for the list column — an item with no figure entered
+ *  contributes 0 rather than being excluded, same as totalNetWeight above;
+ *  unlike the packing-cost rollup (packingCostRollup), this isn't comparing
+ *  a quote against an actual, so there's no "basis" question to track. */
+export const totalBudgetedPackingCost = (items: LogisticsItem[]) =>
+  items.reduce((s, it) => s + (it.budgetedPackingCost ?? 0), 0)
 
 /** Merged order type label for the list: "Cement Export", "General Local", etc. */
 export function orderTypeLabel(department: Department, orderType: OrderType): string {

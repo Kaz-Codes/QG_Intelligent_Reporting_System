@@ -2,7 +2,7 @@ import type {
   ApiConsignment, ApiConsignmentItem, ConsignmentPayload,
   ConsignmentItemPayload, ConsignmentPaymentPayload,
 } from './imports'
-import type { MasterOption, PortOption } from './masters'
+import type { MasterOption } from './masters'
 import { nameToId } from './masters'
 import {
   CONSIGNMENT_STATUSES, CLOSED_STATUS, DRAFT_DEFAULT_VALUES, SUBMITTED,
@@ -515,7 +515,6 @@ function paymentToPayload(payment: DraftPayment): ConsignmentPaymentPayload {
 export interface WizardMasters {
   branches: MasterOption[]
   suppliers: MasterOption[]
-  ports: PortOption[]
   agents: MasterOption[]
 }
 
@@ -555,8 +554,8 @@ export function draftToPayload(draft: ConsignmentDraft, masters: WizardMasters):
     insurance_amount: numGe0(draft.insuranceAmount),
 
     mode_of_shipment: strOrUndef(draft.modeOfShipment),
-    loading_port_id: nameToId(masters.ports, draft.portOfLoading),
-    delivery_port_id: nameToId(masters.ports, draft.portOfDelivery),
+    loading_port_id: draft.portOfLoadingId,
+    delivery_port_id: draft.portOfDeliveryId,
     cargo_readiness_date: strOrUndef(draft.readinessDate),
     etd: strOrUndef(draft.etd),
     eta: strOrUndef(draft.eta),
@@ -710,7 +709,9 @@ export function apiToDraft(c: ApiConsignment): ConsignmentDraft {
 
     modeOfShipment: (c.mode_of_shipment ?? '') as ConsignmentDraft['modeOfShipment'],
     portOfLoading: c.loading_port?.name ?? '',
+    portOfLoadingId: c.loading_port?.id ?? undefined,
     portOfDelivery: c.delivery_port?.name ?? '',
+    portOfDeliveryId: c.delivery_port?.id ?? undefined,
     readinessDate: c.cargo_readiness_date ?? '',
     etd: c.etd ?? '',
     eta: c.eta ?? '',

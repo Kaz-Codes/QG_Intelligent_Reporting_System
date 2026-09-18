@@ -58,6 +58,7 @@ class LogisticsItemSchema(BaseModel):
     quantity: Optional[Decimal] = Field(None, ge=0)
     unit_weight: Optional[Decimal] = Field(None, ge=0)
     gross_weight: Optional[Decimal] = Field(None, ge=0)
+    budgeted_packing_cost: Optional[Decimal] = Field(None, ge=0)
     planned_rfd_date: Optional[date] = None
     actual_rfd_date: Optional[date] = None
     rfd_history: Optional[list[RfdChangeEventSchema]] = []
@@ -116,11 +117,14 @@ class LogisticsConsignmentSchema(BaseModel):
     origin_country: Optional[str] = Field(None, max_length=255)
     origin_city: Optional[str] = Field(None, max_length=255)
     origin_province: Optional[str] = Field(None, max_length=255)
+    mill: Optional[str] = Field(None, max_length=500)
+    total_packages: Optional[int] = Field(None, ge=1)
     customer_name: Optional[str] = Field(None, max_length=255)
     mo_no: Optional[str] = Field(None, max_length=100)
     batch_no: Optional[int] = Field(None, ge=1)
     batch_label: Optional[str] = Field(None, max_length=100)
     incoterm: Optional[Incoterm] = None
+    customer_note: Optional[str] = Field(None, max_length=1000)
 
     #--- step 3: shipping ---
     pol: Optional[str] = Field(None, max_length=255)

@@ -1,11 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useFormContext, useFieldArray, useWatch, Controller } from 'react-hook-form'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect, NotInMasterNote } from '@/components/ui/SearchableSelect'
 import { fetchCustomers } from '@/lib/api/masters'
+import { checkMoExists } from '@/lib/api/logistics'
 import { useMasterOptions, toOptions, isKnownMasterValue } from '@/lib/api/useMasterOptions'
+import { ApiError } from '@/lib/api/client'
 import {
   ORDER_TYPES, DEPARTMENTS, SHIPMENT_MODES, INCOTERMS, emptyItem, itemPendingFields, itemNetWeight, batchDisplayLabel,
   type LogisticsDraft, type LogisticsItem, type LogisticsPackage,
@@ -13,6 +15,7 @@ import {
 import {
   isKnownLogisticsOrder, nextBatchNoForMo, getMoGroupSummary, getCrossBatchItems, outstandingByItemAcrossMo,
 } from '@/lib/logisticsStatusData'
+import { parseLogisticsImportFile, ExcelImportError } from '../excelImport'
 
 const selectClass =
   'flex h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink ' +
@@ -93,8 +96,62 @@ export function Step1Order() {
   const crossBatchItems = getCrossBatchItems(moNo, excludeId)
   const crossOutstanding = outstandingByItemAcrossMo(crossBatchItems.map((c) => c.item), packages, moNo, excludeId)
 
-  const { fields, append, remove } = useFieldArray({ control, name: 'items' })
+  const { fields, append, remove, replace: replaceItems } = useFieldArray({ control, name: 'items' })
   const items = watch('items')
+
+  // --- Step 1 Excel import — an additional way to fill this step, alongside
+  // the manual form above. See wizard/excelImport.ts and
+  // logistics-excel-import-spec.md at the repo root. Scope: this step only.
+  const importedFromExcel = useWatch({ control, name: 'importedFromExcel' })
+  const [importState, setImportState] = useState<'idle' | 'loading'>('idle')
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importWarning, setImportWarning] = useState<string | null>(null)
+
+  async function handleFileSelected(file: File) {
+    setImportState('loading')
+    setImportError(null)
+    setImportWarning(null)
+    try {
+      const parsed = await parseLogisticsImportFile(file)
+
+      const exists = await checkMoExists(parsed.moNo)
+      if (exists) {
+        setImportError(`MO ${parsed.moNo} already has an order — this looks like a duplicate file.`)
+        setImportState('idle')   // re-enable — nothing was imported
+        return
+      }
+
+      setValue('moNo', parsed.moNo, { shouldDirty: true })
+      if (parsed.orderType) setValue('orderType', parsed.orderType as LogisticsDraft['orderType'], { shouldDirty: true })
+      if (parsed.department) setValue('department', parsed.department as LogisticsDraft['department'], { shouldDirty: true })
+      if (parsed.shipmentMode) setValue('shipmentMode', parsed.shipmentMode as LogisticsDraft['shipmentMode'], { shouldDirty: true })
+      if (parsed.customerName) setValue('customerName', parsed.customerName, { shouldDirty: true })
+      if (parsed.mill) setValue('mill', parsed.mill, { shouldDirty: true })
+      if (parsed.originCountry) setValue('originCountry', parsed.originCountry, { shouldDirty: true })
+      replaceItems(parsed.items.map((item, i) => ({
+        ...emptyItem(`item-${Date.now()}-${i}`),
+        jobNo: item.jobNo ?? '',
+        itemDetail: item.itemDetail ?? '',
+        quantity: item.quantity ?? undefined,
+        unitWeight: item.unitWeight ?? undefined,
+        plannedRfdDate: item.plannedRfdDate ?? '',
+        actualRfdDate: item.actualRfdDate ?? '',
+        // budgetedPackingCost intentionally left at emptyItem's default —
+        // manual entry, per the file format (not present in the import).
+      })))
+
+      setValue('importedFromExcel', true, { shouldDirty: true })   // permanently disables the control below
+      if (parsed.warnings.length > 0) setImportWarning(parsed.warnings.join(' '))
+      setImportState('idle')
+    } catch (err) {
+      setImportError(
+        err instanceof ExcelImportError || err instanceof ApiError
+          ? err.message
+          : 'Could not read this file.'
+      )
+      setImportState('idle')   // re-enable — nothing was imported, this was a parse/check failure
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -103,6 +160,48 @@ export function Step1Order() {
         <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
           Order details — applies to the whole order
         </h3>
+
+        {/* Excel import — an ADDITIONAL way to fill this step, not a
+            replacement for the form below. Every field it sets stays fully
+            editable afterward. Importing a second file into an in-progress
+            order isn't supported: once one succeeds, this control disables
+            for the rest of the wizard session. */}
+        <div className="flex flex-col gap-1.5 border-b border-line px-4 py-3">
+          <div className="flex items-center gap-3">
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              id="logistics-import-file"
+              className="hidden"
+              disabled={importState === 'loading' || importedFromExcel}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''   // allow re-selecting the same filename after an error
+                if (file) void handleFileSelected(file)
+              }}
+            />
+            <label
+              htmlFor="logistics-import-file"
+              className={`rounded-lg border border-line px-3 py-1.5 text-xs ${
+                importState === 'loading' || importedFromExcel
+                  ? 'cursor-not-allowed opacity-50'
+                  : 'cursor-pointer hover:border-muted'
+              }`}
+            >
+              {importState === 'loading' ? 'Reading file…' : importedFromExcel ? 'Imported from Excel' : 'Import from Excel'}
+            </label>
+            <span className="text-[11px] text-muted">
+              {importedFromExcel
+                ? 'Fields below stay fully editable.'
+                : 'Optional — fills the fields below from a file instead of typing them in.'}
+            </span>
+          </div>
+          {importError && <p className="text-xs text-risk">{importError}</p>}
+          {importWarning && (
+            <p className="text-xs text-[var(--color-watch)]">Imported with warnings: {importWarning}</p>
+          )}
+        </div>
+
         <div className="grid gap-4 p-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="orderType">Order Type</Label>
@@ -190,6 +289,16 @@ export function Step1Order() {
               <NotInMasterNote master="customer master" stored="text" />
             )}
             {errors.customerName && <p className="text-xs text-risk">{errors.customerName.message}</p>}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="mill">Mill <span className="font-normal text-muted">(optional)</span></Label>
+            <Input id="mill" placeholder="e.g. Cherat Cement Mill" {...register('mill')} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="totalPackages">Total Packages <span className="font-normal text-muted">(optional)</span></Label>
+            <Input id="totalPackages" type="number" step="1" min="1" {...register('totalPackages')} />
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -287,6 +396,11 @@ export function Step1Order() {
                     <Input id={`items.${i}.unitWeight`} type="number" step="0.01" {...register(`items.${i}.unitWeight`)} />
                   </div>
 
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor={`items.${i}.budgetedPackingCost`}>Budgeted Packing Cost</Label>
+                    <Input id={`items.${i}.budgetedPackingCost`} type="number" step="0.01" min="0" {...register(`items.${i}.budgetedPackingCost`)} />
+                  </div>
+
                   <DerivedField
                     label="Net Weight (kg)"
                     value={netWeight ? netWeight.toLocaleString() : '—'}
@@ -363,6 +477,27 @@ export function Step1Order() {
           </p>
         </section>
       )}
+
+      {/* customer note — its own section, separate from the header grid
+          above since it's a single free-text field rather than another
+          short attribute alongside department/customer/incoterm etc. */}
+      <section className="rounded-xl border border-line bg-surface">
+        <h3 className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
+          Customer Note
+        </h3>
+        <div className="p-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="customerNote">Note <span className="font-normal text-muted">(optional)</span></Label>
+            <textarea
+              id="customerNote"
+              rows={3}
+              placeholder="Anything about this customer worth flagging for whoever handles this order next…"
+              className="flex w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+              {...register('customerNote')}
+            />
+          </div>
+        </div>
+      </section>
     </div>
   )
 }
